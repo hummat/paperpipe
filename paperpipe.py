@@ -10,6 +10,7 @@ A local paper database that:
 """
 
 import json
+import math
 import os
 import re
 import shutil
@@ -22,6 +23,7 @@ from datetime import datetime
 from io import StringIO
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 import click
 
@@ -60,6 +62,62 @@ CATEGORY_TAGS = {
     "physics.comp-ph": "computational-physics",
     "math.NA": "numerical-analysis",
 }
+
+
+_ARXIV_NEW_STYLE_RE = re.compile(r"^\d{4}\.\d{4,5}(?:v\d+)?$", flags=re.IGNORECASE)
+_ARXIV_OLD_STYLE_RE = re.compile(
+    r"^[a-zA-Z-]+(?:\.[a-zA-Z-]+)?/\d{7}(?:v\d+)?$", flags=re.IGNORECASE
+)
+_ARXIV_ANY_RE = re.compile(
+    r"(\d{4}\.\d{4,5}(?:v\d+)?|[a-zA-Z-]+(?:\.[a-zA-Z-]+)?/\d{7}(?:v\d+)?)",
+    flags=re.IGNORECASE,
+)
+
+
+def normalize_arxiv_id(value: str) -> str:
+    """
+    Normalize an arXiv identifier from an ID or common arXiv URL.
+
+    Examples:
+      - 1706.03762
+      - https://arxiv.org/abs/1706.03762
+      - https://arxiv.org/pdf/1706.03762.pdf
+    """
+    raw = (value or "").strip()
+    if not raw:
+        raise ValueError("missing arXiv id")
+
+    # Handle arXiv URLs (including old-style IDs containing '/').
+    parsed = urlparse(raw)
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        host = (parsed.netloc or "").lower()
+        if host.endswith("arxiv.org"):
+            path = (parsed.path or "").strip()
+            for prefix in ("/abs/", "/pdf/", "/e-print/"):
+                if path.startswith(prefix):
+                    candidate = path[len(prefix) :].strip("/")
+                    if candidate.lower().endswith(".pdf"):
+                        candidate = candidate[:-4]
+                    raw = candidate
+                    break
+
+    # Common paste formats like "arXiv:1706.03762" or "abs/1706.03762".
+    raw = re.sub(r"^\s*arxiv:\s*", "", raw, flags=re.IGNORECASE).strip()
+    for prefix in ("abs/", "/abs/", "pdf/", "/pdf/"):
+        if raw.startswith(prefix):
+            raw = raw[len(prefix) :].strip()
+
+    if raw.lower().endswith(".pdf"):
+        raw = raw[:-4]
+
+    if _ARXIV_NEW_STYLE_RE.fullmatch(raw) or _ARXIV_OLD_STYLE_RE.fullmatch(raw):
+        return raw
+
+    embedded = _ARXIV_ANY_RE.search(raw)
+    if embedded:
+        return embedded.group(1)
+
+    raise ValueError(f"could not parse arXiv id from: {value!r}")
 
 
 def ensure_db():
@@ -441,9 +499,11 @@ def cli():
 @click.option("--no-llm", is_flag=True, help="Skip LLM-based generation")
 def add(arxiv_id: str, name: Optional[str], tags: Optional[str], no_llm: bool):
     """Add a paper to the database."""
-    # Normalize arxiv ID
-    arxiv_id = arxiv_id.replace("https://arxiv.org/abs/", "").replace("https://arxiv.org/pdf/", "")
-    arxiv_id = arxiv_id.rstrip(".pdf")
+    # Normalize arXiv ID / URL
+    try:
+        arxiv_id = normalize_arxiv_id(arxiv_id)
+    except ValueError as e:
+        raise click.UsageError(str(e)) from e
 
     # Generate name from ID if not provided
     if not name:
@@ -550,12 +610,17 @@ def regenerate(paper_or_arxiv: Optional[str], regenerate_all: bool, no_llm: bool
     def resolve_name(target: str) -> Optional[str]:
         if target in index:
             return target
-        matches = [n for n, info in index.items() if info.get("arxiv_id") == target]
+        try:
+            normalized = normalize_arxiv_id(target)
+        except ValueError:
+            normalized = target
+
+        matches = [n for n, info in index.items() if info.get("arxiv_id") == normalized]
         if not matches:
             return None
         if len(matches) > 1:
             click.echo(
-                f"Multiple papers match arXiv ID {target}: {', '.join(sorted(matches))}",
+                f"Multiple papers match arXiv ID {normalized}: {', '.join(sorted(matches))}",
                 err=True,
             )
             return None
@@ -923,6 +988,7 @@ def models(
         ) from exc
 
     requested_kinds = tuple(k.lower() for k in kind)
+    embedding_timeout = max(1, int(math.ceil(timeout)))
 
     ctx = click.get_current_context()
     preset_source = ctx.get_parameter_source("preset")
@@ -965,7 +1031,7 @@ def models(
                 timeout=timeout,
             )
         else:
-            llm_embedding(model=model, input=["ping"], timeout=timeout)
+            llm_embedding(model=model, input=["ping"], timeout=embedding_timeout)
 
     def probe_group(kind_name: str, candidates: list[str]) -> _ModelProbeResult:
         last_exc: Optional[Exception] = None
@@ -1201,10 +1267,10 @@ def models(
             else:  # embedding
                 try:
                     if verbose:
-                        llm_embedding(model=model, input=["ping"], timeout=timeout)
+                        llm_embedding(model=model, input=["ping"], timeout=embedding_timeout)
                     else:
                         with redirect_stdout(null_out), redirect_stderr(null_err):
-                            llm_embedding(model=model, input=["ping"], timeout=timeout)
+                            llm_embedding(model=model, input=["ping"], timeout=embedding_timeout)
                     results.append(_ModelProbeResult(kind=k, model=model, ok=True))
                 except Exception as exc:
                     err = _first_line(str(exc))

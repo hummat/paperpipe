@@ -105,6 +105,32 @@ class TestCategoriesToTags:
         assert tags == []
 
 
+class TestNormalizeArxivId:
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("1706.03762", "1706.03762"),
+            ("1706.03762v5", "1706.03762v5"),
+            ("https://arxiv.org/abs/1706.03762", "1706.03762"),
+            ("https://arxiv.org/pdf/1706.03762", "1706.03762"),
+            ("https://arxiv.org/pdf/1706.03762.pdf", "1706.03762"),
+            ("https://arxiv.org/pdf/1706.03762v5.pdf", "1706.03762v5"),
+            ("http://arxiv.org/abs/1706.03762", "1706.03762"),
+            ("arXiv:1706.03762", "1706.03762"),
+            ("abs/1706.03762", "1706.03762"),
+            ("hep-th/9901001", "hep-th/9901001"),
+            ("https://arxiv.org/abs/hep-th/9901001", "hep-th/9901001"),
+            ("https://arxiv.org/pdf/hep-th/9901001.pdf", "hep-th/9901001"),
+        ],
+    )
+    def test_normalizes_common_inputs(self, raw: str, expected: str):
+        assert paperpipe.normalize_arxiv_id(raw) == expected
+
+    def test_rejects_unparseable(self):
+        with pytest.raises(ValueError):
+            paperpipe.normalize_arxiv_id("not-an-arxiv-id")
+
+
 class TestExtractEquationsSimple:
     def test_extracts_equation_environment(self):
         tex = r"""
@@ -724,6 +750,32 @@ class TestRegenerateCommand:
         result = runner.invoke(paperpipe.cli, ["regenerate", "--all", "--no-llm"])
         assert result.exit_code != 0
         assert "failed to regenerate" in result.output.lower()
+
+    def test_regenerate_accepts_arxiv_urls(self, temp_db: Path):
+        papers_dir = temp_db / "papers"
+        (papers_dir / "p1").mkdir(parents=True)
+        (papers_dir / "p1" / "meta.json").write_text(
+            json.dumps(
+                {
+                    "arxiv_id": TEST_ARXIV_ID,
+                    "title": "Paper 1",
+                    "authors": [],
+                    "abstract": "",
+                }
+            )
+        )
+        (papers_dir / "p1" / "source.tex").write_text("\\begin{equation}x=1\\end{equation}")
+        paperpipe.save_index(
+            {"p1": {"arxiv_id": TEST_ARXIV_ID, "title": "Paper 1", "tags": [], "added": "x"}}
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            paperpipe.cli,
+            ["regenerate", f"https://arxiv.org/abs/{TEST_ARXIV_ID}", "--no-llm"],
+        )
+        assert result.exit_code == 0
+        assert "Regenerating: p1" in result.output
 
 
 # ============================================================================

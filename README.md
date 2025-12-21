@@ -39,6 +39,17 @@ cd paperpipe
 pip install -e ".[all]"
 ```
 
+## Development
+
+```bash
+# Install app + dev tooling (ruff, pyright, pytest)
+uv sync --group dev
+
+uv run ruff check .
+uv run pyright
+uv run pytest -m "not integration"
+```
+
 ## Quick Start
 
 ```bash
@@ -46,6 +57,9 @@ pip install -e ".[all]"
 papi add 2303.13476 --name neuralangelo
 papi add 2106.10689 --name neus
 papi add 2112.03907 --name ref-nerf
+
+# You can also pass arXiv URLs directly:
+# papi add https://arxiv.org/abs/1706.03762 --name attention
 
 # List papers
 papi list
@@ -117,8 +131,8 @@ papi export neuralangelo neus --level equations --to ./paper-context/
 
 | Command | Description |
 |---------|-------------|
-| `papi add <arxiv_id>` | Add a paper (downloads PDF, LaTeX, generates summary) |
-| `papi regenerate <name-or-arxiv-id>` | Regenerate summary/equations (and LLM tags when enabled) |
+| `papi add <arxiv-id-or-url>` | Add a paper (downloads PDF, LaTeX, generates summary) |
+| `papi regenerate <name-or-arxiv-id-or-url>` | Regenerate summary/equations (and LLM tags when enabled) |
 | `papi regenerate --all` | Regenerate summary/equations for all papers |
 | `papi list [--tag TAG]` | List papers, optionally filtered by tag |
 | `papi search <query>` | Search by title, tag, or ID |
@@ -276,7 +290,7 @@ papi models --verbose
 
 ## Non-arXiv Papers
 
-PaperPipe currently focuses on arXiv ingestion (`papi add <arxiv_id>`). For papers not on arXiv you can still
+PaperPipe currently focuses on arXiv ingestion (`papi add <arxiv-id-or-url>`). For papers not on arXiv you can still
 store files for agents to read, but they will not show up in `papi list/search` unless you also add index/meta
 entries.
 
