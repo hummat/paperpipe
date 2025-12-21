@@ -38,7 +38,7 @@ dependencies = [
 
 [project.optional-dependencies]
 llm = [
-    "llm>=0.13.0",  # Simon Willison's llm CLI
+    "litellm>=1.0.0",
 ]
 paperqa = [
     "paper-qa>=5.0.0; python_version >= '3.11'",

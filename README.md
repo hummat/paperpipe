@@ -15,6 +15,31 @@ A unified paper database for coding agents + PaperQA2.
 
 ## Installation
 
+### With uv (recommended)
+
+```bash
+# Basic installation
+uv pip install paperpipe
+
+# With LLM support (for better summaries/equations)
+uv pip install 'paperpipe[llm]'
+
+# With PaperQA2 integration
+uv pip install 'paperpipe[paperqa]'
+
+# Everything
+uv pip install 'paperpipe[all]'
+```
+
+Or install from source:
+```bash
+git clone https://github.com/hummat/paperpipe
+cd paperpipe
+uv pip install -e ".[all]"
+```
+
+### With pip
+
 ```bash
 # Basic installation
 pip install paperpipe
@@ -214,17 +239,25 @@ chosen provider (PaperQA2 uses LiteLLM identifiers for `--llm` and `--embedding`
 
 ## LLM Support
 
-For better summaries and equation extraction, install an LLM backend:
+For better summaries and equation extraction, install with LLM support:
 
 ```bash
-# Option 1: Simon Willison's llm CLI (recommended)
-pip install llm
-llm keys set anthropic  # or openai
-# paperpipe uses your configured `llm` default model; optionally override via:
-#   export PAPERPIPE_LLM_CLI_MODEL=<model-id>
+pip install 'paperpipe[llm]'
+# or with uv:
+uv pip install 'paperpipe[llm]'
+```
 
-# Option 2: PaperQA2 will use its own LLM config
-pip install paper-qa
+This installs LiteLLM, which supports many providers. Set the appropriate API key:
+
+```bash
+export GEMINI_API_KEY=...      # For Gemini (default)
+export OPENAI_API_KEY=...      # For OpenAI/GPT
+export ANTHROPIC_API_KEY=...   # For Claude
+```
+
+paperpipe defaults to `gemini/gemini-3-flash-preview`. Override via:
+```bash
+export PAPERPIPE_LLM_MODEL=gpt-4o  # or any LiteLLM model identifier
 ```
 
 Without LLM support, paperpipe falls back to:
@@ -245,7 +278,7 @@ papi ask "What optimizer settings do these papers recommend?"
 # You can also pass through any other `pqa ask` flags after the query/options.
 # By default, `papi ask` uses `pqa --settings default` to avoid failures caused by stale user
 # settings files; pass `-s/--settings <name>` to use a specific PaperQA2 settings profile.
-# `papi ask` also defaults to `--llm gemini/gemini-2.5-flash` and `--embedding gemini/gemini-embedding-001`
+# `papi ask` also defaults to `--llm gemini/gemini-3-flash-preview` and `--embedding gemini/gemini-embedding-001`
 # unless you pick a PaperQA2 settings profile with `-s/--settings` (in that case, the profile controls).
 # If Pillow is not installed, `papi ask` also forces `--parsing.multimodal OFF` to avoid PDF
 # image extraction errors; pass your own `--parsing...` args to override.
@@ -276,7 +309,7 @@ papi models
 # (default: probes one "latest" completion model and one embedding model per provider for
 # which you have an API key set; pass `latest` (or `--preset latest`) to probe a broader list.)
 # or probe specific models only:
-papi models --kind completion --model gemini/gemini-2.5-flash --model gemini/gemini-3-flash-preview --model gpt-4o-mini
+papi models --kind completion --model gemini/gemini-3-flash-preview --model gemini/gemini-2.5-flash --model gpt-4o-mini
 papi models --kind embedding --model gemini/gemini-embedding-001 --model text-embedding-3-small
 # probe "latest" defaults (gpt-5.2/5.1, gemini 3 preview, claude-sonnet-4-5; plus text-embedding-3-large if enabled):
 papi models latest

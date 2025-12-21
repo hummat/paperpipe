@@ -40,13 +40,9 @@ PAPER_DB = _paper_db_root()
 PAPERS_DIR = PAPER_DB / "papers"
 INDEX_FILE = PAPER_DB / "index.json"
 
-# PaperQA2 defaults (overridable via env vars)
-DEFAULT_PQA_LLM = os.environ.get("PAPERPIPE_PQA_LLM", "gemini/gemini-2.5-flash")
-DEFAULT_PQA_EMBEDDING = os.environ.get("PAPERPIPE_PQA_EMBEDDING", "gemini/gemini-embedding-001")
-
-# llm CLI defaults (overridable via env vars)
-# If unset, paperpipe will not pass `-m` and will use whatever default model `llm` is configured for.
-DEFAULT_LLM_CLI_MODEL = os.environ.get("PAPERPIPE_LLM_CLI_MODEL")
+# LLM defaults (overridable via env vars) - uses LiteLLM model identifiers
+DEFAULT_LLM_MODEL = os.environ.get("PAPERPIPE_LLM_MODEL", "gemini/gemini-3-flash-preview")
+DEFAULT_EMBEDDING_MODEL = os.environ.get("PAPERPIPE_EMBEDDING_MODEL", "gemini/gemini-embedding-001")
 
 # arXiv category mappings for human-readable tags
 CATEGORY_TAGS = {
@@ -320,6 +316,83 @@ def extract_equations_simple(tex_content: str) -> str:
     return md
 
 
+def _extract_name_from_title(title: str) -> Optional[str]:
+    """Extract a short name from title prefix like 'NeRF: ...' → 'nerf'."""
+    if ":" not in title:
+        return None
+
+    prefix = title.split(":")[0].strip()
+    # Only use if it's short (1-3 words, under 30 chars)
+    words = prefix.split()
+    if len(words) <= 3 and len(prefix) <= 30:
+        # Convert to lowercase, replace spaces with hyphens
+        name = prefix.lower().replace(" ", "-")
+        # Remove special chars except hyphens
+        name = re.sub(r"[^a-z0-9-]", "", name)
+        if name:
+            return name
+    return None
+
+
+def _generate_name_with_llm(meta: dict) -> Optional[str]:
+    """Ask LLM for a short memorable name."""
+    prompt = f"""Given this paper title and abstract, suggest a single short name (1-2 words, lowercase, hyphenated if multi-word) that researchers commonly use to refer to this paper.
+
+Examples:
+- "Attention Is All You Need" → transformer
+- "Deep Residual Learning for Image Recognition" → resnet
+- "Generative Adversarial Networks" → gan
+- "BERT: Pre-training of Deep Bidirectional Transformers" → bert
+
+Return ONLY the name, nothing else. No quotes, no explanation.
+
+Title: {meta["title"]}
+Abstract: {meta["abstract"][:500]}"""
+
+    result = _run_llm(prompt, purpose="name")
+    if result:
+        # Clean up the result - take first word/term only
+        name = result.strip().lower().split()[0] if result.strip() else None
+        if name:
+            name = re.sub(r"[^a-z0-9-]", "", name)
+            if name and len(name) <= 30:
+                return name
+    return None
+
+
+def generate_auto_name(meta: dict, existing_names: set[str], use_llm: bool = True) -> str:
+    """Generate a short memorable name for a paper.
+
+    Strategy:
+    1. Extract from title prefix (e.g., "NeRF: ..." → "nerf")
+    2. If LLM available, ask for a short name
+    3. Fallback to arxiv ID
+    4. Handle collisions by appending -2, -3, etc.
+    """
+    arxiv_id = meta.get("arxiv_id", "unknown")
+    title = meta.get("title", "")
+
+    # Try extracting from colon prefix
+    name = _extract_name_from_title(title)
+
+    # If no prefix name, try LLM
+    if not name and use_llm and _litellm_available():
+        name = _generate_name_with_llm(meta)
+
+    # Fallback to arxiv ID
+    if not name:
+        name = arxiv_id.replace("/", "_").replace(".", "_")
+
+    # Handle collisions
+    base_name = name
+    counter = 2
+    while name in existing_names:
+        name = f"{base_name}-{counter}"
+        counter += 1
+
+    return name
+
+
 def generate_llm_content(
     paper_dir: Path, meta: dict, tex_content: Optional[str]
 ) -> tuple[str, str, list[str]]:
@@ -327,10 +400,7 @@ def generate_llm_content(
     Generate summary, equations.md, and semantic tags using LLM.
     Returns (summary, equations_md, additional_tags)
     """
-    # Check for LLM availability
-    llm_available = shutil.which("llm")
-
-    if not llm_available:
+    if not _litellm_available():
         # Fallback: simple extraction without LLM
         summary = generate_simple_summary(meta)
         equations = (
@@ -338,9 +408,8 @@ def generate_llm_content(
         )
         return summary, equations, []
 
-    # Try using 'llm' CLI (simon willison's tool) or fall back to simple
     try:
-        return generate_with_llm_cli(meta, tex_content)
+        return generate_with_litellm(meta, tex_content)
     except Exception as e:
         click.echo(f"  Warning: LLM generation failed: {e}", err=True)
         summary = generate_simple_summary(meta)
@@ -380,34 +449,49 @@ def generate_simple_summary(meta: dict) -> str:
     return "\n".join(lines)
 
 
-def _run_llm_cli(prompt: str, *, timeout: int, purpose: str) -> Optional[str]:
-    model_label = DEFAULT_LLM_CLI_MODEL
-    prefix = f"  LLM ({model_label}):" if model_label else "  LLM:"
-    click.echo(f"{prefix} generating {purpose}...")
-    cmd = ["llm"]
-    if DEFAULT_LLM_CLI_MODEL:
-        cmd.extend(["-m", DEFAULT_LLM_CLI_MODEL])
-    cmd.append(prompt)
+def _litellm_available() -> bool:
+    """Check if LiteLLM is available."""
+    try:
+        import litellm  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
+def _run_llm(prompt: str, *, purpose: str) -> Optional[str]:
+    """Run a prompt through LiteLLM."""
+    try:
+        import litellm
+
+        litellm.suppress_debug_info = True
+    except ImportError:
+        click.echo("  LiteLLM not installed. Install with: pip install litellm", err=True)
+        return None
+
+    model = DEFAULT_LLM_MODEL
+    click.echo(f"  LLM ({model}): generating {purpose}...")
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        response = litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=2048,
+            temperature=0.3,
+        )
+        out = response.choices[0].message.content  # type: ignore[union-attr]
+        if out:
+            out = out.strip()
+        click.echo(f"  LLM ({model}): {purpose} ok")
+        return out or None
     except Exception as e:
-        click.echo(f"{prefix} {purpose} failed: {e}", err=True)
+        err_msg = str(e).split("\n")[0][:100]
+        click.echo(f"  LLM ({model}): {purpose} failed: {err_msg}", err=True)
         return None
 
-    if result.returncode != 0:
-        stderr = (result.stderr or "").strip()
-        msg = stderr.splitlines()[0] if stderr else f"exit code {result.returncode}"
-        click.echo(f"{prefix} {purpose} failed: {msg}", err=True)
-        return None
 
-    out = (result.stdout or "").strip()
-    click.echo(f"{prefix} {purpose} ok")
-    return out or None
-
-
-def generate_with_llm_cli(meta: dict, tex_content: Optional[str]) -> tuple[str, str, list[str]]:
-    """Generate content using the 'llm' CLI tool."""
+def generate_with_litellm(meta: dict, tex_content: Optional[str]) -> tuple[str, str, list[str]]:
+    """Generate content using LiteLLM."""
 
     # Prepare context
     context = f"""Paper: {meta["title"]}
@@ -430,7 +514,7 @@ Keep it under 500 words. Use markdown formatting.
 {context}"""
 
     try:
-        llm_summary = _run_llm_cli(summary_prompt, timeout=60, purpose="summary")
+        llm_summary = _run_llm(summary_prompt, purpose="summary")
         summary = llm_summary if llm_summary else generate_simple_summary(meta)
     except Exception:
         summary = generate_simple_summary(meta)
@@ -449,7 +533,7 @@ LaTeX content:
 {tex_content[:12000]}"""
 
         try:
-            llm_equations = _run_llm_cli(eq_prompt, timeout=60, purpose="equations")
+            llm_equations = _run_llm(eq_prompt, purpose="equations")
             equations = llm_equations if llm_equations else extract_equations_simple(tex_content)
         except Exception:
             equations = extract_equations_simple(tex_content)
@@ -467,7 +551,7 @@ Abstract: {meta["abstract"][:1000]}"""
 
     additional_tags = []
     try:
-        llm_tags_text = _run_llm_cli(tag_prompt, timeout=30, purpose="tags")
+        llm_tags_text = _run_llm(tag_prompt, purpose="tags")
         if llm_tags_text:
             additional_tags = [
                 t.strip().lower().replace(" ", "-")
@@ -494,7 +578,7 @@ def cli():
 
 @cli.command()
 @click.argument("arxiv_id")
-@click.option("--name", "-n", help="Short name for the paper (default: derived from ID)")
+@click.option("--name", "-n", help="Short name for the paper (default: auto-generated from title)")
 @click.option("--tags", "-t", help="Additional comma-separated tags")
 @click.option("--no-llm", is_flag=True, help="Skip LLM-based generation")
 def add(arxiv_id: str, name: Optional[str], tags: Optional[str], no_llm: bool):
@@ -505,19 +589,9 @@ def add(arxiv_id: str, name: Optional[str], tags: Optional[str], no_llm: bool):
     except ValueError as e:
         raise click.UsageError(str(e)) from e
 
-    # Generate name from ID if not provided
-    if not name:
-        name = arxiv_id.replace("/", "_").replace(".", "_")
-
-    paper_dir = PAPERS_DIR / name
-
-    if paper_dir.exists():
-        click.echo(f"Paper '{name}' already exists. Use --name to specify a different name.")
-        return
-
     click.echo(f"Adding paper: {arxiv_id}")
 
-    # 1. Fetch metadata
+    # 1. Fetch metadata (needed for auto-name generation)
     click.echo("  Fetching metadata...")
     try:
         meta = fetch_arxiv_metadata(arxiv_id)
@@ -525,9 +599,26 @@ def add(arxiv_id: str, name: Optional[str], tags: Optional[str], no_llm: bool):
         click.echo(f"Error fetching metadata: {e}", err=True)
         return
 
+    # 2. Generate name from title if not provided
+    index = load_index()
+    existing_names = set(index.keys())
+    if not name:
+        name = generate_auto_name(meta, existing_names, use_llm=not no_llm)
+        click.echo(f"  Auto-generated name: {name}")
+
+    paper_dir = PAPERS_DIR / name
+
+    if paper_dir.exists():
+        click.echo(f"Paper '{name}' already exists. Use --name to specify a different name.")
+        return
+
+    if name in existing_names:
+        click.echo(f"Paper '{name}' already in index. Use --name to specify a different name.")
+        return
+
     paper_dir.mkdir(parents=True)
 
-    # 2. Download PDF (for PaperQA2)
+    # 3. Download PDF (for PaperQA2)
     click.echo("  Downloading PDF...")
     pdf_path = paper_dir / "paper.pdf"
     try:
@@ -535,7 +626,7 @@ def add(arxiv_id: str, name: Optional[str], tags: Optional[str], no_llm: bool):
     except Exception as e:
         click.echo(f"  Warning: Could not download PDF: {e}", err=True)
 
-    # 3. Download LaTeX source
+    # 4. Download LaTeX source
     click.echo("  Downloading LaTeX source...")
     tex_content = download_source(arxiv_id, paper_dir)
     if tex_content:
@@ -543,11 +634,11 @@ def add(arxiv_id: str, name: Optional[str], tags: Optional[str], no_llm: bool):
     else:
         click.echo("  No LaTeX source available (PDF-only submission)")
 
-    # 4. Generate tags
+    # 5. Generate tags
     auto_tags = categories_to_tags(meta["categories"])
     user_tags = [t.strip() for t in tags.split(",")] if tags else []
 
-    # 5. Generate summary and equations
+    # 6. Generate summary and equations
     click.echo("  Generating summary and equations...")
     if no_llm:
         summary = generate_simple_summary(meta)
@@ -561,7 +652,7 @@ def add(arxiv_id: str, name: Optional[str], tags: Optional[str], no_llm: bool):
     # Combine all tags
     all_tags = list(set(auto_tags + user_tags + llm_tags))
 
-    # 6. Save files
+    # 7. Save files
     (paper_dir / "summary.md").write_text(summary)
     (paper_dir / "equations.md").write_text(equations)
 
@@ -580,7 +671,7 @@ def add(arxiv_id: str, name: Optional[str], tags: Optional[str], no_llm: bool):
     }
     (paper_dir / "meta.json").write_text(json.dumps(paper_meta, indent=2))
 
-    # 7. Update index
+    # 8. Update index
     index = load_index()
     index[name] = {
         "arxiv_id": meta["arxiv_id"],
@@ -600,9 +691,40 @@ def add(arxiv_id: str, name: Optional[str], tags: Optional[str], no_llm: bool):
 @click.argument("paper_or_arxiv", required=False)
 @click.option("--all", "regenerate_all", is_flag=True, help="Regenerate all papers")
 @click.option("--no-llm", is_flag=True, help="Skip LLM-based regeneration")
-def regenerate(paper_or_arxiv: Optional[str], regenerate_all: bool, no_llm: bool):
-    """Regenerate summary/equations for an existing paper (by name or arXiv ID)."""
+@click.option(
+    "--overwrite",
+    "-o",
+    default=None,
+    help="Overwrite fields: 'all' or comma-separated list (summary,equations,tags,name)",
+)
+def regenerate(
+    paper_or_arxiv: Optional[str],
+    regenerate_all: bool,
+    no_llm: bool,
+    overwrite: Optional[str],
+):
+    """Regenerate summary/equations for an existing paper (by name or arXiv ID).
+
+    By default, only missing fields are generated. Use --overwrite to force regeneration:
+
+    \b
+      --overwrite all           Regenerate everything
+      --overwrite name          Regenerate name only
+      --overwrite tags,summary  Regenerate tags and summary
+    """
     index = load_index()
+
+    # Parse overwrite option
+    valid_fields = {"all", "summary", "equations", "tags", "name"}
+    if overwrite is not None:
+        overwrite_fields = {f.strip().lower() for f in overwrite.split(",") if f.strip()}
+        invalid = overwrite_fields - valid_fields
+        if invalid:
+            raise click.UsageError(f"Invalid --overwrite fields: {', '.join(sorted(invalid))}")
+        overwrite_all = "all" in overwrite_fields
+    else:
+        overwrite_fields = set()
+        overwrite_all = False
 
     if regenerate_all and paper_or_arxiv:
         raise click.UsageError("Use either a paper/arXiv id OR `--all`, not both.")
@@ -626,12 +748,23 @@ def regenerate(paper_or_arxiv: Optional[str], regenerate_all: bool, no_llm: bool
             return None
         return matches[0]
 
-    def regenerate_one(name: str) -> bool:
+    def _is_arxiv_id_name(name: str) -> bool:
+        """Check if name looks like an arXiv ID (e.g., 1706_03762 or hep-th_9901001)."""
+        # New-style: 1706_03762 or 1706_03762v5
+        if re.match(r"^\d{4}_\d{4,5}(v\d+)?$", name):
+            return True
+        # Old-style: hep-th_9901001
+        if re.match(r"^[a-z-]+_\d{7}$", name):
+            return True
+        return False
+
+    def regenerate_one(name: str) -> tuple[bool, Optional[str]]:
+        """Regenerate fields for a paper. Returns (success, new_name or None)."""
         paper_dir = PAPERS_DIR / name
         meta_path = paper_dir / "meta.json"
         if not meta_path.exists():
             click.echo(f"Missing metadata for: {name} ({meta_path})", err=True)
-            return False
+            return False, None
 
         meta = json.loads(meta_path.read_text())
         tex_content = None
@@ -639,32 +772,126 @@ def regenerate(paper_or_arxiv: Optional[str], regenerate_all: bool, no_llm: bool
         if source_path.exists():
             tex_content = source_path.read_text(errors="ignore")
 
-        click.echo(f"Regenerating: {name}")
-        if no_llm:
-            summary = generate_simple_summary(meta)
-            equations = (
-                extract_equations_simple(tex_content)
-                if tex_content
-                else "No LaTeX source available."
-            )
-            llm_tags: list[str] = []
-        else:
-            summary, equations, llm_tags = generate_llm_content(paper_dir, meta, tex_content)
+        summary_path = paper_dir / "summary.md"
+        equations_path = paper_dir / "equations.md"
 
-        (paper_dir / "summary.md").write_text(summary)
-        (paper_dir / "equations.md").write_text(equations)
+        # Determine what needs regeneration
+        if overwrite_all:
+            # Overwrite everything
+            do_summary = True
+            do_equations = True
+            do_tags = True
+            do_name = True
+        elif overwrite_fields:
+            # User specified specific fields
+            do_summary = "summary" in overwrite_fields
+            do_equations = "equations" in overwrite_fields
+            do_tags = "tags" in overwrite_fields
+            do_name = "name" in overwrite_fields
+        else:
+            # Only fill missing fields
+            do_summary = not summary_path.exists() or summary_path.stat().st_size == 0
+            do_equations = not equations_path.exists() or equations_path.stat().st_size == 0
+            do_tags = not meta.get("tags")
+            do_name = _is_arxiv_id_name(name)
+
+        if not (do_summary or do_equations or do_tags or do_name):
+            click.echo(f"  {name}: nothing to regenerate")
+            return True, None
+
+        actions = []
+        if do_summary:
+            actions.append("summary")
+        if do_equations:
+            actions.append("equations")
+        if do_tags:
+            actions.append("tags")
+        if do_name:
+            actions.append("name")
+        click.echo(f"Regenerating {name}: {', '.join(actions)}")
+
+        new_name: Optional[str] = None
+        updated_meta = False
+
+        # Regenerate name if requested
+        if do_name:
+            existing_names = set(index.keys()) - {name}
+            candidate = generate_auto_name(meta, existing_names, use_llm=not no_llm)
+            if candidate != name:
+                new_dir = PAPERS_DIR / candidate
+                if new_dir.exists():
+                    click.echo(f"  Warning: Cannot rename to '{candidate}' (already exists)", err=True)
+                else:
+                    paper_dir.rename(new_dir)
+                    paper_dir = new_dir
+                    summary_path = paper_dir / "summary.md"
+                    equations_path = paper_dir / "equations.md"
+                    meta_path = paper_dir / "meta.json"
+                    new_name = candidate
+                    click.echo(f"  Renamed: {name} → {candidate}")
+
+        # Generate content based on what's needed
+        summary: Optional[str] = None
+        equations: Optional[str] = None
+        llm_tags: list[str] = []
+
+        if do_summary or do_equations or do_tags:
+            if no_llm:
+                if do_summary:
+                    summary = generate_simple_summary(meta)
+                if do_equations:
+                    equations = (
+                        extract_equations_simple(tex_content)
+                        if tex_content
+                        else "No LaTeX source available."
+                    )
+            else:
+                # LLM generates all three together, but we only use what we need
+                llm_summary, llm_equations, llm_tags = generate_llm_content(
+                    paper_dir, meta, tex_content
+                )
+                if do_summary:
+                    summary = llm_summary
+                if do_equations:
+                    equations = llm_equations
+                if not do_tags:
+                    llm_tags = []  # Discard if not requested
+
+        # Write files
+        if summary is not None:
+            summary_path.write_text(summary)
+
+        if equations is not None:
+            equations_path.write_text(equations)
 
         if llm_tags:
             meta["tags"] = list(set(meta.get("tags", []) + llm_tags))
+            updated_meta = True
+
+        if updated_meta:
             meta_path.write_text(json.dumps(meta, indent=2))
 
-            index_entry = index.get(name, {})
-            index_entry["tags"] = meta["tags"]
-            index[name] = index_entry
+        # Update index
+        current_name = new_name if new_name else name
+        if new_name:
+            # Remove old entry, add new
+            if name in index:
+                del index[name]
+            index[current_name] = {
+                "arxiv_id": meta.get("arxiv_id"),
+                "title": meta.get("title"),
+                "tags": meta.get("tags", []),
+                "added": meta.get("added"),
+            }
+            save_index(index)
+        elif updated_meta:
+            index_entry = index.get(current_name, {})
+            index_entry["tags"] = meta.get("tags", [])
+            index[current_name] = index_entry
             save_index(index)
 
-        click.echo("✓ Regenerated")
-        return True
+        click.echo("  ✓ Done")
+        return True, new_name
 
     if regenerate_all or (paper_or_arxiv == "all" and "all" not in index):
         names = sorted(index.keys())
@@ -673,10 +900,19 @@ def regenerate(paper_or_arxiv: Optional[str], regenerate_all: bool, no_llm: bool
             return
 
         failures = 0
+        renames: list[tuple[str, str]] = []
         for i, name in enumerate(names, 1):
             click.echo(f"[{i}/{len(names)}] {name}")
-            if not regenerate_one(name):
+            success, new_name = regenerate_one(name)
+            if not success:
                 failures += 1
+            elif new_name:
+                renames.append((name, new_name))
+
+        if renames:
+            click.echo(f"\nRenamed {len(renames)} paper(s):")
+            for old, new in renames:
+                click.echo(f"  {old} → {new}")
 
         if failures:
             raise click.ClickException(f"{failures} paper(s) failed to regenerate.")
@@ -690,7 +926,9 @@ def regenerate(paper_or_arxiv: Optional[str], regenerate_all: bool, no_llm: bool
         click.echo(f"Paper not found: {paper_or_arxiv}", err=True)
         return
 
-    regenerate_one(name)
+    success, new_name = regenerate_one(name)
+    if new_name:
+        click.echo(f"Paper renamed: {name} → {new_name}")
 
 
 @cli.command("list")
@@ -800,7 +1038,7 @@ def export(papers: tuple, level: str, dest: Optional[str]):
 @click.option("--papers", "-p", help="Limit to specific papers (comma-separated)")
 @click.option(
     "--llm",
-    default=DEFAULT_PQA_LLM,
+    default=DEFAULT_LLM_MODEL,
     show_default=True,
     help=(
         "LLM model to use (PaperQA/LiteLLM id; e.g., gpt-5.2, claude-sonnet-4-5, "
@@ -809,7 +1047,7 @@ def export(papers: tuple, level: str, dest: Optional[str]):
 )
 @click.option(
     "--embedding",
-    default=DEFAULT_PQA_EMBEDDING,
+    default=DEFAULT_EMBEDDING_MODEL,
     show_default=True,
     help="Embedding model to use",
 )
@@ -1191,12 +1429,12 @@ def models(
             ]
         else:
             completion_models = [
-                DEFAULT_PQA_LLM,
+                DEFAULT_LLM_MODEL,
                 "gpt-4o",
                 "claude-sonnet-4-20250514",
             ]
             embedding_models = [
-                DEFAULT_PQA_EMBEDDING,
+                DEFAULT_EMBEDDING_MODEL,
                 "text-embedding-3-small",
                 "voyage/voyage-3-large",
             ]

@@ -17,27 +17,18 @@ import paperpipe
 TEST_ARXIV_ID = "1706.03762"
 
 
-def llm_cli_available() -> bool:
-    """Check if llm CLI is installed and configured."""
-    if not shutil.which("llm"):
+def litellm_available() -> bool:
+    """Check if LiteLLM is installed and an API key is configured."""
+    try:
+        import litellm  # noqa: F401
+    except ImportError:
         return False
-    # Consider env vars as "configured" (llm can use provider keys from env).
-    if (
+    # Check for common API keys
+    return bool(
         os.environ.get("OPENAI_API_KEY")
         or os.environ.get("ANTHROPIC_API_KEY")
         or os.environ.get("GEMINI_API_KEY")
-    ):
-        return True
-
-    # Otherwise, require at least one stored key.
-    try:
-        result = subprocess.run(["llm", "keys", "list"], capture_output=True, text=True, timeout=10)
-        if result.returncode != 0:
-            return False
-        out = (result.stdout or "").strip()
-        return bool(out) and "No keys found" not in out
-    except Exception:
-        return False
+    )
 
 
 def pqa_available() -> bool:
@@ -129,6 +120,74 @@ class TestNormalizeArxivId:
     def test_rejects_unparseable(self):
         with pytest.raises(ValueError):
             paperpipe.normalize_arxiv_id("not-an-arxiv-id")
+
+
+class TestExtractNameFromTitle:
+    """Tests for _extract_name_from_title helper."""
+
+    def test_extracts_colon_prefix(self):
+        assert paperpipe._extract_name_from_title("NeRF: Representing Scenes") == "nerf"
+
+    def test_extracts_multi_word_prefix(self):
+        assert paperpipe._extract_name_from_title("Instant NGP: Fast Training") == "instant-ngp"
+
+    def test_returns_none_for_no_colon(self):
+        assert paperpipe._extract_name_from_title("Attention Is All You Need") is None
+
+    def test_returns_none_for_long_prefix(self):
+        # More than 3 words should be rejected
+        result = paperpipe._extract_name_from_title(
+            "This Is A Very Long Prefix: And Then The Rest"
+        )
+        assert result is None
+
+    def test_handles_special_characters(self):
+        assert paperpipe._extract_name_from_title("BERT++: Better BERT") == "bert"
+
+    def test_handles_parentheses(self):
+        assert paperpipe._extract_name_from_title("GPT (Generative): A Model") == "gpt-generative"
+
+
+class TestGenerateAutoName:
+    """Tests for generate_auto_name function."""
+
+    def test_uses_colon_prefix(self):
+        meta = {
+            "title": "Neuralangelo: High-Fidelity Neural Surface Reconstruction",
+            "abstract": "Some abstract text here.",
+            "arxiv_id": "2303.13476",
+        }
+        name = paperpipe.generate_auto_name(meta, set(), use_llm=False)
+        assert name == "neuralangelo"
+
+    def test_falls_back_to_arxiv_id(self):
+        meta = {
+            "title": "Attention Is All You Need",
+            "abstract": "Some abstract text here.",
+            "arxiv_id": "1706.03762",
+        }
+        # Without LLM and no colon, should fall back to arxiv ID
+        name = paperpipe.generate_auto_name(meta, set(), use_llm=False)
+        assert name == "1706_03762"
+
+    def test_handles_collision(self):
+        meta = {
+            "title": "NeRF: Representing Scenes",
+            "abstract": "Some abstract text here.",
+            "arxiv_id": "2020.12345",
+        }
+        existing = {"nerf", "nerf-2"}
+        name = paperpipe.generate_auto_name(meta, existing, use_llm=False)
+        assert name == "nerf-3"
+
+    def test_handles_old_style_arxiv_id(self):
+        meta = {
+            "title": "Some Paper Without Colon",
+            "abstract": "Some abstract text here.",
+            "arxiv_id": "hep-th/9901001",
+        }
+        name = paperpipe.generate_auto_name(meta, set(), use_llm=False)
+        assert name == "hep-th_9901001"
 
 
 class TestExtractEquationsSimple:
@@ -605,8 +664,8 @@ class TestModelsCommand:
         monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
         monkeypatch.setenv("VOYAGE_API_KEY", "x")
 
-        monkeypatch.setattr(paperpipe, "DEFAULT_PQA_LLM", "gemini/gemini-2.5-flash")
-        monkeypatch.setattr(paperpipe, "DEFAULT_PQA_EMBEDDING", "text-embedding-3-small")
+        monkeypatch.setattr(paperpipe, "DEFAULT_LLM_MODEL", "gemini/gemini-3-flash-preview")
+        monkeypatch.setattr(paperpipe, "DEFAULT_EMBEDDING_MODEL", "text-embedding-3-small")
 
         runner = CliRunner()
         result = runner.invoke(paperpipe.cli, ["models", "--json"])
@@ -681,10 +740,13 @@ class TestRegenerateCommand:
         )
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["regenerate", "--all", "--no-llm"])
+        # Use summary,equations,tags to avoid name regeneration which would rename the papers
+        result = runner.invoke(
+            paperpipe.cli, ["regenerate", "--all", "--no-llm", "-o", "summary,equations,tags"]
+        )
         assert result.exit_code == 0
-        assert "Regenerating: p1" in result.output
-        assert "Regenerating: p2" in result.output
+        assert "Regenerating p1:" in result.output
+        assert "Regenerating p2:" in result.output
 
         assert (papers_dir / "p1" / "summary.md").read_text() != "old"
         assert (papers_dir / "p2" / "summary.md").read_text() != "old"
@@ -704,9 +766,11 @@ class TestRegenerateCommand:
         )
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["regenerate", "all", "--no-llm"])
+        result = runner.invoke(
+            paperpipe.cli, ["regenerate", "all", "--no-llm", "-o", "summary,equations"]
+        )
         assert result.exit_code == 0
-        assert "Regenerating: p1" in result.output
+        assert "Regenerating p1:" in result.output
 
     def test_regenerate_all_does_not_steal_paper_named_all(self, temp_db: Path):
         papers_dir = temp_db / "papers"
@@ -734,10 +798,13 @@ class TestRegenerateCommand:
         )
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["regenerate", "all", "--no-llm"])
+        # With a paper named "all" in the index, "regenerate all" should target that paper only
+        result = runner.invoke(
+            paperpipe.cli, ["regenerate", "all", "--no-llm", "-o", "summary,equations"]
+        )
         assert result.exit_code == 0
-        assert "Regenerating: all" in result.output
-        assert "Regenerating: p2" not in result.output
+        assert "Regenerating all:" in result.output
+        assert "Regenerating p2:" not in result.output
 
     def test_regenerate_all_fails_if_missing_metadata(self, temp_db: Path):
         papers_dir = temp_db / "papers"
@@ -772,10 +839,79 @@ class TestRegenerateCommand:
         runner = CliRunner()
         result = runner.invoke(
             paperpipe.cli,
-            ["regenerate", f"https://arxiv.org/abs/{TEST_ARXIV_ID}", "--no-llm"],
+            ["regenerate", f"https://arxiv.org/abs/{TEST_ARXIV_ID}", "--no-llm", "-o", "summary"],
         )
         assert result.exit_code == 0
-        assert "Regenerating: p1" in result.output
+        assert "Regenerating p1:" in result.output
+
+    def test_regenerate_only_missing_by_default(self, temp_db: Path):
+        """Without --overwrite, only missing fields are regenerated."""
+        papers_dir = temp_db / "papers"
+        (papers_dir / "p1").mkdir(parents=True)
+        (papers_dir / "p1" / "meta.json").write_text(
+            json.dumps(
+                {"arxiv_id": "1", "title": "Paper 1", "authors": [], "abstract": "", "tags": ["existing"]}
+            )
+        )
+        (papers_dir / "p1" / "source.tex").write_text("\\begin{equation}x=1\\end{equation}")
+        (papers_dir / "p1" / "summary.md").write_text("existing summary")
+        # No equations.md - this should be regenerated
+
+        paperpipe.save_index(
+            {"p1": {"arxiv_id": "1", "title": "Paper 1", "tags": ["existing"], "added": "x"}}
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["regenerate", "p1", "--no-llm"])
+        assert result.exit_code == 0
+        # Should only regenerate equations (missing)
+        assert "equations" in result.output
+        # Should NOT regenerate summary (exists) or tags (exists)
+        assert "summary" not in result.output.lower() or "equations" in result.output
+        # Summary should be unchanged
+        assert (papers_dir / "p1" / "summary.md").read_text() == "existing summary"
+        # Equations should now exist
+        assert (papers_dir / "p1" / "equations.md").exists()
+
+    def test_regenerate_overwrite_specific_field(self, temp_db: Path):
+        """--overwrite <field> only regenerates that specific field."""
+        papers_dir = temp_db / "papers"
+        (papers_dir / "p1").mkdir(parents=True)
+        (papers_dir / "p1" / "meta.json").write_text(
+            json.dumps({"arxiv_id": "1", "title": "Paper 1", "authors": [], "abstract": ""})
+        )
+        (papers_dir / "p1" / "source.tex").write_text("\\begin{equation}x=1\\end{equation}")
+        (papers_dir / "p1" / "summary.md").write_text("old summary")
+        (papers_dir / "p1" / "equations.md").write_text("old equations")
+
+        paperpipe.save_index(
+            {"p1": {"arxiv_id": "1", "title": "Paper 1", "tags": [], "added": "x"}}
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["regenerate", "p1", "--no-llm", "-o", "summary"])
+        assert result.exit_code == 0
+        assert "summary" in result.output
+        # Summary should be changed
+        assert (papers_dir / "p1" / "summary.md").read_text() != "old summary"
+        # Equations should be unchanged
+        assert (papers_dir / "p1" / "equations.md").read_text() == "old equations"
+
+    def test_regenerate_overwrite_invalid_field(self, temp_db: Path):
+        """--overwrite with invalid field should error."""
+        papers_dir = temp_db / "papers"
+        (papers_dir / "p1").mkdir(parents=True)
+        (papers_dir / "p1" / "meta.json").write_text(
+            json.dumps({"arxiv_id": "1", "title": "Paper 1", "authors": [], "abstract": ""})
+        )
+        paperpipe.save_index(
+            {"p1": {"arxiv_id": "1", "title": "Paper 1", "tags": [], "added": "x"}}
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["regenerate", "p1", "-o", "invalid"])
+        assert result.exit_code != 0
+        assert "invalid" in result.output.lower()
 
 
 # ============================================================================
@@ -926,12 +1062,12 @@ class TestAddCommandIntegration:
 
 
 @pytest.mark.integration
-@pytest.mark.skipif(not llm_cli_available(), reason="llm CLI not installed or configured")
+@pytest.mark.skipif(not litellm_available(), reason="LiteLLM not installed or no API key configured")
 class TestLlmIntegration:
     """Integration tests for LLM-based generation."""
 
     @pytest.mark.slow
-    def test_generate_with_llm_cli(self):
+    def test_generate_with_litellm(self):
         """Test LLM-based content generation."""
         meta = {
             "title": "Test Paper",
@@ -946,7 +1082,7 @@ class TestLlmIntegration:
         \end{document}
         """
 
-        summary, equations, tags = paperpipe.generate_with_llm_cli(meta, tex_content)
+        summary, equations, tags = paperpipe.generate_with_litellm(meta, tex_content)
 
         assert len(summary) > 50
         assert len(equations) > 20
