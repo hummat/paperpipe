@@ -7,7 +7,7 @@ name = "paperpipe"
 version = "0.1.0"
 description = "Unified paper database for coding agents + PaperQA2"
 readme = "README.md"
-license = "MIT"
+license = { file = "LICENSE" }
 requires-python = ">=3.10"
 authors = [
     { name = "Matthias Humt" }
@@ -41,17 +41,29 @@ llm = [
     "llm>=0.13.0",  # Simon Willison's llm CLI
 ]
 paperqa = [
-    "paper-qa>=5.0.0",
+    "paper-qa>=5.0.0; python_version >= '3.11'",
 ]
 paperqa-media = [
-    "paper-qa[pypdf-media]>=5.0.0",
+    "paper-qa[pypdf-media]>=5.0.0; python_version >= '3.11'",
 ]
 all = [
     "paperpipe[llm,paperqa,paperqa-media]",
 ]
 dev = [
+    "build>=1.0.0",
+    "pyright>=1.1.385",
     "pytest>=7.0.0",
     "ruff>=0.1.0",
+    "twine>=5.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "build>=1.0.0",
+    "pyright>=1.1.385",
+    "pytest>=7.0.0",
+    "ruff>=0.1.0",
+    "twine>=5.0.0",
 ]
 
 [project.scripts]
@@ -63,7 +75,10 @@ Documentation = "https://github.com/hummat/paperpipe#readme"
 Repository = "https://github.com/hummat/paperpipe"
 
 [tool.hatch.build.targets.wheel]
-only-include = ["paperpipe.py"]
+only-include = ["paperpipe.py", "README.md", "LICENSE", "AGENT_INTEGRATION.md"]
+
+[tool.hatch.build.targets.sdist]
+only-include = ["paperpipe.py", "pyproject.toml", "README.md", "LICENSE", "AGENT_INTEGRATION.md"]
 
 [tool.pytest.ini_options]
 markers = [
@@ -78,3 +93,14 @@ target-version = "py310"
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
 ignore = ["E501"]
+
+[tool.pyright]
+include = ["paperpipe.py", "test_paperpipe.py"]
+exclude = ["__pycache__", ".git", ".venv", "build", "dist", ".pytest_cache", ".ruff_cache"]
+pythonVersion = "3.10"
+typeCheckingMode = "basic"
+reportMissingImports = "warning"
+reportMissingModuleSource = "warning"
+reportMissingTypeStubs = "none"
+venvPath = "."
+venv = ".venv"
