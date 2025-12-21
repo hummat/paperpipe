@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.claude/
+.venv/
+env/
+venv/
+build/
+dist/
+*.egg-info/
+.python-version
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+QWEN.md
