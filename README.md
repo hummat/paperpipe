@@ -196,6 +196,8 @@ papi export neuralangelo neus --level equations --to ./paper-context/
 | `papi tags` | List all tags with counts |
 | `papi remove <name-or-arxiv-id-or-url>` | Remove a paper |
 | `papi path` | Print database location |
+| `--quiet/-q` | Suppress progress messages |
+| `--verbose/-v` | Enable debug output |
 
 ## Tagging
 

@@ -20,7 +20,7 @@ TEST_ARXIV_ID = "1706.03762"
 def litellm_available() -> bool:
     """Check if LiteLLM is installed and an API key is configured."""
     try:
-        import litellm  # noqa: F401
+        import litellm  # type: ignore[import-not-found]  # noqa: F401
     except ImportError:
         return False
     # Check for common API keys
@@ -526,6 +526,21 @@ class TestCli:
         runner = CliRunner()
         result = runner.invoke(paperpipe.cli, ["tags"])
         assert result.exit_code == 0
+
+    def test_cli_verbose_flag(self, temp_db: Path):
+        """Test that --verbose flag is accepted."""
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["--verbose", "list"])
+        assert result.exit_code == 0
+        assert "No papers found" in result.output
+
+    def test_cli_quiet_flag(self, temp_db: Path):
+        """Test that --quiet flag is accepted."""
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["--quiet", "list"])
+        assert result.exit_code == 0
+        # Data output should still be shown even with --quiet
+        assert "No papers found" in result.output
 
     def test_list_with_papers(self, temp_db: Path):
         # Add a paper to the index
