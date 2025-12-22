@@ -700,31 +700,33 @@ def cli(quiet: bool, verbose: bool):
     ensure_db()
 
 
-@cli.command()
-@click.argument("arxiv_id")
-@click.option("--name", "-n", help="Short name for the paper (default: auto-generated from title)")
-@click.option("--tags", "-t", help="Additional comma-separated tags")
-@click.option("--no-llm", is_flag=True, help="Skip LLM-based generation")
-def add(arxiv_id: str, name: Optional[str], tags: Optional[str], no_llm: bool):
-    """Add a paper to the database."""
+def _add_single_paper(
+    arxiv_id: str,
+    name: Optional[str],
+    tags: Optional[str],
+    no_llm: bool,
+    index: dict,
+    existing_names: set[str],
+) -> tuple[bool, Optional[str]]:
+    """Add a single paper to the database.
+
+    Returns (success, paper_name) tuple.
+    """
     # Normalize arXiv ID / URL
     try:
         arxiv_id = normalize_arxiv_id(arxiv_id)
     except ValueError as e:
-        raise click.UsageError(str(e)) from e
+        echo_error(f"Invalid arXiv ID: {e}")
+        return False, None
 
-    echo_progress(f"Adding paper: {arxiv_id}")
-
-    index = load_index()
-    existing_names = set(index.keys())
     if name:
         paper_dir = PAPERS_DIR / name
         if paper_dir.exists():
             echo_error(f"Paper '{name}' already exists. Use --name to specify a different name.")
-            return
+            return False, None
         if name in existing_names:
             echo_error(f"Paper '{name}' already in index. Use --name to specify a different name.")
-            return
+            return False, None
 
     # 1. Fetch metadata (needed for auto-name generation)
     echo_progress("  Fetching metadata...")
@@ -732,7 +734,7 @@ def add(arxiv_id: str, name: Optional[str], tags: Optional[str], no_llm: bool):
         meta = fetch_arxiv_metadata(arxiv_id)
     except Exception as e:
         echo_error(f"Error fetching metadata: {e}")
-        return
+        return False, None
 
     # 2. Generate name from title if not provided
     if not name:
@@ -743,11 +745,11 @@ def add(arxiv_id: str, name: Optional[str], tags: Optional[str], no_llm: bool):
 
     if paper_dir.exists():
         echo_error(f"Paper '{name}' already exists. Use --name to specify a different name.")
-        return
+        return False, None
 
     if name in existing_names:
         echo_error(f"Paper '{name}' already in index. Use --name to specify a different name.")
-        return
+        return False, None
 
     paper_dir.mkdir(parents=True)
 
@@ -776,7 +778,7 @@ def add(arxiv_id: str, name: Optional[str], tags: Optional[str], no_llm: bool):
     if no_llm:
         summary = generate_simple_summary(meta)
         equations = extract_equations_simple(tex_content) if tex_content else "No LaTeX source available."
-        llm_tags = []
+        llm_tags: list[str] = []
     else:
         summary, equations, llm_tags = generate_llm_content(paper_dir, meta, tex_content)
 
@@ -803,7 +805,6 @@ def add(arxiv_id: str, name: Optional[str], tags: Optional[str], no_llm: bool):
     (paper_dir / "meta.json").write_text(json.dumps(paper_meta, indent=2))
 
     # 8. Update index
-    index = load_index()
     index[name] = {
         "arxiv_id": meta["arxiv_id"],
         "title": meta["title"],
@@ -812,14 +813,59 @@ def add(arxiv_id: str, name: Optional[str], tags: Optional[str], no_llm: bool):
     }
     save_index(index)
 
+    # Update existing_names for subsequent papers in batch
+    existing_names.add(name)
+
     echo_success(f"Added: {name}")
     click.echo(f"  Title: {meta['title'][:60]}...")
     click.echo(f"  Tags: {', '.join(all_tags)}")
     click.echo(f"  Location: {paper_dir}")
 
+    return True, name
+
 
 @cli.command()
-@click.argument("paper_or_arxiv", required=False)
+@click.argument("arxiv_ids", nargs=-1, required=True)
+@click.option("--name", "-n", help="Short name for the paper (only valid with single paper)")
+@click.option("--tags", "-t", help="Additional comma-separated tags (applied to all papers)")
+@click.option("--no-llm", is_flag=True, help="Skip LLM-based generation")
+def add(arxiv_ids: tuple[str, ...], name: Optional[str], tags: Optional[str], no_llm: bool):
+    """Add one or more papers to the database."""
+    if name and len(arxiv_ids) > 1:
+        raise click.UsageError("--name can only be used when adding a single paper.")
+
+    index = load_index()
+    existing_names = set(index.keys())
+
+    successes = 0
+    failures = 0
+
+    for i, arxiv_id in enumerate(arxiv_ids, 1):
+        if len(arxiv_ids) > 1:
+            echo_progress(f"[{i}/{len(arxiv_ids)}] Adding {arxiv_id}...")
+        else:
+            echo_progress(f"Adding paper: {arxiv_id}")
+
+        success, _ = _add_single_paper(arxiv_id, name, tags, no_llm, index, existing_names)
+        if success:
+            successes += 1
+        else:
+            failures += 1
+
+    # Print summary for multiple papers
+    if len(arxiv_ids) > 1:
+        click.echo()
+        if failures == 0:
+            echo_success(f"Added {successes} paper(s)")
+        else:
+            echo_warning(f"Added {successes} paper(s), {failures} failed")
+
+    if failures > 0:
+        raise SystemExit(1)
+
+
+@cli.command()
+@click.argument("papers", nargs=-1)
 @click.option("--all", "regenerate_all", is_flag=True, help="Regenerate all papers")
 @click.option("--no-llm", is_flag=True, help="Skip LLM-based regeneration")
 @click.option(
@@ -829,12 +875,12 @@ def add(arxiv_id: str, name: Optional[str], tags: Optional[str], no_llm: bool):
     help="Overwrite fields: 'all' or comma-separated list (summary,equations,tags,name)",
 )
 def regenerate(
-    paper_or_arxiv: Optional[str],
+    papers: tuple[str, ...],
     regenerate_all: bool,
     no_llm: bool,
     overwrite: Optional[str],
 ):
-    """Regenerate summary/equations for an existing paper (by name or arXiv ID).
+    """Regenerate summary/equations for existing papers (by name or arXiv ID).
 
     By default, only missing fields are generated. Use --overwrite to force regeneration:
 
@@ -857,8 +903,8 @@ def regenerate(
         overwrite_fields = set()
         overwrite_all = False
 
-    if regenerate_all and paper_or_arxiv:
-        raise click.UsageError("Use either a paper/arXiv id OR `--all`, not both.")
+    if regenerate_all and papers:
+        raise click.UsageError("Use either paper(s)/arXiv id(s) OR `--all`, not both.")
 
     def resolve_name(target: str) -> Optional[str]:
         if target in index:
@@ -1015,7 +1061,8 @@ def regenerate(
         echo_success("  Done")
         return True, new_name
 
-    if regenerate_all or (paper_or_arxiv == "all" and "all" not in index):
+    # Handle --all flag or "all" as positional argument (when no paper named "all" exists)
+    if regenerate_all or (len(papers) == 1 and papers[0] == "all" and "all" not in index):
         names = sorted(index.keys())
         if not names:
             click.echo("No papers found.")
@@ -1040,17 +1087,51 @@ def regenerate(
             raise click.ClickException(f"{failures} paper(s) failed to regenerate.")
         return
 
-    if not paper_or_arxiv:
-        raise click.UsageError("Missing PAPER_OR_ARXIV argument (or pass `--all`).")
+    if not papers:
+        raise click.UsageError("Missing PAPER argument(s) (or pass `--all`).")
 
-    name = resolve_name(paper_or_arxiv)
-    if not name:
-        echo_error(f"Paper not found: {paper_or_arxiv}")
-        return
+    # Process multiple papers
+    successes = 0
+    failures = 0
+    renames: list[tuple[str, str]] = []
 
-    success, new_name = regenerate_one(name)
-    if new_name:
-        click.echo(f"Paper renamed: {name} → {new_name}")
+    for i, paper_ref in enumerate(papers, 1):
+        if len(papers) > 1:
+            echo_progress(f"[{i}/{len(papers)}] {paper_ref}")
+
+        name = resolve_name(paper_ref)
+        if not name:
+            echo_error(f"Paper not found: {paper_ref}")
+            failures += 1
+            continue
+
+        success, new_name = regenerate_one(name)
+        if success:
+            successes += 1
+            if new_name:
+                renames.append((name, new_name))
+        else:
+            failures += 1
+
+    # Print summary for multiple papers
+    if len(papers) > 1:
+        if renames:
+            click.echo(f"\nRenamed {len(renames)} paper(s):")
+            for old, new in renames:
+                click.echo(f"  {old} → {new}")
+
+        click.echo()
+        if failures == 0:
+            echo_success(f"Regenerated {successes} paper(s)")
+        else:
+            echo_warning(f"Regenerated {successes} paper(s), {failures} failed")
+    elif renames:
+        # Single paper case
+        old, new = renames[0]
+        click.echo(f"Paper renamed: {old} → {new}")
+
+    if failures > 0:
+        raise SystemExit(1)
 
 
 @cli.command("list")
@@ -1681,32 +1762,55 @@ def show(paper: str):
 
 
 @cli.command()
-@click.argument("paper_or_arxiv")
-@click.confirmation_option(prompt="Are you sure you want to remove this paper?")
-def remove(paper_or_arxiv: str):
-    """Remove a paper from the database (by name or arXiv ID/URL)."""
+@click.argument("papers", nargs=-1, required=True)
+@click.confirmation_option(prompt="Are you sure you want to remove these paper(s)?")
+def remove(papers: tuple[str, ...]):
+    """Remove one or more papers from the database (by name or arXiv ID/URL)."""
     index = load_index()
-    name, error = _resolve_paper_name_from_ref(paper_or_arxiv, index)
-    if not name:
-        echo_error(error)
-        return
 
-    if not _is_safe_paper_name(name):
-        echo_error(f"Invalid paper name: {name!r}")
-        return
+    successes = 0
+    failures = 0
 
-    paper_dir = PAPERS_DIR / name
-    if not paper_dir.exists():
-        echo_error(f"Paper not found: {paper_or_arxiv}")
-        return
+    for i, paper_ref in enumerate(papers, 1):
+        if len(papers) > 1:
+            echo_progress(f"[{i}/{len(papers)}] Removing {paper_ref}...")
 
-    shutil.rmtree(paper_dir)
+        name, error = _resolve_paper_name_from_ref(paper_ref, index)
+        if not name:
+            echo_error(error)
+            failures += 1
+            continue
 
-    if name in index:
-        del index[name]
-        save_index(index)
+        if not _is_safe_paper_name(name):
+            echo_error(f"Invalid paper name: {name!r}")
+            failures += 1
+            continue
 
-    echo_success(f"Removed: {name}")
+        paper_dir = PAPERS_DIR / name
+        if not paper_dir.exists():
+            echo_error(f"Paper not found: {paper_ref}")
+            failures += 1
+            continue
+
+        shutil.rmtree(paper_dir)
+
+        if name in index:
+            del index[name]
+            save_index(index)
+
+        echo_success(f"Removed: {name}")
+        successes += 1
+
+    # Print summary for multiple papers
+    if len(papers) > 1:
+        click.echo()
+        if failures == 0:
+            echo_success(f"Removed {successes} paper(s)")
+        else:
+            echo_warning(f"Removed {successes} paper(s), {failures} failed")
+
+    if failures > 0:
+        raise SystemExit(1)
 
 
 @cli.command()

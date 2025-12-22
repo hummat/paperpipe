@@ -55,8 +55,9 @@ papi ask "question"      # PaperQA2 RAG (if installed)
 ## Adding New Papers
 
 ```bash
-papi add 2303.13476 --name neuralangelo
-papi add https://arxiv.org/abs/2303.13476 --name neuralangelo
+papi add 2303.13476                           # name auto-generated
+papi add https://arxiv.org/abs/2303.13476     # URLs work too
+papi add 2303.13476 --name my-custom-name     # override auto-name
 ```
 
 ## See Also

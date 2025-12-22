@@ -1,6 +1,6 @@
 # paperpipe
 
-A unified paper database for coding agents + PaperQA2.
+A unified paper database for coding agents + [PaperQA2](https://github.com/Future-House/paper-qa).
 
 **The problem:** You want AI coding assistants (Claude Code, Codex CLI, Gemini CLI) to reference scientific papers while implementing algorithms. But:
 - PDFs are token-heavy and lose equation fidelity
@@ -78,13 +78,11 @@ uv run pytest -m "not integration"
 ## Quick Start
 
 ```bash
-# Add papers (auto-tags from arXiv categories + LLM-generated semantic tags)
-papi add 2303.13476 --name neuralangelo
-papi add 2106.10689 --name neus
-papi add 2112.03907 --name ref-nerf
+# Add papers (names auto-generated from title; auto-tags from arXiv + LLM)
+papi add 2303.13476 2106.10689 2112.03907
 
-# You can also pass arXiv URLs directly:
-# papi add https://arxiv.org/abs/1706.03762 --name attention
+# Override auto-generated name with --name (single paper only):
+papi add https://arxiv.org/abs/1706.03762 --name attention
 
 # List papers
 papi list
@@ -184,9 +182,10 @@ papi export neuralangelo neus --level equations --to ./paper-context/
 
 | Command | Description |
 |---------|-------------|
-| `papi add <arxiv-id-or-url>` | Add a paper (downloads PDF, LaTeX, generates summary) |
-| `papi regenerate <name-or-arxiv-id-or-url>` | Regenerate summary/equations (and LLM tags when enabled) |
-| `papi regenerate --all` | Regenerate summary/equations for all papers |
+| `papi add <ids-or-urls...>` | Add one or more papers (auto-generates names; downloads PDF, LaTeX, summary) |
+| `papi regenerate <papers...>` | Regenerate summary/equations/tags (use `--overwrite name` to rename) |
+| `papi regenerate --all` | Regenerate for all papers |
+| `papi remove <papers...>` | Remove one or more papers (by name or arXiv ID/URL) |
 | `papi list [--tag TAG]` | List papers, optionally filtered by tag |
 | `papi search <query>` | Search by title, tag, or ID |
 | `papi show <name>` | Show paper details |
@@ -194,7 +193,6 @@ papi export neuralangelo neus --level equations --to ./paper-context/
 | `papi ask <query> [args]` | Query papers via PaperQA2 (supports all pqa args) |
 | `papi models` | Probe which models work with your API keys |
 | `papi tags` | List all tags with counts |
-| `papi remove <name-or-arxiv-id-or-url>` | Remove a paper |
 | `papi path` | Print database location |
 | `--quiet/-q` | Suppress progress messages |
 | `--verbose/-v` | Enable debug output |
@@ -209,11 +207,11 @@ Papers are automatically tagged from three sources:
 
 ```bash
 # Auto-tags from arXiv + LLM
-papi add 2303.13476 --name neuralangelo
-# → tags: computer-vision, graphics, neural-radiance-field, sdf, hash-encoding
+papi add 2303.13476
+# → name: neuralangelo, tags: computer-vision, graphics, neural-radiance-field, sdf, hash-encoding
 
-# Add custom tags
-papi add 2303.13476 --name neuralangelo --tags my-project,priority
+# Add custom tags (and override auto-name)
+papi add 2303.13476 --name my-neuralangelo --tags my-project,priority
 ```
 
 ## Export Levels
@@ -232,10 +230,9 @@ papi export neuralangelo neus --level full
 ## Workflow Example
 
 ```bash
-# 1. Build your paper collection
-papi add 2303.13476 --name neuralangelo
-papi add 2106.10689 --name neus  
-papi add 2104.06405 --name volsdf
+# 1. Build your paper collection (names auto-generated)
+papi add 2303.13476 2106.10689 2104.06405
+# → neuralangelo, neus, volsdf
 
 # 2. Research phase: use PaperQA2
 papi ask "Compare the volume rendering approaches in NeuS, VolSDF, and Neuralangelo"
@@ -246,6 +243,9 @@ papi export neuralangelo neus volsdf --level equations --to ./paper-context/
 
 # 4. In Claude Code / Codex / Gemini:
 # "Compare my eikonal_loss() implementation with the formulations in paper-context/"
+
+# 5. Clean up: remove papers you no longer need
+papi remove volsdf neus
 ```
 
 ## Configuration
@@ -296,7 +296,7 @@ Without LLM support, paperpipe falls back to:
 
 ## PaperQA2 Integration
 
-When both paperpipe and PaperQA2 are installed, they share the same PDFs:
+When both paperpipe and [PaperQA2](https://github.com/Future-House/paper-qa) are installed, they share the same PDFs:
 
 ```bash
 # paperpipe stores PDFs in <paper_db>/papers/*/paper.pdf (see `papi path`)
@@ -367,6 +367,12 @@ cp /path/to/paper.pdf "$PAPER_DB/papers/my-paper/paper.pdf"
 # (optional) "$PAPER_DB/papers/my-paper/source.tex"
 ```
 
+## Credits
+
+- **[PaperQA2](https://github.com/Future-House/paper-qa)** by Future House — the RAG engine powering `papi ask`.
+  *Skarlinski et al., "Language Agents Achieve Superhuman Synthesis of Scientific Knowledge", 2024.*
+  [arXiv:2409.13740](https://arxiv.org/abs/2409.13740)
+
 ## License
 
-MIT
+MIT (see [LICENSE](LICENSE))

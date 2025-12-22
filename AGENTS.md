@@ -58,8 +58,8 @@ Runtime data is stored outside the repo in `~/.paperpipe/` (PDFs, LaTeX, summari
 
 - PaperQA2 integration uses the `pqa` CLI if installed.
 - PaperQA2 model selection uses LiteLLM identifiers (passed through via `papi ask --llm/--embedding`).
-- Summaries/equations/tags are generated via Simon Willison’s `llm` CLI when available; otherwise paperpipe
-  falls back to simpler non-LLM extraction.
+- Summaries/equations/tags are generated via LiteLLM when available; otherwise paperpipe
+  falls back to simpler non-LLM extraction (metadata-based summaries, regex equation extraction).
 - Common API keys paperpipe checks for:
   - Google: `GEMINI_API_KEY` (or `GOOGLE_API_KEY`)
   - Anthropic: `ANTHROPIC_API_KEY`

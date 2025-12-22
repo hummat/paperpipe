@@ -51,7 +51,8 @@ papi search "sdf loss"
 papi export neuralangelo neus --level equations --to ./paper-context/
 
 # Add papers (arXiv) / regenerate; use --no-llm to avoid LLM calls
-papi add 2303.13476 --name neuralangelo
+papi add 2303.13476                      # name auto-generated
+papi add 2303.13476 --name neuralangelo  # or explicit name
 papi regenerate neuralangelo --no-llm
 ```
 

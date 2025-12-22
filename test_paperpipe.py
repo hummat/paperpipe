@@ -1042,6 +1042,124 @@ class TestAddCommand:
         assert "already" in result.output.lower()
 
 
+class TestAddMultiplePapers:
+    """Tests for adding multiple papers at once."""
+
+    def test_add_name_with_multiple_papers_errors(self, temp_db: Path):
+        """Test that --name errors when used with multiple papers."""
+        runner = CliRunner()
+        result = runner.invoke(
+            paperpipe.cli,
+            ["add", "1706.03762", "2301.00001", "--name", "my-paper", "--no-llm"],
+        )
+        assert result.exit_code != 0
+        assert "--name can only be used when adding a single paper" in result.output
+
+
+class TestRemoveMultiplePapers:
+    """Tests for removing multiple papers at once."""
+
+    def test_remove_multiple_papers(self, temp_db: Path):
+        """Test removing multiple papers in one command."""
+        papers_dir = temp_db / "papers"
+        for name in ["p1", "p2", "p3"]:
+            (papers_dir / name).mkdir(parents=True)
+            (papers_dir / name / "meta.json").write_text(
+                json.dumps({"arxiv_id": f"id-{name}", "title": f"Paper {name}"})
+            )
+        paperpipe.save_index(
+            {
+                "p1": {"arxiv_id": "id-p1", "title": "Paper p1", "tags": [], "added": "x"},
+                "p2": {"arxiv_id": "id-p2", "title": "Paper p2", "tags": [], "added": "x"},
+                "p3": {"arxiv_id": "id-p3", "title": "Paper p3", "tags": [], "added": "x"},
+            }
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["remove", "p1", "p2", "--yes"])
+        assert result.exit_code == 0
+        assert "Removed: p1" in result.output
+        assert "Removed: p2" in result.output
+        assert not (papers_dir / "p1").exists()
+        assert not (papers_dir / "p2").exists()
+        assert (papers_dir / "p3").exists()  # Not removed
+        index = paperpipe.load_index()
+        assert "p1" not in index
+        assert "p2" not in index
+        assert "p3" in index
+
+    def test_remove_multiple_partial_failure(self, temp_db: Path):
+        """Test removing multiple papers where some fail."""
+        papers_dir = temp_db / "papers"
+        (papers_dir / "p1").mkdir(parents=True)
+        (papers_dir / "p1" / "meta.json").write_text(
+            json.dumps({"arxiv_id": "id-p1", "title": "Paper p1"})
+        )
+        paperpipe.save_index(
+            {"p1": {"arxiv_id": "id-p1", "title": "Paper p1", "tags": [], "added": "x"}}
+        )
+
+        runner = CliRunner()
+        # p1 exists, nonexistent does not
+        result = runner.invoke(paperpipe.cli, ["remove", "p1", "nonexistent", "--yes"])
+        # Exit code 1 because one failed
+        assert result.exit_code == 1
+        assert "Removed: p1" in result.output
+        assert "not found" in result.output.lower()
+        assert "1 failed" in result.output
+        assert not (papers_dir / "p1").exists()
+
+
+class TestRegenerateMultiplePapers:
+    """Tests for regenerating multiple papers at once."""
+
+    def test_regenerate_multiple_papers(self, temp_db: Path):
+        """Test regenerating multiple papers in one command."""
+        papers_dir = temp_db / "papers"
+        for name in ["p1", "p2"]:
+            (papers_dir / name).mkdir(parents=True)
+            (papers_dir / name / "meta.json").write_text(
+                json.dumps({"arxiv_id": f"id-{name}", "title": f"Paper {name}", "authors": [], "abstract": ""})
+            )
+            (papers_dir / name / "source.tex").write_text(r"\begin{equation}x=1\end{equation}")
+
+        paperpipe.save_index(
+            {
+                "p1": {"arxiv_id": "id-p1", "title": "Paper p1", "tags": [], "added": "x"},
+                "p2": {"arxiv_id": "id-p2", "title": "Paper p2", "tags": [], "added": "x"},
+            }
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["regenerate", "p1", "p2", "--no-llm", "-o", "summary,equations"])
+        assert result.exit_code == 0
+        assert "Regenerating p1:" in result.output
+        assert "Regenerating p2:" in result.output
+        assert (papers_dir / "p1" / "summary.md").exists()
+        assert (papers_dir / "p2" / "summary.md").exists()
+
+    def test_regenerate_multiple_partial_failure(self, temp_db: Path):
+        """Test regenerating multiple papers where some fail."""
+        papers_dir = temp_db / "papers"
+        (papers_dir / "p1").mkdir(parents=True)
+        (papers_dir / "p1" / "meta.json").write_text(
+            json.dumps({"arxiv_id": "id-p1", "title": "Paper p1", "authors": [], "abstract": ""})
+        )
+        (papers_dir / "p1" / "source.tex").write_text(r"\begin{equation}x=1\end{equation}")
+        paperpipe.save_index(
+            {"p1": {"arxiv_id": "id-p1", "title": "Paper p1", "tags": [], "added": "x"}}
+        )
+
+        runner = CliRunner()
+        # p1 exists, nonexistent does not
+        result = runner.invoke(paperpipe.cli, ["regenerate", "p1", "nonexistent", "--no-llm", "-o", "summary"])
+        # Exit code 1 because one failed
+        assert result.exit_code == 1
+        assert "Regenerating p1:" in result.output
+        assert "not found" in result.output.lower()
+        assert "1 failed" in result.output
+
+
 class TestExport:
     def test_export_nonexistent_paper(self, temp_db: Path):
         runner = CliRunner()
@@ -1636,8 +1754,10 @@ class TestRemoveCommand:
 
         runner = CliRunner()
         result = runner.invoke(paperpipe.cli, ["remove", TEST_ARXIV_ID, "--yes"])
-        assert result.exit_code == 0
+        # Exit code 1 because the operation failed (ambiguous match)
+        assert result.exit_code == 1
         assert "Multiple papers match arXiv ID" in result.output
+        # Neither paper should be removed
         assert (papers_dir / "p1").exists()
         assert (papers_dir / "p2").exists()
 

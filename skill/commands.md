@@ -15,9 +15,10 @@
 
 | Command | Description |
 |---------|-------------|
-| `papi add <arxiv-id-or-url> --name <name>` | Add paper from arXiv |
-| `papi add <arxiv> --name <n> --tags t1,t2` | Add with custom tags |
-| `papi regenerate <name>` | Regenerate summaries/equations |
+| `papi add <arxiv-id-or-url>` | Add paper (name auto-generated) |
+| `papi add <arxiv> --name <n> --tags t1,t2` | Add with explicit name/tags |
+| `papi regenerate <name>` | Regenerate summaries/equations/tags |
+| `papi regenerate <name> --overwrite name` | Regenerate auto-name |
 | `papi regenerate --all` | Regenerate all papers |
 | `papi remove <name>` | Remove a paper |
 
