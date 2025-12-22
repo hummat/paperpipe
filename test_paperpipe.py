@@ -20,7 +20,7 @@ TEST_ARXIV_ID = "1706.03762"
 def litellm_available() -> bool:
     """Check if LiteLLM is installed and an API key is configured."""
     try:
-        import litellm  # noqa: F401
+        import litellm  # type: ignore[import-not-found]  # noqa: F401
     except ImportError:
         return False
     # Check for common API keys
@@ -526,6 +526,15 @@ class TestCli:
         runner = CliRunner()
         result = runner.invoke(paperpipe.cli, ["tags"])
         assert result.exit_code == 0
+
+    def test_cli_respects_log_level(self, temp_db: Path, capsys: pytest.CaptureFixture[str]):
+        paperpipe.cli.main(args=["list"], prog_name="papi", standalone_mode=False)
+        default_out = capsys.readouterr()
+        assert "No papers found" in default_out.out
+
+        paperpipe.cli.main(args=["--log-level", "ERROR", "list"], prog_name="papi", standalone_mode=False)
+        quiet_out = capsys.readouterr()
+        assert "No papers found" not in quiet_out.out
 
     def test_list_with_papers(self, temp_db: Path):
         # Add a paper to the index
