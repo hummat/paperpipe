@@ -25,9 +25,7 @@ def litellm_available() -> bool:
         return False
     # Check for common API keys
     return bool(
-        os.environ.get("OPENAI_API_KEY")
-        or os.environ.get("ANTHROPIC_API_KEY")
-        or os.environ.get("GEMINI_API_KEY")
+        os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("GEMINI_API_KEY")
     )
 
 
@@ -77,6 +75,226 @@ class TestIndex:
         assert loaded == test_data
 
 
+class TestIsSafePaperName:
+    """Tests for _is_safe_paper_name helper."""
+
+    def test_rejects_empty_string(self):
+        assert paperpipe._is_safe_paper_name("") is False
+
+    def test_rejects_dot(self):
+        assert paperpipe._is_safe_paper_name(".") is False
+
+    def test_rejects_dotdot(self):
+        assert paperpipe._is_safe_paper_name("..") is False
+
+    def test_rejects_forward_slash(self):
+        assert paperpipe._is_safe_paper_name("foo/bar") is False
+
+    def test_rejects_backslash(self):
+        assert paperpipe._is_safe_paper_name("foo\\bar") is False
+
+    def test_rejects_absolute_path(self):
+        assert paperpipe._is_safe_paper_name("/etc/passwd") is False
+
+    def test_accepts_valid_name(self):
+        assert paperpipe._is_safe_paper_name("nerf-2020") is True
+
+    def test_accepts_name_with_dots(self):
+        assert paperpipe._is_safe_paper_name("paper.v2") is True
+
+
+class TestResolvePaperNameFromRef:
+    """Tests for _resolve_paper_name_from_ref helper."""
+
+    def test_returns_error_for_empty_input(self, temp_db: Path):
+        name, error = paperpipe._resolve_paper_name_from_ref("", {})
+        assert name is None
+        assert "Missing" in error
+
+    def test_finds_paper_in_index(self, temp_db: Path):
+        index = {"my-paper": {"arxiv_id": "1234.5678", "title": "Test"}}
+        name, error = paperpipe._resolve_paper_name_from_ref("my-paper", index)
+        assert name == "my-paper"
+        assert error == ""
+
+    def test_finds_paper_on_disk_not_in_index(self, temp_db: Path):
+        # Paper exists on disk but not in index
+        paper_dir = temp_db / "papers" / "disk-paper"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "meta.json").write_text('{"arxiv_id": "1234.5678"}')
+
+        name, error = paperpipe._resolve_paper_name_from_ref("disk-paper", {})
+        assert name == "disk-paper"
+        assert error == ""
+
+    def test_returns_error_for_invalid_arxiv_id(self, temp_db: Path):
+        name, error = paperpipe._resolve_paper_name_from_ref("not-a-paper-or-id", {})
+        assert name is None
+        assert "not found" in error.lower()
+
+    def test_fallback_scan_finds_paper_by_arxiv_id(self, temp_db: Path):
+        # Paper on disk with arxiv_id, but not in index
+        paper_dir = temp_db / "papers" / "some-paper"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "meta.json").write_text('{"arxiv_id": "2301.00001"}')
+
+        # Empty index, but valid arxiv ID should trigger fallback scan
+        name, error = paperpipe._resolve_paper_name_from_ref("2301.00001", {})
+        assert name == "some-paper"
+        assert error == ""
+
+    def test_fallback_scan_reports_multiple_matches(self, temp_db: Path):
+        # Two papers with same arxiv_id on disk
+        for pname in ["paper-a", "paper-b"]:
+            paper_dir = temp_db / "papers" / pname
+            paper_dir.mkdir(parents=True)
+            (paper_dir / "meta.json").write_text('{"arxiv_id": "2301.00001"}')
+
+        name, error = paperpipe._resolve_paper_name_from_ref("2301.00001", {})
+        assert name is None
+        assert "Multiple papers match" in error
+
+    def test_fallback_scan_skips_non_directories(self, temp_db: Path):
+        # Create a file (not directory) in papers dir
+        (temp_db / "papers" / "not-a-dir.txt").write_text("just a file")
+        # And a valid paper
+        paper_dir = temp_db / "papers" / "real-paper"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "meta.json").write_text('{"arxiv_id": "2301.00001"}')
+
+        name, error = paperpipe._resolve_paper_name_from_ref("2301.00001", {})
+        assert name == "real-paper"
+
+    def test_fallback_scan_skips_invalid_json(self, temp_db: Path):
+        # Paper with invalid JSON
+        bad_paper = temp_db / "papers" / "bad-paper"
+        bad_paper.mkdir(parents=True)
+        (bad_paper / "meta.json").write_text("not valid json {{{")
+        # And a valid paper
+        good_paper = temp_db / "papers" / "good-paper"
+        good_paper.mkdir(parents=True)
+        (good_paper / "meta.json").write_text('{"arxiv_id": "2301.00001"}')
+
+        name, error = paperpipe._resolve_paper_name_from_ref("2301.00001", {})
+        assert name == "good-paper"
+
+    def test_fallback_scan_skips_missing_meta(self, temp_db: Path):
+        # Paper directory without meta.json
+        no_meta = temp_db / "papers" / "no-meta"
+        no_meta.mkdir(parents=True)
+        # And a valid paper
+        valid = temp_db / "papers" / "valid"
+        valid.mkdir(parents=True)
+        (valid / "meta.json").write_text('{"arxiv_id": "2301.00001"}')
+
+        name, error = paperpipe._resolve_paper_name_from_ref("2301.00001", {})
+        assert name == "valid"
+
+    def test_fallback_scan_returns_not_found(self, temp_db: Path):
+        # Papers exist but none match the arxiv_id
+        paper = temp_db / "papers" / "other-paper"
+        paper.mkdir(parents=True)
+        (paper / "meta.json").write_text('{"arxiv_id": "9999.99999"}')
+
+        name, error = paperpipe._resolve_paper_name_from_ref("2301.00001", {})
+        assert name is None
+        assert "not found" in error.lower()
+
+
+class TestProbeHint:
+    """Tests for _probe_hint helper."""
+
+    def test_hint_for_gpt52_not_supported(self):
+        hint = paperpipe._probe_hint("completion", "gpt-5.2", "model_not_supported error")
+        assert hint is not None
+        assert "gpt-5.1" in hint
+
+    def test_hint_for_embedding_not_supported(self):
+        hint = paperpipe._probe_hint("embedding", "text-embedding-3-large", "not supported")
+        assert hint is not None
+        assert "text-embedding-3-small" in hint
+
+    def test_hint_for_claude_35_retired(self):
+        hint = paperpipe._probe_hint("completion", "claude-3-5-sonnet", "not_found")
+        assert hint is not None
+        assert "claude-sonnet-4-5" in hint
+
+    def test_hint_for_voyage_completion(self):
+        hint = paperpipe._probe_hint("completion", "voyage/voyage-3", "does not support parameters")
+        assert hint is not None
+        assert "embedding" in hint
+
+    def test_no_hint_for_unknown_error(self):
+        hint = paperpipe._probe_hint("completion", "some-model", "random error")
+        assert hint is None
+
+
+class TestPillowAvailable:
+    """Tests for _pillow_available helper."""
+
+    def test_returns_bool(self):
+        # Just verify it returns a boolean without crashing
+        result = paperpipe._pillow_available()
+        assert isinstance(result, bool)
+
+
+class TestGenerateLlmContent:
+    """Tests for generate_llm_content fallback behavior."""
+
+    def test_falls_back_when_litellm_unavailable(self, tmp_path, monkeypatch):
+        # Force LiteLLM to appear unavailable
+        monkeypatch.setattr(paperpipe, "_litellm_available", lambda: False)
+
+        meta = {
+            "arxiv_id": "2301.00001",
+            "title": "Test Paper",
+            "authors": ["Author"],
+            "abstract": "This is the abstract.",
+            "categories": ["cs.CV"],
+            "published": "2023-01-01",
+        }
+        tex_content = r"\begin{equation}E=mc^2\end{equation}"
+
+        summary, equations, tags = paperpipe.generate_llm_content(tmp_path, meta, tex_content)
+
+        # Should get simple summary (contains title)
+        assert "Test Paper" in summary
+        # Should get simple equation extraction
+        assert "E=mc^2" in equations
+        # No LLM tags
+        assert tags == []
+
+    def test_falls_back_without_tex_content(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(paperpipe, "_litellm_available", lambda: False)
+
+        meta = {
+            "arxiv_id": "2301.00001",
+            "title": "Test Paper",
+            "authors": ["Author"],
+            "abstract": "Abstract text.",
+            "categories": [],
+            "published": "2023-01-01",
+        }
+
+        summary, equations, tags = paperpipe.generate_llm_content(tmp_path, meta, None)
+
+        assert "Test Paper" in summary
+        assert "No LaTeX source" in equations
+
+
+class TestFirstLine:
+    """Tests for _first_line helper."""
+
+    def test_extracts_first_line(self):
+        assert paperpipe._first_line("first\nsecond\nthird") == "first"
+
+    def test_strips_whitespace(self):
+        assert paperpipe._first_line("  hello  \nworld") == "hello"
+
+    def test_single_line(self):
+        assert paperpipe._first_line("just one line") == "just one line"
+
+
 class TestCategoriesToTags:
     def test_known_categories(self):
         tags = paperpipe.categories_to_tags(["cs.CV", "cs.LG"])
@@ -121,6 +339,19 @@ class TestNormalizeArxivId:
         with pytest.raises(ValueError):
             paperpipe.normalize_arxiv_id("not-an-arxiv-id")
 
+    def test_rejects_empty_string(self):
+        with pytest.raises(ValueError, match="missing"):
+            paperpipe.normalize_arxiv_id("")
+
+    def test_handles_plain_id_with_pdf_extension(self):
+        # Plain ID ending with .pdf (not a URL)
+        assert paperpipe.normalize_arxiv_id("1706.03762.pdf") == "1706.03762"
+
+    def test_extracts_embedded_arxiv_id(self):
+        # Arxiv ID embedded in surrounding text
+        result = paperpipe.normalize_arxiv_id("See paper 1706.03762 for details")
+        assert result == "1706.03762"
+
 
 class TestExtractNameFromTitle:
     """Tests for _extract_name_from_title helper."""
@@ -136,9 +367,7 @@ class TestExtractNameFromTitle:
 
     def test_returns_none_for_long_prefix(self):
         # More than 3 words should be rejected
-        result = paperpipe._extract_name_from_title(
-            "This Is A Very Long Prefix: And Then The Rest"
-        )
+        result = paperpipe._extract_name_from_title("This Is A Very Long Prefix: And Then The Rest")
         assert result is None
 
     def test_handles_special_characters(self):
@@ -355,6 +584,448 @@ class TestCli:
         result = runner.invoke(paperpipe.cli, ["search", "transformer"])
         assert "test-paper" in result.output
 
+    def test_search_finds_by_arxiv_id(self, temp_db: Path):
+        paperpipe.save_index(
+            {
+                "attention": {
+                    "arxiv_id": "1706.03762",
+                    "title": "Attention Is All You Need",
+                    "tags": [],
+                }
+            }
+        )
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["search", "1706"])
+        assert "attention" in result.output
+
+    def test_show_displays_paper_details(self, temp_db: Path):
+        paper_dir = temp_db / "papers" / "test-paper"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "meta.json").write_text(
+            json.dumps(
+                {
+                    "arxiv_id": "2301.00001",
+                    "title": "Test Paper Title",
+                    "authors": ["Alice", "Bob", "Charlie"],
+                    "tags": ["ml", "nlp"],
+                    "has_pdf": True,
+                    "has_source": True,
+                }
+            )
+        )
+        (paper_dir / "paper.pdf").touch()
+        (paper_dir / "source.tex").touch()
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["show", "test-paper"])
+        assert result.exit_code == 0
+        assert "Test Paper Title" in result.output
+        assert "2301.00001" in result.output
+        assert "Alice" in result.output
+        assert "ml" in result.output
+
+    def test_tags_lists_all_tags_with_counts(self, temp_db: Path):
+        paperpipe.save_index(
+            {
+                "paper1": {"arxiv_id": "1", "title": "P1", "tags": ["ml", "cv"]},
+                "paper2": {"arxiv_id": "2", "title": "P2", "tags": ["ml", "nlp"]},
+                "paper3": {"arxiv_id": "3", "title": "P3", "tags": ["ml"]},
+            }
+        )
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["tags"])
+        assert result.exit_code == 0
+        assert "ml: 3" in result.output
+        assert "cv: 1" in result.output
+        assert "nlp: 1" in result.output
+
+    def test_list_json_output(self, temp_db: Path):
+        paperpipe.save_index(
+            {
+                "paper1": {"arxiv_id": "1", "title": "Paper One", "tags": ["ml"]},
+            }
+        )
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["list", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "paper1" in data
+        assert data["paper1"]["title"] == "Paper One"
+
+
+class TestFetchArxivMetadata:
+    """Unit tests for fetch_arxiv_metadata with mocked arxiv library."""
+
+    def test_extracts_metadata_from_arxiv_result(self, monkeypatch):
+        """Test that metadata is correctly extracted from arxiv API response."""
+        from datetime import datetime
+        from unittest.mock import MagicMock
+
+        import arxiv
+
+        # Create mock paper object matching arxiv library structure
+        mock_paper = MagicMock()
+        mock_paper.title = "Attention Is All You Need"
+        mock_paper.authors = [MagicMock(), MagicMock()]
+        mock_paper.authors[0].name = "Vaswani"
+        mock_paper.authors[1].name = "Shazeer"
+        mock_paper.summary = "The dominant sequence transduction models..."
+        mock_paper.primary_category = "cs.CL"
+        mock_paper.categories = ["cs.CL", "cs.LG"]
+        mock_paper.published = datetime(2017, 6, 12)
+        mock_paper.updated = datetime(2017, 6, 12)
+        mock_paper.doi = "10.1234/example"
+        mock_paper.journal_ref = None
+        mock_paper.pdf_url = "https://arxiv.org/pdf/1706.03762"
+
+        mock_client = MagicMock()
+        mock_client.results.return_value = iter([mock_paper])
+
+        monkeypatch.setattr(arxiv, "Search", lambda id_list: MagicMock())
+        monkeypatch.setattr(arxiv, "Client", lambda: mock_client)
+
+        meta = paperpipe.fetch_arxiv_metadata("1706.03762")
+
+        assert meta["arxiv_id"] == "1706.03762"
+        assert meta["title"] == "Attention Is All You Need"
+        assert meta["authors"] == ["Vaswani", "Shazeer"]
+        assert meta["abstract"] == "The dominant sequence transduction models..."
+        assert meta["primary_category"] == "cs.CL"
+        assert meta["categories"] == ["cs.CL", "cs.LG"]
+        assert meta["pdf_url"] == "https://arxiv.org/pdf/1706.03762"
+
+    def test_handles_empty_authors(self, monkeypatch):
+        """Test handling of papers with no authors listed."""
+        from datetime import datetime
+        from unittest.mock import MagicMock
+
+        import arxiv
+
+        mock_paper = MagicMock()
+        mock_paper.title = "Anonymous Paper"
+        mock_paper.authors = []
+        mock_paper.summary = "Abstract"
+        mock_paper.primary_category = "cs.CV"
+        mock_paper.categories = ["cs.CV"]
+        mock_paper.published = datetime(2023, 1, 1)
+        mock_paper.updated = datetime(2023, 1, 1)
+        mock_paper.doi = None
+        mock_paper.journal_ref = None
+        mock_paper.pdf_url = "https://arxiv.org/pdf/2301.00001"
+
+        mock_client = MagicMock()
+        mock_client.results.return_value = iter([mock_paper])
+
+        monkeypatch.setattr(arxiv, "Search", lambda id_list: MagicMock())
+        monkeypatch.setattr(arxiv, "Client", lambda: mock_client)
+
+        meta = paperpipe.fetch_arxiv_metadata("2301.00001")
+        assert meta["authors"] == []
+
+
+class TestDownloadPdf:
+    """Unit tests for download_pdf with mocked arxiv library."""
+
+    def test_downloads_pdf_successfully(self, tmp_path, monkeypatch):
+        """Test successful PDF download."""
+        from unittest.mock import MagicMock
+
+        import arxiv
+
+        pdf_content = b"%PDF-1.4 fake pdf content"
+        dest = tmp_path / "paper.pdf"
+
+        mock_paper = MagicMock()
+
+        def fake_download(filename):
+            Path(filename).write_bytes(pdf_content)
+
+        mock_paper.download_pdf = fake_download
+
+        mock_client = MagicMock()
+        mock_client.results.return_value = iter([mock_paper])
+
+        monkeypatch.setattr(arxiv, "Search", lambda id_list: MagicMock())
+        monkeypatch.setattr(arxiv, "Client", lambda: mock_client)
+
+        result = paperpipe.download_pdf("1706.03762", dest)
+
+        assert result is True
+        assert dest.exists()
+        assert dest.read_bytes() == pdf_content
+
+    def test_returns_false_when_download_fails(self, tmp_path, monkeypatch):
+        """Test that download_pdf returns False when file isn't created."""
+        from unittest.mock import MagicMock
+
+        import arxiv
+
+        dest = tmp_path / "paper.pdf"
+
+        mock_paper = MagicMock()
+        mock_paper.download_pdf = MagicMock()  # Does nothing, file not created
+
+        mock_client = MagicMock()
+        mock_client.results.return_value = iter([mock_paper])
+
+        monkeypatch.setattr(arxiv, "Search", lambda id_list: MagicMock())
+        monkeypatch.setattr(arxiv, "Client", lambda: mock_client)
+
+        result = paperpipe.download_pdf("1706.03762", dest)
+
+        assert result is False
+        assert not dest.exists()
+
+
+class TestDownloadSource:
+    """Unit tests for download_source with mocked requests."""
+
+    def test_extracts_tex_from_tarball(self, tmp_path, monkeypatch):
+        """Test extraction of .tex files from a tarball."""
+        import io
+        import tarfile
+        from unittest.mock import MagicMock
+
+        import requests
+
+        # Create a fake tarball with .tex content
+        tex_content = r"\begin{document}Hello\end{document}"
+        tar_buffer = io.BytesIO()
+        with tarfile.open(fileobj=tar_buffer, mode="w:gz") as tar:
+            tex_bytes = tex_content.encode("utf-8")
+            info = tarfile.TarInfo(name="main.tex")
+            info.size = len(tex_bytes)
+            tar.addfile(info, io.BytesIO(tex_bytes))
+        tar_buffer.seek(0)
+
+        mock_response = MagicMock()
+        mock_response.content = tar_buffer.read()
+        mock_response.raise_for_status = MagicMock()
+
+        monkeypatch.setattr(requests, "get", lambda url, timeout: mock_response)
+
+        paper_dir = tmp_path / "test-paper"
+        paper_dir.mkdir()
+
+        result = paperpipe.download_source("1706.03762", paper_dir)
+
+        assert result is not None
+        assert r"\begin{document}" in result
+        assert (paper_dir / "source.tex").exists()
+
+    def test_returns_none_on_http_error(self, tmp_path, monkeypatch):
+        """Test that HTTP errors return None gracefully."""
+        from unittest.mock import MagicMock
+
+        import requests
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.side_effect = Exception("404 Not Found")
+
+        monkeypatch.setattr(requests, "get", lambda url, timeout: mock_response)
+
+        paper_dir = tmp_path / "test-paper"
+        paper_dir.mkdir()
+
+        result = paperpipe.download_source("nonexistent", paper_dir)
+
+        assert result is None
+        assert not (paper_dir / "source.tex").exists()
+
+    def test_returns_none_for_non_tex_content(self, tmp_path, monkeypatch):
+        """Test that non-LaTeX content (no \\begin{document}) returns None."""
+        from unittest.mock import MagicMock
+
+        import requests
+
+        # Plain text without LaTeX markers
+        mock_response = MagicMock()
+        mock_response.content = b"This is just plain text, no LaTeX here."
+        mock_response.raise_for_status = MagicMock()
+
+        monkeypatch.setattr(requests, "get", lambda url, timeout: mock_response)
+
+        paper_dir = tmp_path / "test-paper"
+        paper_dir.mkdir()
+
+        result = paperpipe.download_source("1706.03762", paper_dir)
+
+        assert result is None
+
+    def test_prefers_main_tex_over_others(self, tmp_path, monkeypatch):
+        """Test that main.tex is preferred when multiple .tex files exist."""
+        import io
+        import tarfile
+        from unittest.mock import MagicMock
+
+        import requests
+
+        tar_buffer = io.BytesIO()
+        with tarfile.open(fileobj=tar_buffer, mode="w:gz") as tar:
+            # Add a secondary .tex file (larger)
+            other_content = r"\begin{document}Other content here that is longer\end{document}"
+            other_bytes = other_content.encode("utf-8")
+            info = tarfile.TarInfo(name="other.tex")
+            info.size = len(other_bytes)
+            tar.addfile(info, io.BytesIO(other_bytes))
+
+            # Add main.tex (smaller but preferred)
+            main_content = r"\begin{document}Main\end{document}"
+            main_bytes = main_content.encode("utf-8")
+            info = tarfile.TarInfo(name="main.tex")
+            info.size = len(main_bytes)
+            tar.addfile(info, io.BytesIO(main_bytes))
+        tar_buffer.seek(0)
+
+        mock_response = MagicMock()
+        mock_response.content = tar_buffer.read()
+        mock_response.raise_for_status = MagicMock()
+
+        monkeypatch.setattr(requests, "get", lambda url, timeout: mock_response)
+
+        paper_dir = tmp_path / "test-paper"
+        paper_dir.mkdir()
+
+        result = paperpipe.download_source("1706.03762", paper_dir)
+
+        # main.tex content should come first
+        assert result is not None
+        assert result.startswith(r"\begin{document}Main")
+
+    def test_finds_main_by_document_marker(self, tmp_path, monkeypatch):
+        """Test that file with \\begin{document} is preferred when no main.tex."""
+        import io
+        import tarfile
+        from unittest.mock import MagicMock
+
+        import requests
+
+        tar_buffer = io.BytesIO()
+        with tarfile.open(fileobj=tar_buffer, mode="w:gz") as tar:
+            # File without \begin{document} (larger)
+            preamble = r"\newcommand{\foo}{bar}" + "x" * 1000
+            preamble_bytes = preamble.encode("utf-8")
+            info = tarfile.TarInfo(name="preamble.tex")
+            info.size = len(preamble_bytes)
+            tar.addfile(info, io.BytesIO(preamble_bytes))
+
+            # File with \begin{document} (smaller but is main)
+            doc_content = r"\begin{document}The actual document\end{document}"
+            doc_bytes = doc_content.encode("utf-8")
+            info = tarfile.TarInfo(name="article.tex")
+            info.size = len(doc_bytes)
+            tar.addfile(info, io.BytesIO(doc_bytes))
+        tar_buffer.seek(0)
+
+        mock_response = MagicMock()
+        mock_response.content = tar_buffer.read()
+        mock_response.raise_for_status = MagicMock()
+
+        monkeypatch.setattr(requests, "get", lambda url, timeout: mock_response)
+
+        paper_dir = tmp_path / "test-paper"
+        paper_dir.mkdir()
+
+        result = paperpipe.download_source("1706.03762", paper_dir)
+
+        assert result is not None
+        # article.tex (with \begin{document}) should be main, preamble.tex appended
+        assert result.startswith(r"\begin{document}The actual")
+
+    def test_falls_back_to_largest_file(self, tmp_path, monkeypatch):
+        """Test fallback to largest file when no \\begin{document} anywhere."""
+        import io
+        import tarfile
+        from unittest.mock import MagicMock
+
+        import requests
+
+        tar_buffer = io.BytesIO()
+        with tarfile.open(fileobj=tar_buffer, mode="w:gz") as tar:
+            # Small file
+            small = r"\section{Small}"
+            small_bytes = small.encode("utf-8")
+            info = tarfile.TarInfo(name="small.tex")
+            info.size = len(small_bytes)
+            tar.addfile(info, io.BytesIO(small_bytes))
+
+            # Large file (should be picked)
+            large = r"\section{Large}" + "x" * 500
+            large_bytes = large.encode("utf-8")
+            info = tarfile.TarInfo(name="large.tex")
+            info.size = len(large_bytes)
+            tar.addfile(info, io.BytesIO(large_bytes))
+        tar_buffer.seek(0)
+
+        mock_response = MagicMock()
+        mock_response.content = tar_buffer.read()
+        mock_response.raise_for_status = MagicMock()
+
+        monkeypatch.setattr(requests, "get", lambda url, timeout: mock_response)
+
+        paper_dir = tmp_path / "test-paper"
+        paper_dir.mkdir()
+
+        result = paperpipe.download_source("1706.03762", paper_dir)
+
+        # No \begin{document}, so returns None
+        assert result is None
+
+
+class TestAddCommand:
+    """Unit tests for the add command with mocked network calls."""
+
+    def test_add_paper_already_exists(self, temp_db: Path):
+        """Test that adding duplicate paper fails gracefully (unit test, no network)."""
+        # Pre-create the paper directory to simulate existing paper
+        paper_dir = temp_db / "papers" / "test-paper"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "meta.json").write_text(
+            json.dumps({"arxiv_id": "1706.03762", "title": "Test", "authors": [], "abstract": ""})
+        )
+        paperpipe.save_index({"test-paper": {"arxiv_id": "1706.03762", "title": "Test", "tags": [], "added": "x"}})
+
+        runner = CliRunner()
+        result = runner.invoke(
+            paperpipe.cli,
+            ["add", "1706.03762", "--name", "test-paper", "--no-llm"],
+        )
+
+        assert "already exists" in result.output
+
+    def test_add_detects_duplicate_in_index(self, temp_db: Path, monkeypatch):
+        """Test that add command detects duplicate name in index even without directory."""
+        from datetime import datetime
+
+        # Pre-populate index only (no directory)
+        paperpipe.save_index({"existing-paper": {"arxiv_id": "other-id", "title": "Other", "tags": [], "added": "x"}})
+
+        # Mock fetch_arxiv_metadata to avoid network call
+        def mock_fetch(arxiv_id):
+            return {
+                "arxiv_id": arxiv_id,
+                "title": "Test Paper",
+                "authors": [],
+                "abstract": "Abstract",
+                "primary_category": "cs.CV",
+                "categories": ["cs.CV"],
+                "published": datetime(2023, 1, 1).isoformat(),
+                "updated": datetime(2023, 1, 1).isoformat(),
+                "doi": None,
+                "journal_ref": None,
+                "pdf_url": "https://arxiv.org/pdf/1706.03762",
+            }
+
+        monkeypatch.setattr(paperpipe, "fetch_arxiv_metadata", mock_fetch)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            paperpipe.cli,
+            ["add", "1706.03762", "--name", "existing-paper", "--no-llm"],
+        )
+
+        assert "already" in result.output.lower()
+
 
 class TestExport:
     def test_export_nonexistent_paper(self, temp_db: Path):
@@ -371,12 +1042,42 @@ class TestExport:
 
         runner = CliRunner()
         with runner.isolated_filesystem():
-            result = runner.invoke(
-                paperpipe.cli, ["export", "test-paper", "--level", "summary", "--to", "."]
-            )
+            result = runner.invoke(paperpipe.cli, ["export", "test-paper", "--level", "summary", "--to", "."])
             assert result.exit_code == 0
             assert Path("test-paper_summary.md").exists()
             assert Path("test-paper_summary.md").read_text() == "# Test Summary"
+
+    def test_export_equations(self, temp_db: Path):
+        paper_dir = temp_db / "papers" / "test-paper"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "equations.md").write_text("# Equations\nE=mc^2")
+
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            result = runner.invoke(paperpipe.cli, ["export", "test-paper", "--level", "equations", "--to", "."])
+            assert result.exit_code == 0
+            assert Path("test-paper_equations.md").exists()
+
+    def test_export_full_with_source(self, temp_db: Path):
+        paper_dir = temp_db / "papers" / "test-paper"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "source.tex").write_text(r"\documentclass{article}")
+
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            result = runner.invoke(paperpipe.cli, ["export", "test-paper", "--level", "full", "--to", "."])
+            assert result.exit_code == 0
+            assert Path("test-paper.tex").exists()
+
+    def test_export_full_without_source(self, temp_db: Path):
+        paper_dir = temp_db / "papers" / "test-paper"
+        paper_dir.mkdir(parents=True)
+        # No source.tex file
+
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            result = runner.invoke(paperpipe.cli, ["export", "test-paper", "--level", "full", "--to", "."])
+            assert "No LaTeX source" in result.output
 
 
 class TestAskCommand:
@@ -590,21 +1291,13 @@ class TestModelsCommand:
         assert result.exit_code == 0
         payload = json.loads(result.output)
         assert isinstance(payload, list)
-        assert any(
-            r["ok"] is True and r["model"] == "ok-model" and r["kind"] == "completion"
-            for r in payload
-        )
-        assert any(
-            r["ok"] is False and r["model"] == "bad-embed" and r["kind"] == "embedding"
-            for r in payload
-        )
+        assert any(r["ok"] is True and r["model"] == "ok-model" and r["kind"] == "completion" for r in payload)
+        assert any(r["ok"] is False and r["model"] == "bad-embed" and r["kind"] == "embedding" for r in payload)
 
     def test_models_requires_litellm(self, monkeypatch):
         monkeypatch.setitem(sys.modules, "litellm", types.SimpleNamespace())
         runner = CliRunner()
-        result = runner.invoke(
-            paperpipe.cli, ["models", "--kind", "completion", "--model", "ok-model"]
-        )
+        result = runner.invoke(paperpipe.cli, ["models", "--kind", "completion", "--model", "ok-model"])
         assert result.exit_code != 0
         assert "LiteLLM is required" in result.output
 
@@ -699,9 +1392,7 @@ class TestModelsCommand:
         monkeypatch.setenv("VOYAGE_API_KEY", "x")
 
         runner = CliRunner()
-        result = runner.invoke(
-            paperpipe.cli, ["models", "latest", "--kind", "completion", "--json"]
-        )
+        result = runner.invoke(paperpipe.cli, ["models", "latest", "--kind", "completion", "--json"])
         assert result.exit_code == 0
         json.loads(result.output)
 
@@ -741,9 +1432,7 @@ class TestRegenerateCommand:
 
         runner = CliRunner()
         # Use summary,equations,tags to avoid name regeneration which would rename the papers
-        result = runner.invoke(
-            paperpipe.cli, ["regenerate", "--all", "--no-llm", "-o", "summary,equations,tags"]
-        )
+        result = runner.invoke(paperpipe.cli, ["regenerate", "--all", "--no-llm", "-o", "summary,equations,tags"])
         assert result.exit_code == 0
         assert "Regenerating p1:" in result.output
         assert "Regenerating p2:" in result.output
@@ -761,14 +1450,10 @@ class TestRegenerateCommand:
         (papers_dir / "p1" / "summary.md").write_text("old")
         (papers_dir / "p1" / "equations.md").write_text("old")
 
-        paperpipe.save_index(
-            {"p1": {"arxiv_id": "1", "title": "Paper 1", "tags": [], "added": "x"}}
-        )
+        paperpipe.save_index({"p1": {"arxiv_id": "1", "title": "Paper 1", "tags": [], "added": "x"}})
 
         runner = CliRunner()
-        result = runner.invoke(
-            paperpipe.cli, ["regenerate", "all", "--no-llm", "-o", "summary,equations"]
-        )
+        result = runner.invoke(paperpipe.cli, ["regenerate", "all", "--no-llm", "-o", "summary,equations"])
         assert result.exit_code == 0
         assert "Regenerating p1:" in result.output
 
@@ -799,9 +1484,7 @@ class TestRegenerateCommand:
 
         runner = CliRunner()
         # With a paper named "all" in the index, "regenerate all" should target that paper only
-        result = runner.invoke(
-            paperpipe.cli, ["regenerate", "all", "--no-llm", "-o", "summary,equations"]
-        )
+        result = runner.invoke(paperpipe.cli, ["regenerate", "all", "--no-llm", "-o", "summary,equations"])
         assert result.exit_code == 0
         assert "Regenerating all:" in result.output
         assert "Regenerating p2:" not in result.output
@@ -809,9 +1492,7 @@ class TestRegenerateCommand:
     def test_regenerate_all_fails_if_missing_metadata(self, temp_db: Path):
         papers_dir = temp_db / "papers"
         (papers_dir / "p1").mkdir(parents=True)
-        paperpipe.save_index(
-            {"p1": {"arxiv_id": "1", "title": "Paper 1", "tags": [], "added": "x"}}
-        )
+        paperpipe.save_index({"p1": {"arxiv_id": "1", "title": "Paper 1", "tags": [], "added": "x"}})
 
         runner = CliRunner()
         result = runner.invoke(paperpipe.cli, ["regenerate", "--all", "--no-llm"])
@@ -832,9 +1513,7 @@ class TestRegenerateCommand:
             )
         )
         (papers_dir / "p1" / "source.tex").write_text("\\begin{equation}x=1\\end{equation}")
-        paperpipe.save_index(
-            {"p1": {"arxiv_id": TEST_ARXIV_ID, "title": "Paper 1", "tags": [], "added": "x"}}
-        )
+        paperpipe.save_index({"p1": {"arxiv_id": TEST_ARXIV_ID, "title": "Paper 1", "tags": [], "added": "x"}})
 
         runner = CliRunner()
         result = runner.invoke(
@@ -849,17 +1528,13 @@ class TestRegenerateCommand:
         papers_dir = temp_db / "papers"
         (papers_dir / "p1").mkdir(parents=True)
         (papers_dir / "p1" / "meta.json").write_text(
-            json.dumps(
-                {"arxiv_id": "1", "title": "Paper 1", "authors": [], "abstract": "", "tags": ["existing"]}
-            )
+            json.dumps({"arxiv_id": "1", "title": "Paper 1", "authors": [], "abstract": "", "tags": ["existing"]})
         )
         (papers_dir / "p1" / "source.tex").write_text("\\begin{equation}x=1\\end{equation}")
         (papers_dir / "p1" / "summary.md").write_text("existing summary")
         # No equations.md - this should be regenerated
 
-        paperpipe.save_index(
-            {"p1": {"arxiv_id": "1", "title": "Paper 1", "tags": ["existing"], "added": "x"}}
-        )
+        paperpipe.save_index({"p1": {"arxiv_id": "1", "title": "Paper 1", "tags": ["existing"], "added": "x"}})
 
         runner = CliRunner()
         result = runner.invoke(paperpipe.cli, ["regenerate", "p1", "--no-llm"])
@@ -884,9 +1559,7 @@ class TestRegenerateCommand:
         (papers_dir / "p1" / "summary.md").write_text("old summary")
         (papers_dir / "p1" / "equations.md").write_text("old equations")
 
-        paperpipe.save_index(
-            {"p1": {"arxiv_id": "1", "title": "Paper 1", "tags": [], "added": "x"}}
-        )
+        paperpipe.save_index({"p1": {"arxiv_id": "1", "title": "Paper 1", "tags": [], "added": "x"}})
 
         runner = CliRunner()
         result = runner.invoke(paperpipe.cli, ["regenerate", "p1", "--no-llm", "-o", "summary"])
@@ -904,14 +1577,54 @@ class TestRegenerateCommand:
         (papers_dir / "p1" / "meta.json").write_text(
             json.dumps({"arxiv_id": "1", "title": "Paper 1", "authors": [], "abstract": ""})
         )
-        paperpipe.save_index(
-            {"p1": {"arxiv_id": "1", "title": "Paper 1", "tags": [], "added": "x"}}
-        )
+        paperpipe.save_index({"p1": {"arxiv_id": "1", "title": "Paper 1", "tags": [], "added": "x"}})
 
         runner = CliRunner()
         result = runner.invoke(paperpipe.cli, ["regenerate", "p1", "-o", "invalid"])
         assert result.exit_code != 0
         assert "invalid" in result.output.lower()
+
+
+class TestRemoveCommand:
+    def test_remove_by_arxiv_url(self, temp_db: Path):
+        papers_dir = temp_db / "papers"
+        (papers_dir / "p1").mkdir(parents=True)
+        (papers_dir / "p1" / "meta.json").write_text(
+            json.dumps({"arxiv_id": TEST_ARXIV_ID, "title": "Paper 1", "authors": [], "abstract": ""})
+        )
+        (papers_dir / "p1" / "summary.md").write_text("summary")
+        paperpipe.save_index({"p1": {"arxiv_id": TEST_ARXIV_ID, "title": "Paper 1", "tags": [], "added": "x"}})
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["remove", f"https://arxiv.org/abs/{TEST_ARXIV_ID}", "--yes"])
+        assert result.exit_code == 0
+        assert "Removed: p1" in result.output
+        assert not (papers_dir / "p1").exists()
+        assert "p1" not in paperpipe.load_index()
+
+    def test_remove_by_arxiv_id_ambiguous(self, temp_db: Path):
+        papers_dir = temp_db / "papers"
+        (papers_dir / "p1").mkdir(parents=True)
+        (papers_dir / "p2").mkdir(parents=True)
+        (papers_dir / "p1" / "meta.json").write_text(
+            json.dumps({"arxiv_id": TEST_ARXIV_ID, "title": "Paper 1", "authors": [], "abstract": ""})
+        )
+        (papers_dir / "p2" / "meta.json").write_text(
+            json.dumps({"arxiv_id": TEST_ARXIV_ID, "title": "Paper 2", "authors": [], "abstract": ""})
+        )
+        paperpipe.save_index(
+            {
+                "p1": {"arxiv_id": TEST_ARXIV_ID, "title": "Paper 1", "tags": [], "added": "x"},
+                "p2": {"arxiv_id": TEST_ARXIV_ID, "title": "Paper 2", "tags": [], "added": "x"},
+            }
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["remove", TEST_ARXIV_ID, "--yes"])
+        assert result.exit_code == 0
+        assert "Multiple papers match arXiv ID" in result.output
+        assert (papers_dir / "p1").exists()
+        assert (papers_dir / "p2").exists()
 
 
 # ============================================================================
@@ -1021,44 +1734,8 @@ class TestAddCommandIntegration:
         assert "nlp" in meta["tags"]
         assert "deep-learning" in meta["tags"]
 
-    def test_add_paper_already_exists(self, temp_db: Path):
-        """Test that adding duplicate paper fails gracefully."""
-        runner = CliRunner()
-
-        # Add first time
-        runner.invoke(
-            paperpipe.cli,
-            ["add", TEST_ARXIV_ID, "--name", "test-dup", "--no-llm"],
-        )
-
-        # Try to add again
-        result = runner.invoke(
-            paperpipe.cli,
-            ["add", TEST_ARXIV_ID, "--name", "test-dup", "--no-llm"],
-        )
-
-        assert "already exists" in result.output
-
-    def test_remove_paper(self, temp_db: Path):
-        """Test removing a paper."""
-        runner = CliRunner()
-
-        # Add a paper first
-        runner.invoke(
-            paperpipe.cli,
-            ["add", TEST_ARXIV_ID, "--name", "to-remove", "--no-llm"],
-        )
-
-        # Remove it
-        result = runner.invoke(
-            paperpipe.cli,
-            ["remove", "to-remove", "--yes"],
-        )
-
-        assert result.exit_code == 0
-        assert "Removed" in result.output
-        assert not (temp_db / "papers" / "to-remove").exists()
-        assert "to-remove" not in paperpipe.load_index()
+    # NOTE: test_add_paper_already_exists moved to unit tests (TestAddCommand)
+    # NOTE: test_remove_paper covered by unit tests (TestRemoveCommand)
 
 
 @pytest.mark.integration

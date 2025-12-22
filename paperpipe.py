@@ -61,9 +61,7 @@ CATEGORY_TAGS = {
 
 
 _ARXIV_NEW_STYLE_RE = re.compile(r"^\d{4}\.\d{4,5}(?:v\d+)?$", flags=re.IGNORECASE)
-_ARXIV_OLD_STYLE_RE = re.compile(
-    r"^[a-zA-Z-]+(?:\.[a-zA-Z-]+)?/\d{7}(?:v\d+)?$", flags=re.IGNORECASE
-)
+_ARXIV_OLD_STYLE_RE = re.compile(r"^[a-zA-Z-]+(?:\.[a-zA-Z-]+)?/\d{7}(?:v\d+)?$", flags=re.IGNORECASE)
 _ARXIV_ANY_RE = re.compile(
     r"(\d{4}\.\d{4,5}(?:v\d+)?|[a-zA-Z-]+(?:\.[a-zA-Z-]+)?/\d{7}(?:v\d+)?)",
     flags=re.IGNORECASE,
@@ -116,6 +114,81 @@ def normalize_arxiv_id(value: str) -> str:
     raise ValueError(f"could not parse arXiv id from: {value!r}")
 
 
+def _is_safe_paper_name(name: str) -> bool:
+    """
+    Paper names are directory names under PAPERS_DIR.
+
+    For safety, do not treat values containing path separators (or traversal) as a name.
+    """
+    raw = (name or "").strip()
+    if not raw or raw in {".", ".."}:
+        return False
+    if "/" in raw or "\\" in raw:
+        return False
+    path = Path(raw)
+    if path.is_absolute():
+        return False
+    if any(part == ".." for part in path.parts):
+        return False
+    return True
+
+
+def _resolve_paper_name_from_ref(paper_or_arxiv: str, index: dict) -> tuple[Optional[str], str]:
+    """
+    Resolve a user-supplied reference into a paper name.
+
+    Supports:
+      - paper name (directory / index key)
+      - arXiv ID
+      - arXiv URL (abs/pdf/e-print)
+    """
+    raw = (paper_or_arxiv or "").strip()
+    if not raw:
+        return None, "Missing paper name or arXiv ID/URL."
+
+    if raw in index:
+        return raw, ""
+
+    if _is_safe_paper_name(raw):
+        paper_dir = PAPERS_DIR / raw
+        if paper_dir.exists():
+            return raw, ""
+
+    try:
+        arxiv_id = normalize_arxiv_id(raw)
+    except ValueError:
+        return None, f"Paper not found: {paper_or_arxiv}"
+
+    matches = [name for name, info in index.items() if info.get("arxiv_id") == arxiv_id]
+    if len(matches) == 1:
+        return matches[0], ""
+    if len(matches) > 1:
+        return None, f"Multiple papers match arXiv ID {arxiv_id}: {', '.join(sorted(matches))}"
+
+    # Fallback: scan on-disk metadata if index is missing/out-of-date.
+    matches = []
+    if PAPERS_DIR.exists():
+        for candidate in PAPERS_DIR.iterdir():
+            if not candidate.is_dir():
+                continue
+            meta_path = candidate / "meta.json"
+            if not meta_path.exists():
+                continue
+            try:
+                meta = json.loads(meta_path.read_text())
+            except Exception:
+                continue
+            if meta.get("arxiv_id") == arxiv_id:
+                matches.append(candidate.name)
+
+    if len(matches) == 1:
+        return matches[0], ""
+    if len(matches) > 1:
+        return None, f"Multiple papers match arXiv ID {arxiv_id}: {', '.join(sorted(matches))}"
+
+    return None, f"Paper not found: {paper_or_arxiv}"
+
+
 def ensure_db():
     """Ensure the paper database directory structure exists."""
     PAPER_DB.mkdir(parents=True, exist_ok=True)
@@ -147,17 +220,11 @@ def _probe_hint(kind: str, model: str, error_line: str) -> Optional[str]:
     low = (error_line or "").lower()
     if model == "gpt-5.2" and ("not supported" in low or "model_not_supported" in low):
         return "not enabled for this OpenAI key/project; try gpt-5.1"
-    if model == "text-embedding-3-large" and (
-        "not supported" in low or "model_not_supported" in low
-    ):
+    if model == "text-embedding-3-large" and ("not supported" in low or "model_not_supported" in low):
         return "not enabled for this OpenAI key/project; use text-embedding-3-small"
     if model.startswith("claude-3-5-sonnet") and ("not_found" in low or "model:" in low):
         return "Claude 3.5 appears retired; try claude-sonnet-4-5"
-    if (
-        kind == "completion"
-        and model.startswith("voyage/")
-        and "does not support parameters" in low
-    ):
+    if kind == "completion" and model.startswith("voyage/") and "does not support parameters" in low:
         return "Voyage is typically embedding-only; probe it under --kind embedding"
     return None
 
@@ -393,9 +460,7 @@ def generate_auto_name(meta: dict, existing_names: set[str], use_llm: bool = Tru
     return name
 
 
-def generate_llm_content(
-    paper_dir: Path, meta: dict, tex_content: Optional[str]
-) -> tuple[str, str, list[str]]:
+def generate_llm_content(paper_dir: Path, meta: dict, tex_content: Optional[str]) -> tuple[str, str, list[str]]:
     """
     Generate summary, equations.md, and semantic tags using LLM.
     Returns (summary, equations_md, additional_tags)
@@ -403,9 +468,7 @@ def generate_llm_content(
     if not _litellm_available():
         # Fallback: simple extraction without LLM
         summary = generate_simple_summary(meta)
-        equations = (
-            extract_equations_simple(tex_content) if tex_content else "No LaTeX source available."
-        )
+        equations = extract_equations_simple(tex_content) if tex_content else "No LaTeX source available."
         return summary, equations, []
 
     try:
@@ -413,9 +476,7 @@ def generate_llm_content(
     except Exception as e:
         click.echo(f"  Warning: LLM generation failed: {e}", err=True)
         summary = generate_simple_summary(meta)
-        equations = (
-            extract_equations_simple(tex_content) if tex_content else "No LaTeX source available."
-        )
+        equations = extract_equations_simple(tex_content) if tex_content else "No LaTeX source available."
         return summary, equations, []
 
 
@@ -642,9 +703,7 @@ def add(arxiv_id: str, name: Optional[str], tags: Optional[str], no_llm: bool):
     click.echo("  Generating summary and equations...")
     if no_llm:
         summary = generate_simple_summary(meta)
-        equations = (
-            extract_equations_simple(tex_content) if tex_content else "No LaTeX source available."
-        )
+        equations = extract_equations_simple(tex_content) if tex_content else "No LaTeX source available."
         llm_tags = []
     else:
         summary, equations, llm_tags = generate_llm_content(paper_dir, meta, tex_content)
@@ -840,16 +899,10 @@ def regenerate(
                 if do_summary:
                     summary = generate_simple_summary(meta)
                 if do_equations:
-                    equations = (
-                        extract_equations_simple(tex_content)
-                        if tex_content
-                        else "No LaTeX source available."
-                    )
+                    equations = extract_equations_simple(tex_content) if tex_content else "No LaTeX source available."
             else:
                 # LLM generates all three together, but we only use what we need
-                llm_summary, llm_equations, llm_tags = generate_llm_content(
-                    paper_dir, meta, tex_content
-                )
+                llm_summary, llm_equations, llm_tags = generate_llm_content(paper_dir, meta, tex_content)
                 if do_summary:
                     summary = llm_summary
                 if do_equations:
@@ -1040,10 +1093,7 @@ def export(papers: tuple, level: str, dest: Optional[str]):
     "--llm",
     default=DEFAULT_LLM_MODEL,
     show_default=True,
-    help=(
-        "LLM model to use (PaperQA/LiteLLM id; e.g., gpt-5.2, claude-sonnet-4-5, "
-        "gemini/gemini-2.5-flash)"
-    ),
+    help=("LLM model to use (PaperQA/LiteLLM id; e.g., gpt-5.2, claude-sonnet-4-5, gemini/gemini-2.5-flash)"),
 )
 @click.option(
     "--embedding",
@@ -1074,9 +1124,7 @@ def ask(ctx, query: str, papers: Optional[str], llm: Optional[str], embedding: O
     # ~/.config/pqa/settings/high_quality.json. If that file is from an older PaperQA version,
     # pqa can crash on startup due to a schema mismatch. Use the special `default` settings
     # (which bypasses JSON config loading) unless the user explicitly passes `--settings/-s`.
-    has_settings_flag = any(
-        arg in {"--settings", "-s"} or arg.startswith("--settings=") for arg in ctx.args
-    )
+    has_settings_flag = any(arg in {"--settings", "-s"} or arg.startswith("--settings=") for arg in ctx.args)
     if not has_settings_flag:
         cmd.extend(["--settings", "default"])
 
@@ -1084,8 +1132,7 @@ def ask(ctx, query: str, papers: Optional[str], llm: Optional[str], embedding: O
     # PyPDF raises at import-time when accessing `page.images`. Disable multimodal parsing unless
     # the user explicitly provides parsing settings.
     has_parsing_override = any(
-        arg == "--parsing" or arg.startswith("--parsing.") or arg.startswith("--parsing=")
-        for arg in ctx.args
+        arg == "--parsing" or arg.startswith("--parsing.") or arg.startswith("--parsing=") for arg in ctx.args
     )
     if not has_parsing_override and not _pillow_available():
         cmd.extend(["--parsing.multimodal", "OFF"])
@@ -1115,8 +1162,7 @@ def ask(ctx, query: str, papers: Optional[str], llm: Optional[str], embedding: O
     enrichment_llm_default = os.environ.get("PAPERPIPE_PQA_ENRICHMENT_LLM") or llm_for_pqa
 
     has_summary_llm_override = any(
-        arg in {"--summary_llm", "--summary-llm"}
-        or arg.startswith(("--summary_llm=", "--summary-llm="))
+        arg in {"--summary_llm", "--summary-llm"} or arg.startswith(("--summary_llm=", "--summary-llm="))
         for arg in ctx.args
     )
     if summary_llm_default and not has_summary_llm_override:
@@ -1181,10 +1227,7 @@ def ask(ctx, query: str, papers: Optional[str], llm: Optional[str], embedding: O
     "--model",
     "models",
     multiple=True,
-    help=(
-        "Model id(s) to probe (LiteLLM ids). If omitted, probes a small curated set "
-        "including paperpipe defaults."
-    ),
+    help=("Model id(s) to probe (LiteLLM ids). If omitted, probes a small curated set including paperpipe defaults."),
 )
 @click.option(
     "--timeout",
@@ -1256,9 +1299,7 @@ def models(
             return "openai"
         return None
 
-    enabled_providers = {
-        p for p in ("openai", "gemini", "anthropic", "voyage") if provider_has_key(p)
-    }
+    enabled_providers = {p for p in ("openai", "gemini", "anthropic", "voyage") if provider_has_key(p)}
 
     def probe_one(kind_name: str, model: str):
         if kind_name == "completion":
@@ -1441,14 +1482,10 @@ def models(
 
         # Only probe providers that are configured with an API key.
         completion_models = [
-            m
-            for m in completion_models
-            if (infer_provider(m) is None) or (infer_provider(m) in enabled_providers)
+            m for m in completion_models if (infer_provider(m) is None) or (infer_provider(m) in enabled_providers)
         ]
         embedding_models = [
-            m
-            for m in embedding_models
-            if (infer_provider(m) is None) or (infer_provider(m) in enabled_providers)
+            m for m in embedding_models if (infer_provider(m) is None) or (infer_provider(m) in enabled_providers)
         ]
 
     def dedupe(items: list[str]) -> list[str]:
@@ -1575,23 +1612,32 @@ def show(paper: str):
 
 
 @cli.command()
-@click.argument("paper")
+@click.argument("paper_or_arxiv")
 @click.confirmation_option(prompt="Are you sure you want to remove this paper?")
-def remove(paper: str):
-    """Remove a paper from the database."""
-    paper_dir = PAPERS_DIR / paper
+def remove(paper_or_arxiv: str):
+    """Remove a paper from the database (by name or arXiv ID/URL)."""
+    index = load_index()
+    name, error = _resolve_paper_name_from_ref(paper_or_arxiv, index)
+    if not name:
+        click.echo(error, err=True)
+        return
+
+    if not _is_safe_paper_name(name):
+        click.echo(f"Invalid paper name: {name!r}", err=True)
+        return
+
+    paper_dir = PAPERS_DIR / name
     if not paper_dir.exists():
-        click.echo(f"Paper not found: {paper}", err=True)
+        click.echo(f"Paper not found: {paper_or_arxiv}", err=True)
         return
 
     shutil.rmtree(paper_dir)
 
-    index = load_index()
-    if paper in index:
-        del index[paper]
+    if name in index:
+        del index[name]
         save_index(index)
 
-    click.echo(f"Removed: {paper}")
+    click.echo(f"Removed: {name}")
 
 
 @cli.command()

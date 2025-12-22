@@ -121,7 +121,35 @@ Default database root is `~/.paperpipe/` (override with `PAPER_DB_PATH`; see `pa
 ## Integration with Coding Agents
 
 > **Tip:** See [AGENT_INTEGRATION.md](AGENT_INTEGRATION.md) for a ready-to-use snippet you can append to your
-> repo’s agent instructions file (for example `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`).
+> repo's agent instructions file (for example `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`).
+
+### Claude Code Skill
+
+For [Claude Code](https://github.com/anthropics/claude-code) users, paperpipe includes a skill that
+automatically activates when you ask about papers, verification, or equations.
+
+**Install globally** (available in all projects):
+
+```bash
+# Symlink the skill to your global skills directory
+mkdir -p ~/.claude/skills
+ln -s /path/to/paperpipe/skill ~/.claude/skills/papi
+```
+
+### Codex CLI Skill
+
+Codex CLI reads skills from `$CODEX_HOME/skills` (defaults to `~/.codex/skills`).
+
+**Install globally** (available in all projects):
+
+```bash
+mkdir -p ~/.codex/skills
+ln -s /path/to/paperpipe/skill ~/.codex/skills/papi
+```
+
+Restart Codex CLI after installing a new skill.
+
+The skill lives in `skill/` and can also be copied directly to other projects.
 
 Most coding-agent CLIs can read local files directly. The best workflow is:
 
@@ -166,7 +194,7 @@ papi export neuralangelo neus --level equations --to ./paper-context/
 | `papi ask <query> [args]` | Query papers via PaperQA2 (supports all pqa args) |
 | `papi models` | Probe which models work with your API keys |
 | `papi tags` | List all tags with counts |
-| `papi remove <name>` | Remove a paper |
+| `papi remove <name-or-arxiv-id-or-url>` | Remove a paper |
 | `papi path` | Print database location |
 
 ## Tagging

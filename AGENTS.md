@@ -49,7 +49,7 @@ Runtime data is stored outside the repo in `~/.paperpipe/` (PDFs, LaTeX, summari
 
 ## Coding Style & Naming Conventions
 
-- Python >= 3.10; 4-space indentation; keep lines ≤ 100 chars (see `[tool.ruff]`).
+- Python >= 3.10; 4-space indentation; keep lines ≤ 120 chars (see `[tool.ruff]`).
 - Use type hints for public helpers and any non-trivial return values.
 - Naming: `snake_case` for functions/variables, `UPPER_SNAKE_CASE` for constants, tests as `test_*`.
 - Keep CLI behavior stable: when adding flags/commands, update `README.md` examples.

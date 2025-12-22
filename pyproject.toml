@@ -62,6 +62,7 @@ dev = [
     "build>=1.0.0",
     "pyright>=1.1.385",
     "pytest>=7.0.0",
+    "pytest-cov>=7.0.0",
     "ruff>=0.1.0",
     "twine>=5.0.0",
 ]
@@ -81,13 +82,28 @@ only-include = ["paperpipe.py", "README.md", "LICENSE", "AGENT_INTEGRATION.md"]
 only-include = ["paperpipe.py", "pyproject.toml", "README.md", "LICENSE", "AGENT_INTEGRATION.md"]
 
 [tool.pytest.ini_options]
+addopts = "--cov=paperpipe --cov-report=term-missing -m 'not integration'"
 markers = [
     "integration: marks tests as integration tests (may require network/external services)",
     "slow: marks tests as slow",
 ]
+filterwarnings = [
+    "ignore:open_text is deprecated.*:DeprecationWarning:litellm\\..*",
+    "ignore:Pydantic serializer warnings:UserWarning:pydantic\\.main",
+]
+
+[tool.coverage.run]
+source = ["paperpipe"]
+omit = ["test_*.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "if __name__ == .__main__.:",
+    "pragma: no cover",
+]
 
 [tool.ruff]
-line-length = 100
+line-length = 120
 target-version = "py310"
 
 [tool.ruff.lint]
