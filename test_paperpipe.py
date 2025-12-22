@@ -613,6 +613,77 @@ class TestCli:
         result = runner.invoke(paperpipe.cli, ["search", "1706"])
         assert "attention" in result.output
 
+    def test_search_finds_by_summary_content_fuzzy(self, temp_db: Path):
+        # Paper exists with content, but title/tags don't match query.
+        paper_dir = temp_db / "papers" / "geom-paper"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "summary.md").write_text("We propose surface reconstruction from sparse points using an SDF.\n")
+
+        paperpipe.save_index(
+            {
+                "geom-paper": {
+                    "arxiv_id": "2301.00001",
+                    "title": "A Paper About Neural Fields",
+                    "tags": ["neural-fields"],
+                }
+            }
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["search", "surfae reconstructon"])
+        assert result.exit_code == 0
+        assert "geom-paper" in result.output
+
+    def test_search_exact_does_not_match_typos(self, temp_db: Path):
+        paper_dir = temp_db / "papers" / "geom-paper"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "summary.md").write_text("We propose surface reconstruction from sparse points using an SDF.\n")
+
+        paperpipe.save_index(
+            {
+                "geom-paper": {
+                    "arxiv_id": "2301.00001",
+                    "title": "A Paper About Neural Fields",
+                    "tags": ["neural-fields"],
+                }
+            }
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["search", "--exact", "surfae reconstructon"])
+        assert result.exit_code == 0
+        assert "No papers found" in result.output
+
+    def test_search_does_not_fuzzy_expand_when_exact_exists(self, temp_db: Path):
+        exact_dir = temp_db / "papers" / "exact-paper"
+        exact_dir.mkdir(parents=True)
+        (exact_dir / "summary.md").write_text("We propose surface reconstruction from sparse points.\n")
+
+        fuzzy_only_dir = temp_db / "papers" / "fuzzy-only-paper"
+        fuzzy_only_dir.mkdir(parents=True)
+        (fuzzy_only_dir / "summary.md").write_text("We propose surfae reconstructon from sparse points.\n")
+
+        paperpipe.save_index(
+            {
+                "exact-paper": {
+                    "arxiv_id": "2301.00001",
+                    "title": "Exact Match Paper",
+                    "tags": [],
+                },
+                "fuzzy-only-paper": {
+                    "arxiv_id": "2301.00002",
+                    "title": "Fuzzy Only Paper",
+                    "tags": [],
+                },
+            }
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["search", "surface reconstruction"])
+        assert result.exit_code == 0
+        assert "exact-paper" in result.output
+        assert "fuzzy-only-paper" not in result.output
+
     def test_show_displays_paper_details(self, temp_db: Path):
         paper_dir = temp_db / "papers" / "test-paper"
         paper_dir.mkdir(parents=True)

@@ -187,7 +187,7 @@ papi export neuralangelo neus --level equations --to ./paper-context/
 | `papi regenerate --all` | Regenerate for all papers |
 | `papi remove <papers...>` | Remove one or more papers (by name or arXiv ID/URL) |
 | `papi list [--tag TAG]` | List papers, optionally filtered by tag |
-| `papi search <query>` | Search by title, tag, or ID |
+| `papi search <query>` | Exact search (with fuzzy fallback if no exact matches) across title/tags/metadata + local summaries/equations (use `--exact` to disable fallback; `--tex` includes LaTeX) |
 | `papi show <name>` | Show paper details |
 | `papi export <papers...>` | Export context files to a directory |
 | `papi ask <query> [args]` | Query papers via PaperQA2 (supports all pqa args) |

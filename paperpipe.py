@@ -22,6 +22,7 @@ import tempfile
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from datetime import datetime
+from difflib import SequenceMatcher, get_close_matches
 from io import StringIO
 from pathlib import Path
 from typing import Optional
@@ -123,6 +124,8 @@ _ARXIV_ANY_RE = re.compile(
     r"(\d{4}\.\d{4,5}(?:v\d+)?|[a-zA-Z-]+(?:\.[a-zA-Z-]+)?/\d{7}(?:v\d+)?)",
     flags=re.IGNORECASE,
 )
+
+_SEARCH_TOKEN_RE = re.compile(r"[a-z0-9]+", flags=re.IGNORECASE)
 
 
 def normalize_arxiv_id(value: str) -> str:
@@ -244,6 +247,74 @@ def _resolve_paper_name_from_ref(paper_or_arxiv: str, index: dict) -> tuple[Opti
         return None, f"Multiple papers match arXiv ID {arxiv_id}: {', '.join(sorted(matches))}"
 
     return None, f"Paper not found: {paper_or_arxiv}"
+
+
+def _normalize_for_search(text: str) -> str:
+    return " ".join(_SEARCH_TOKEN_RE.findall((text or "").lower())).strip()
+
+
+def _read_text_limited(path: Path, *, max_chars: int) -> str:
+    try:
+        with path.open("r", encoding="utf-8", errors="ignore") as f:
+            return f.read(max_chars)
+    except Exception:
+        return ""
+
+
+def _best_line_ratio(query_norm: str, text: str, *, max_lines: int = 250) -> float:
+    if not query_norm or not text:
+        return 0.0
+    best = 0.0
+    for line in text.splitlines()[:max_lines]:
+        line_norm = _normalize_for_search(line)
+        if not line_norm:
+            continue
+        if query_norm in line_norm:
+            return 1.0
+        ratio = SequenceMatcher(None, query_norm, line_norm).ratio()
+        if ratio > best:
+            best = ratio
+    return best
+
+
+def _fuzzy_text_score(query: str, text: str, *, fuzzy: bool) -> float:
+    """
+    Return a [0.0, 1.0] score for how well `text` matches `query`.
+
+    - exact mode: substring match only
+    - fuzzy mode: token coverage + best line ratio
+    """
+    query_norm = _normalize_for_search(query)
+    text_norm = _normalize_for_search(text)
+    if not query_norm or not text_norm:
+        return 0.0
+
+    if query_norm in text_norm:
+        return 1.0
+    if not fuzzy:
+        return 0.0
+
+    q_tokens = query_norm.split()
+    if not q_tokens:
+        return 0.0
+
+    t_tokens = set(text_norm.split())
+    exact_hits = sum(1 for tok in q_tokens if tok in t_tokens)
+    remaining = [tok for tok in q_tokens if tok not in t_tokens]
+
+    fuzzy_hits = 0
+    if remaining and t_tokens:
+        candidates = sorted(t_tokens)
+        if len(candidates) > 8000:
+            candidates = candidates[:8000]
+        for tok in remaining:
+            if get_close_matches(tok, candidates, n=1, cutoff=0.88):
+                fuzzy_hits += 1
+
+    coverage = (exact_hits + 0.7 * fuzzy_hits) / len(q_tokens)
+    line_ratio = _best_line_ratio(query_norm, text)
+
+    return max(coverage, line_ratio)
 
 
 def ensure_db():
@@ -1163,37 +1234,92 @@ def list_papers(tag: Optional[str], as_json: bool):
 
 @cli.command()
 @click.argument("query")
-def search(query: str):
-    """Search papers by title, tag, or content."""
+@click.option(
+    "--limit",
+    type=int,
+    default=5,
+    show_default=True,
+    help="Maximum number of results to show.",
+)
+@click.option(
+    "--fuzzy/--exact",
+    default=True,
+    show_default=True,
+    help="Fall back to fuzzy matching only if no exact matches were found.",
+)
+@click.option(
+    "--tex/--no-tex",
+    default=False,
+    show_default=True,
+    help="Also search within LaTeX source (can be slower).",
+)
+def search(query: str, limit: int, fuzzy: bool, tex: bool):
+    """Search papers by title, tags, metadata, and local content."""
     index = load_index()
-    query_lower = query.lower()
 
-    results = []
-    for name, info in index.items():
-        score = 0
-        # Check title
-        if query_lower in info.get("title", "").lower():
-            score += 10
-        # Check tags
-        for tag in info.get("tags", []):
-            if query_lower in tag:
-                score += 5
-        # Check arxiv_id
-        if query_lower in info.get("arxiv_id", ""):
-            score += 3
+    def collect_results(*, fuzzy_mode: bool) -> list[tuple[str, dict, int, list[str]]]:
+        results: list[tuple[str, dict, int, list[str]]] = []
+        for name, info in index.items():
+            paper_dir = PAPERS_DIR / name
+            meta_path = paper_dir / "meta.json"
 
-        if score > 0:
-            results.append((name, info, score))
+            matched_fields: list[str] = []
+            score = 0
 
-    results.sort(key=lambda x: -x[2])
+            def add_field(field: str, text: str, weight: float) -> None:
+                nonlocal score
+                field_score = _fuzzy_text_score(query, text, fuzzy=fuzzy_mode)
+                if field_score <= 0:
+                    return
+                score += int(100 * weight * field_score)
+                matched_fields.append(field)
+
+            add_field("name", name, 1.6)
+            add_field("title", info.get("title", ""), 1.4)
+            add_field("tags", " ".join(info.get("tags", [])), 1.2)
+            add_field("arxiv_id", info.get("arxiv_id", ""), 1.0)
+
+            if meta_path.exists():
+                try:
+                    meta = json.loads(meta_path.read_text())
+                except Exception:
+                    meta = {}
+                add_field("authors", " ".join(meta.get("authors", []) or []), 0.6)
+                add_field("abstract", meta.get("abstract", "") or "", 0.9)
+
+            summary_path = paper_dir / "summary.md"
+            if summary_path.exists():
+                add_field("summary", _read_text_limited(summary_path, max_chars=80_000), 0.9)
+
+            equations_path = paper_dir / "equations.md"
+            if equations_path.exists():
+                add_field("equations", _read_text_limited(equations_path, max_chars=80_000), 0.9)
+
+            if tex:
+                source_path = paper_dir / "source.tex"
+                if source_path.exists():
+                    add_field("source", _read_text_limited(source_path, max_chars=200_000), 0.5)
+
+            if score > 0:
+                results.append((name, info, score, matched_fields))
+
+        results.sort(key=lambda x: (-x[2], x[0]))
+        return results
+
+    # Exact pass first; only fall back to fuzzy if enabled and no exact matches exist.
+    results = collect_results(fuzzy_mode=False)
+    if not results and fuzzy:
+        results = collect_results(fuzzy_mode=True)
 
     if not results:
         click.echo(f"No papers found matching '{query}'")
         return
 
-    for name, info, score in results[:10]:
+    for name, info, score, matched_fields in results[:limit]:
         click.echo(f"{name} (score: {score})")
         click.echo(f"  {info.get('title', 'Unknown')[:60]}...")
+        if matched_fields:
+            click.echo(f"  Matches: {', '.join(matched_fields[:6])}")
         click.echo()
 
 
