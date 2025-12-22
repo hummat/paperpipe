@@ -527,14 +527,20 @@ class TestCli:
         result = runner.invoke(paperpipe.cli, ["tags"])
         assert result.exit_code == 0
 
-    def test_cli_respects_log_level(self, temp_db: Path, capsys: pytest.CaptureFixture[str]):
-        paperpipe.cli.main(args=["list"], prog_name="papi", standalone_mode=False)
-        default_out = capsys.readouterr()
-        assert "No papers found" in default_out.out
+    def test_cli_verbose_flag(self, temp_db: Path):
+        """Test that --verbose flag is accepted."""
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["--verbose", "list"])
+        assert result.exit_code == 0
+        assert "No papers found" in result.output
 
-        paperpipe.cli.main(args=["--log-level", "ERROR", "list"], prog_name="papi", standalone_mode=False)
-        quiet_out = capsys.readouterr()
-        assert "No papers found" not in quiet_out.out
+    def test_cli_quiet_flag(self, temp_db: Path):
+        """Test that --quiet flag is accepted."""
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["--quiet", "list"])
+        assert result.exit_code == 0
+        # Data output should still be shown even with --quiet
+        assert "No papers found" in result.output
 
     def test_list_with_papers(self, temp_db: Path):
         # Add a paper to the index

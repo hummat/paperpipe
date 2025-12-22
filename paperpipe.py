@@ -24,10 +24,65 @@ from dataclasses import dataclass
 from datetime import datetime
 from io import StringIO
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 from urllib.parse import urlparse
 
 import click
+
+# Simple debug logger (only used with --verbose)
+_debug_logger = logging.getLogger("paperpipe")
+_debug_logger.addHandler(logging.NullHandler())
+
+
+def _setup_debug_logging() -> None:
+    """Enable debug logging to stderr."""
+    _debug_logger.setLevel(logging.DEBUG)
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setLevel(logging.DEBUG)
+    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S"))
+    _debug_logger.addHandler(handler)
+
+
+# Output helpers that respect --quiet mode
+_quiet_mode = False
+
+
+def set_quiet(quiet: bool) -> None:
+    global _quiet_mode
+    _quiet_mode = quiet
+
+
+def echo(message: str = "", err: bool = False) -> None:
+    """Print a message (respects --quiet for non-error messages)."""
+    if _quiet_mode and not err:
+        return
+    click.echo(message, err=err)
+
+
+def echo_success(message: str) -> None:
+    """Print a success message in green."""
+    click.secho(message, fg="green")
+
+
+def echo_error(message: str) -> None:
+    """Print an error message in red to stderr."""
+    click.secho(message, fg="red", err=True)
+
+
+def echo_warning(message: str) -> None:
+    """Print a warning message in yellow to stderr."""
+    click.secho(message, fg="yellow", err=True)
+
+
+def echo_progress(message: str) -> None:
+    """Print a progress message (suppressed in quiet mode)."""
+    if not _quiet_mode:
+        click.echo(message)
+
+
+def debug(message: str, *args: object) -> None:
+    """Log a debug message (only shown with --verbose)."""
+    _debug_logger.debug(message, *args)
 
 
 # Configuration
@@ -60,75 +115,6 @@ CATEGORY_TAGS = {
     "physics.comp-ph": "computational-physics",
     "math.NA": "numerical-analysis",
 }
-
-LOG_LEVELS = {
-    "debug": logging.DEBUG,
-    "info": logging.INFO,
-    "warning": logging.WARNING,
-    "error": logging.ERROR,
-    "critical": logging.CRITICAL,
-}
-
-logger = logging.getLogger("paperpipe")
-logger.addHandler(logging.NullHandler())
-
-
-class ColorFormatter(logging.Formatter):
-    COLOR_MAP = {
-        logging.DEBUG: "\033[36m",  # Cyan
-        logging.INFO: "\033[32m",  # Green
-        logging.WARNING: "\033[33m",  # Yellow
-        logging.ERROR: "\033[31m",  # Red
-        logging.CRITICAL: "\033[35m",  # Magenta
-    }
-    RESET = "\033[0m"
-
-    def __init__(self, use_color: bool):
-        super().__init__("%(asctime)s | %(levelname)s | %(message)s", datefmt="%H:%M:%S")
-        self.use_color = use_color
-
-    def format(self, record: logging.LogRecord) -> str:
-        base = super().format(record)
-        if not self.use_color:
-            return base
-        color = self.COLOR_MAP.get(record.levelno, "")
-        reset = self.RESET if color else ""
-        return f"{color}{base}{reset}"
-
-
-def _supports_color(stream: Any) -> bool:
-    isatty = getattr(stream, "isatty", None)
-    return bool(isatty and isatty())
-
-
-def configure_logging(level_name: str, quiet: bool = False, verbose: bool = False) -> int:
-    level = LOG_LEVELS.get(level_name.lower(), logging.INFO)
-    if verbose:
-        level = logging.DEBUG
-    if quiet:
-        level = logging.ERROR
-
-    logger.handlers.clear()
-    logger.setLevel(logging.DEBUG)
-    logger.propagate = False
-
-    stdout_handler = logging.StreamHandler(sys.stdout)
-    stdout_handler.setLevel(logging.DEBUG)
-    stdout_handler.addFilter(lambda record: record.levelno < logging.ERROR)
-
-    stderr_handler = logging.StreamHandler(sys.stderr)
-    stderr_handler.setLevel(logging.ERROR)
-
-    formatter = ColorFormatter(use_color=_supports_color(sys.stdout))
-    stdout_handler.setFormatter(formatter)
-    stderr_handler.setFormatter(formatter)
-
-    logger.addHandler(stdout_handler)
-    logger.addHandler(stderr_handler)
-    logging.captureWarnings(True)
-
-    logger.setLevel(level)
-    return level
 
 
 _ARXIV_NEW_STYLE_RE = re.compile(r"^\d{4}\.\d{4,5}(?:v\d+)?$", flags=re.IGNORECASE)
@@ -365,7 +351,7 @@ def download_source(arxiv_id: str, paper_dir: Path) -> Optional[str]:
         response = requests.get(source_url, timeout=30)
         response.raise_for_status()
     except Exception as e:
-        logger.warning("  Warning: Could not download source: %s", e)
+        echo_warning(f"Could not download source: {e}")
         return None
 
     # Save and extract tarball
@@ -545,7 +531,7 @@ def generate_llm_content(paper_dir: Path, meta: dict, tex_content: Optional[str]
     try:
         return generate_with_litellm(meta, tex_content)
     except Exception as e:
-        logger.warning("  Warning: LLM generation failed: %s", e)
+        echo_warning(f"LLM generation failed: {e}")
         summary = generate_simple_summary(meta)
         equations = extract_equations_simple(tex_content) if tex_content else "No LaTeX source available."
         return summary, equations, []
@@ -598,11 +584,12 @@ def _run_llm(prompt: str, *, purpose: str) -> Optional[str]:
 
         litellm.suppress_debug_info = True
     except ImportError:
-        logger.error("  LiteLLM not installed. Install with: pip install litellm")
+        echo_error("LiteLLM not installed. Install with: pip install litellm")
         return None
 
     model = DEFAULT_LLM_MODEL
-    logger.info("  LLM (%s): generating %s...", model, purpose)
+    echo_progress(f"  LLM ({model}): generating {purpose}...")
+    debug("LLM request: model=%s, purpose=%s", model, purpose)
 
     try:
         response = litellm.completion(
@@ -614,11 +601,11 @@ def _run_llm(prompt: str, *, purpose: str) -> Optional[str]:
         out = response.choices[0].message.content  # type: ignore[union-attr]
         if out:
             out = out.strip()
-        logger.info("  LLM (%s): %s ok", model, purpose)
+        echo_progress(f"  LLM ({model}): {purpose} ok")
         return out or None
     except Exception as e:
         err_msg = str(e).split("\n")[0][:100]
-        logger.error("  LLM (%s): %s failed: %s", model, purpose, err_msg)
+        echo_error(f"LLM ({model}): {purpose} failed: {err_msg}")
         return None
 
 
@@ -703,24 +690,13 @@ Abstract: {meta["abstract"][:1000]}"""
 
 @click.group()
 @click.version_option(version="0.1.0")
-@click.option(
-    "--log-level",
-    "-l",
-    default="INFO",
-    show_default=True,
-    type=click.Choice([name.upper() for name in LOG_LEVELS], case_sensitive=False),
-    help="Log level for output.",
-)
-@click.option("--quiet", "-q", is_flag=True, help="Only show errors.")
-@click.option("--verbose", "-v", is_flag=True, help="Enable debug logging.")
-@click.pass_context
-def cli(ctx: click.Context, log_level: str, quiet: bool, verbose: bool):
+@click.option("--quiet", "-q", is_flag=True, help="Suppress progress messages.")
+@click.option("--verbose", "-v", is_flag=True, help="Enable debug output.")
+def cli(quiet: bool, verbose: bool):
     """paperpipe: Unified paper database for coding agents + PaperQA2."""
-    configure_logging(log_level, quiet=quiet, verbose=verbose)
-    ctx.ensure_object(dict)
-    ctx.obj["log_level"] = log_level
-    ctx.obj["quiet"] = quiet
-    ctx.obj["verbose"] = verbose
+    set_quiet(quiet)
+    if verbose:
+        _setup_debug_logging()
     ensure_db()
 
 
@@ -737,66 +713,66 @@ def add(arxiv_id: str, name: Optional[str], tags: Optional[str], no_llm: bool):
     except ValueError as e:
         raise click.UsageError(str(e)) from e
 
-    logger.info("Adding paper: %s", arxiv_id)
+    echo_progress(f"Adding paper: {arxiv_id}")
 
     index = load_index()
     existing_names = set(index.keys())
     if name:
         paper_dir = PAPERS_DIR / name
         if paper_dir.exists():
-            logger.error("Paper '%s' already exists. Use --name to specify a different name.", name)
+            echo_error(f"Paper '{name}' already exists. Use --name to specify a different name.")
             return
         if name in existing_names:
-            logger.error("Paper '%s' already in index. Use --name to specify a different name.", name)
+            echo_error(f"Paper '{name}' already in index. Use --name to specify a different name.")
             return
 
     # 1. Fetch metadata (needed for auto-name generation)
-    logger.info("  Fetching metadata...")
+    echo_progress("  Fetching metadata...")
     try:
         meta = fetch_arxiv_metadata(arxiv_id)
     except Exception as e:
-        logger.error("Error fetching metadata: %s", e)
+        echo_error(f"Error fetching metadata: {e}")
         return
 
     # 2. Generate name from title if not provided
     if not name:
         name = generate_auto_name(meta, existing_names, use_llm=not no_llm)
-        logger.info("  Auto-generated name: %s", name)
+        echo_progress(f"  Auto-generated name: {name}")
 
     paper_dir = PAPERS_DIR / name
 
     if paper_dir.exists():
-        logger.error("Paper '%s' already exists. Use --name to specify a different name.", name)
+        echo_error(f"Paper '{name}' already exists. Use --name to specify a different name.")
         return
 
     if name in existing_names:
-        logger.error("Paper '%s' already in index. Use --name to specify a different name.", name)
+        echo_error(f"Paper '{name}' already in index. Use --name to specify a different name.")
         return
 
     paper_dir.mkdir(parents=True)
 
     # 3. Download PDF (for PaperQA2)
-    logger.info("  Downloading PDF...")
+    echo_progress("  Downloading PDF...")
     pdf_path = paper_dir / "paper.pdf"
     try:
         download_pdf(arxiv_id, pdf_path)
     except Exception as e:
-        logger.warning("  Warning: Could not download PDF: %s", e)
+        echo_warning(f"Could not download PDF: {e}")
 
     # 4. Download LaTeX source
-    logger.info("  Downloading LaTeX source...")
+    echo_progress("  Downloading LaTeX source...")
     tex_content = download_source(arxiv_id, paper_dir)
     if tex_content:
-        logger.info("  Found LaTeX source (%sk chars)", len(tex_content) // 1000)
+        echo_progress(f"  Found LaTeX source ({len(tex_content) // 1000}k chars)")
     else:
-        logger.info("  No LaTeX source available (PDF-only submission)")
+        echo_progress("  No LaTeX source available (PDF-only submission)")
 
     # 5. Generate tags
     auto_tags = categories_to_tags(meta["categories"])
     user_tags = [t.strip() for t in tags.split(",")] if tags else []
 
     # 6. Generate summary and equations
-    logger.info("  Generating summary and equations...")
+    echo_progress("  Generating summary and equations...")
     if no_llm:
         summary = generate_simple_summary(meta)
         equations = extract_equations_simple(tex_content) if tex_content else "No LaTeX source available."
@@ -836,10 +812,10 @@ def add(arxiv_id: str, name: Optional[str], tags: Optional[str], no_llm: bool):
     }
     save_index(index)
 
-    logger.info("\n✓ Added: %s", name)
-    logger.info("  Title: %s...", meta["title"][:60])
-    logger.info("  Tags: %s", ", ".join(all_tags))
-    logger.info("  Location: %s", paper_dir)
+    echo_success(f"Added: {name}")
+    click.echo(f"  Title: {meta['title'][:60]}...")
+    click.echo(f"  Tags: {', '.join(all_tags)}")
+    click.echo(f"  Location: {paper_dir}")
 
 
 @cli.command()
@@ -896,7 +872,7 @@ def regenerate(
         if not matches:
             return None
         if len(matches) > 1:
-            logger.error("Multiple papers match arXiv ID %s: %s", normalized, ", ".join(sorted(matches)))
+            echo_error(f"Multiple papers match arXiv ID {normalized}: {', '.join(sorted(matches))}")
             return None
         return matches[0]
 
@@ -915,7 +891,7 @@ def regenerate(
         paper_dir = PAPERS_DIR / name
         meta_path = paper_dir / "meta.json"
         if not meta_path.exists():
-            logger.error("Missing metadata for: %s (%s)", name, meta_path)
+            echo_error(f"Missing metadata for: {name} ({meta_path})")
             return False, None
 
         meta = json.loads(meta_path.read_text())
@@ -948,7 +924,7 @@ def regenerate(
             do_name = _is_arxiv_id_name(name)
 
         if not (do_summary or do_equations or do_tags or do_name):
-            logger.info("  %s: nothing to regenerate", name)
+            echo_progress(f"  {name}: nothing to regenerate")
             return True, None
 
         actions = []
@@ -960,7 +936,7 @@ def regenerate(
             actions.append("tags")
         if do_name:
             actions.append("name")
-        logger.info("Regenerating %s: %s", name, ", ".join(actions))
+        echo_progress(f"Regenerating {name}: {', '.join(actions)}")
 
         new_name: Optional[str] = None
         updated_meta = False
@@ -972,7 +948,7 @@ def regenerate(
             if candidate != name:
                 new_dir = PAPERS_DIR / candidate
                 if new_dir.exists():
-                    logger.warning("  Warning: Cannot rename to '%s' (already exists)", candidate)
+                    echo_warning(f"Cannot rename to '{candidate}' (already exists)")
                 else:
                     paper_dir.rename(new_dir)
                     paper_dir = new_dir
@@ -980,7 +956,7 @@ def regenerate(
                     equations_path = paper_dir / "equations.md"
                     meta_path = paper_dir / "meta.json"
                     new_name = candidate
-                    logger.info("  Renamed: %s → %s", name, candidate)
+                    echo_progress(f"  Renamed: {name} → {candidate}")
 
         # Generate content based on what's needed
         summary: Optional[str] = None
@@ -1036,19 +1012,19 @@ def regenerate(
             index[current_name] = index_entry
             save_index(index)
 
-        logger.info("  ✓ Done")
+        echo_success("  Done")
         return True, new_name
 
     if regenerate_all or (paper_or_arxiv == "all" and "all" not in index):
         names = sorted(index.keys())
         if not names:
-            logger.info("No papers found.")
+            click.echo("No papers found.")
             return
 
         failures = 0
         renames: list[tuple[str, str]] = []
         for i, name in enumerate(names, 1):
-            logger.info("[%s/%s] %s", i, len(names), name)
+            echo_progress(f"[{i}/{len(names)}] {name}")
             success, new_name = regenerate_one(name)
             if not success:
                 failures += 1
@@ -1056,9 +1032,9 @@ def regenerate(
                 renames.append((name, new_name))
 
         if renames:
-            logger.info("\nRenamed %s paper(s):", len(renames))
+            click.echo(f"\nRenamed {len(renames)} paper(s):")
             for old, new in renames:
-                logger.info("  %s → %s", old, new)
+                click.echo(f"  {old} → {new}")
 
         if failures:
             raise click.ClickException(f"{failures} paper(s) failed to regenerate.")
@@ -1069,12 +1045,12 @@ def regenerate(
 
     name = resolve_name(paper_or_arxiv)
     if not name:
-        logger.error("Paper not found: %s", paper_or_arxiv)
+        echo_error(f"Paper not found: {paper_or_arxiv}")
         return
 
     success, new_name = regenerate_one(name)
     if new_name:
-        logger.info("Paper renamed: %s → %s", name, new_name)
+        click.echo(f"Paper renamed: {name} → {new_name}")
 
 
 @cli.command("list")
@@ -1092,16 +1068,16 @@ def list_papers(tag: Optional[str], as_json: bool):
         return
 
     if not index:
-        logger.info("No papers found.")
+        click.echo("No papers found.")
         return
 
     for name, info in sorted(index.items()):
         title = info.get("title", "Unknown")[:50]
         tags = ", ".join(info.get("tags", [])[:4])
-        logger.info("%s", name)
-        logger.info("  %s...", title)
-        logger.info("  Tags: %s", tags)
-        logger.info("")
+        click.echo(name)
+        click.echo(f"  {title}...")
+        click.echo(f"  Tags: {tags}")
+        click.echo()
 
 
 @cli.command()
@@ -1131,13 +1107,13 @@ def search(query: str):
     results.sort(key=lambda x: -x[2])
 
     if not results:
-        logger.info("No papers found matching '%s'", query)
+        click.echo(f"No papers found matching '{query}'")
         return
 
     for name, info, score in results[:10]:
-        logger.info("%s (score: %s)", name, score)
-        logger.info("  %s...", info.get("title", "Unknown")[:60])
-        logger.info("")
+        click.echo(f"{name} (score: {score})")
+        click.echo(f"  {info.get('title', 'Unknown')[:60]}...")
+        click.echo()
 
 
 @cli.command()
@@ -1158,7 +1134,7 @@ def export(papers: tuple, level: str, dest: Optional[str]):
     for paper in papers:
         paper_dir = PAPERS_DIR / paper
         if not paper_dir.exists():
-            logger.error("Paper not found: %s", paper)
+            echo_error(f"Paper not found: {paper}")
             continue
 
         if level == "summary":
@@ -1174,9 +1150,9 @@ def export(papers: tuple, level: str, dest: Optional[str]):
             if src.exists():
                 shutil.copy(src, dest_path / f"{paper}.tex")
             else:
-                logger.error("  No LaTeX source for %s", paper)
+                echo_error(f"No LaTeX source for {paper}")
 
-    logger.info("Exported %s paper(s) to %s", len(papers), dest_path)
+    echo_success(f"Exported {len(papers)} paper(s) to {dest_path}")
 
 
 @cli.command(context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))
@@ -1203,11 +1179,11 @@ def ask(ctx, query: str, papers: Optional[str], llm: Optional[str], embedding: O
     Example: papi ask "query" --summary_llm gpt-4o-mini --temperature 0.5
     """
     if not shutil.which("pqa"):
-        logger.error("PaperQA2 not installed. Install with: pip install paper-qa")
-        logger.info("\nFalling back to local search...")
+        echo_error("PaperQA2 not installed. Install with: pip install paper-qa")
+        click.echo("\nFalling back to local search...")
         # Do a simple local search instead
         ctx_search = subprocess.run(["papi", "search", query], capture_output=True, text=True)
-        logger.info(ctx_search.stdout.rstrip("\n"))
+        click.echo(ctx_search.stdout.rstrip("\n"))
         return
 
     # Build pqa command
@@ -1482,15 +1458,15 @@ def models(
 
             ok_count = sum(1 for r in results if r.ok)
             fail_count = len(results) - ok_count
-            logger.info("Probed %s combinations: %s OK, %s FAIL", len(results), ok_count, fail_count)
+            click.echo(f"Probed {len(results)} combinations: {ok_count} OK, {fail_count} FAIL")
             for r in results:
                 status = "OK" if r.ok else "FAIL"
                 if r.ok:
-                    logger.info("%s  %s  %s", f"{status:4s}", f"{r.kind:10s}", r.model)
+                    click.secho(f"{status:4s}  {r.kind:10s}  {r.model}", fg="green")
                 else:
                     err = r.error or ""
                     err_type = r.error_type or "Error"
-                    logger.error("%s  %s  %s  (%s: %s)", f"{status:4s}", f"{r.kind:10s}", r.model, err_type, err)
+                    click.secho(f"{status:4s}  {r.kind:10s}  {r.model}  ({err_type}: {err})", fg="red")
             return
 
         if effective_preset.lower() == "all":
@@ -1671,15 +1647,15 @@ def models(
 
     ok_count = sum(1 for r in results if r.ok)
     fail_count = len(results) - ok_count
-    logger.info("Probed %s combinations: %s OK, %s FAIL", len(results), ok_count, fail_count)
+    click.echo(f"Probed {len(results)} combinations: {ok_count} OK, {fail_count} FAIL")
     for r in results:
         status = "OK" if r.ok else "FAIL"
         if r.ok:
-            logger.info("%s  %s  %s", f"{status:4s}", f"{r.kind:10s}", r.model)
+            click.secho(f"{status:4s}  {r.kind:10s}  {r.model}", fg="green")
         else:
             err = r.error or ""
             err_type = r.error_type or "Error"
-            logger.error("%s  %s  %s  (%s: %s)", f"{status:4s}", f"{r.kind:10s}", r.model, err_type, err)
+            click.secho(f"{status:4s}  {r.kind:10s}  {r.model}  ({err_type}: {err})", fg="red")
 
 
 @cli.command()
@@ -1688,20 +1664,20 @@ def show(paper: str):
     """Show details of a paper."""
     paper_dir = PAPERS_DIR / paper
     if not paper_dir.exists():
-        logger.error("Paper not found: %s", paper)
+        echo_error(f"Paper not found: {paper}")
         return
 
     meta_file = paper_dir / "meta.json"
     if meta_file.exists():
         meta = json.loads(meta_file.read_text())
-        logger.info("Title: %s", meta["title"])
-        logger.info("arXiv: %s", meta["arxiv_id"])
-        logger.info("Authors: %s", ", ".join(meta["authors"][:5]))
-        logger.info("Tags: %s", ", ".join(meta.get("tags", [])))
-        logger.info("Has PDF: %s", meta.get("has_pdf", False))
-        logger.info("Has LaTeX: %s", meta.get("has_source", False))
-        logger.info("\nFiles: %s", ", ".join(f.name for f in paper_dir.iterdir()))
-        logger.info("Location: %s", paper_dir)
+        click.echo(f"Title: {meta['title']}")
+        click.echo(f"arXiv: {meta['arxiv_id']}")
+        click.echo(f"Authors: {', '.join(meta['authors'][:5])}")
+        click.echo(f"Tags: {', '.join(meta.get('tags', []))}")
+        click.echo(f"Has PDF: {meta.get('has_pdf', False)}")
+        click.echo(f"Has LaTeX: {meta.get('has_source', False)}")
+        click.echo(f"\nFiles: {', '.join(f.name for f in paper_dir.iterdir())}")
+        click.echo(f"Location: {paper_dir}")
 
 
 @cli.command()
@@ -1712,16 +1688,16 @@ def remove(paper_or_arxiv: str):
     index = load_index()
     name, error = _resolve_paper_name_from_ref(paper_or_arxiv, index)
     if not name:
-        logger.error(error)
+        echo_error(error)
         return
 
     if not _is_safe_paper_name(name):
-        logger.error("Invalid paper name: %r", name)
+        echo_error(f"Invalid paper name: {name!r}")
         return
 
     paper_dir = PAPERS_DIR / name
     if not paper_dir.exists():
-        logger.error("Paper not found: %s", paper_or_arxiv)
+        echo_error(f"Paper not found: {paper_or_arxiv}")
         return
 
     shutil.rmtree(paper_dir)
@@ -1730,27 +1706,27 @@ def remove(paper_or_arxiv: str):
         del index[name]
         save_index(index)
 
-    logger.info("Removed: %s", name)
+    echo_success(f"Removed: {name}")
 
 
 @cli.command()
 def tags():
     """List all tags in the database."""
     index = load_index()
-    all_tags = {}
+    all_tags: dict[str, int] = {}
 
     for info in index.values():
         for tag in info.get("tags", []):
             all_tags[tag] = all_tags.get(tag, 0) + 1
 
     for tag, count in sorted(all_tags.items(), key=lambda x: -x[1]):
-        logger.info("%s: %s", tag, count)
+        click.echo(f"{tag}: {count}")
 
 
 @cli.command()
 def path():
     """Print the paper database path."""
-    logger.info("%s", PAPER_DB)
+    click.echo(PAPER_DB)
 
 
 if __name__ == "__main__":
