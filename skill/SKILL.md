@@ -33,6 +33,22 @@ Or search for specific topics:
 papi search "surface reconstruction"
 ```
 
+### 2b. Audit generated content (optional)
+
+If summaries/equations/tags look suspicious, run an audit to flag obvious issues:
+
+```bash
+papi audit
+papi audit --limit 10 --seed 0
+```
+
+### 2c. LLM configuration (optional)
+
+```bash
+export PAPERPIPE_LLM_MODEL="gemini/gemini-3-flash-preview"
+export PAPERPIPE_LLM_TEMPERATURE=0.3
+```
+
 ### 3. For code verification
 
 1. Identify which paper(s) the code references (check comments, function names, README)
@@ -58,6 +74,8 @@ papi ask "question"      # PaperQA2 RAG (if installed)
 papi add 2303.13476                           # name auto-generated
 papi add https://arxiv.org/abs/2303.13476     # URLs work too
 papi add 2303.13476 --name my-custom-name     # override auto-name
+papi add 2303.13476 --update                  # refresh existing paper in-place
+papi add 2303.13476 --duplicate               # add a second copy (-2/-3 suffix)
 ```
 
 ## See Also

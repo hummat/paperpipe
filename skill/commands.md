@@ -15,12 +15,25 @@
 
 | Command | Description |
 |---------|-------------|
-| `papi add <arxiv-id-or-url>` | Add paper (name auto-generated) |
+| `papi add <arxiv-id-or-url>` | Add paper (name auto-generated; idempotent by arXiv ID) |
 | `papi add <arxiv> --name <n> --tags t1,t2` | Add with explicit name/tags |
+| `papi add <arxiv> --update [--name <n>]` | Refresh an existing paper in-place |
+| `papi add <arxiv> --duplicate` | Add another copy even if it already exists |
 | `papi regenerate <name>` | Regenerate summaries/equations/tags |
 | `papi regenerate <name> --overwrite name` | Regenerate auto-name |
 | `papi regenerate --all` | Regenerate all papers |
 | `papi remove <name>` | Remove a paper |
+
+## Audit
+
+| Command | Description |
+|---------|-------------|
+| `papi audit` | Audit all papers and flag obvious issues in generated content |
+| `papi audit <names...>` | Audit only specific papers |
+| `papi audit --limit N --seed S` | Audit a random sample (reproducible with `--seed`) |
+| `papi audit --regenerate` | Regenerate all flagged papers (default overwrite: `summary,equations,tags`) |
+| `papi audit --interactive` | Interactively pick which flagged papers to regenerate |
+| `papi audit --regenerate --no-llm -o summary,equations` | Regenerate flagged papers without LLM (overwrite selected fields) |
 
 ## Export
 
@@ -50,3 +63,10 @@ Located at `<paper_db>/papers/{name}/`:
 | `source.tex` | Full LaTeX source | Exact definitions |
 | `meta.json` | Metadata + tags | Programmatic access |
 | `paper.pdf` | PDF file | PaperQA2 RAG |
+
+## LLM Configuration (Optional)
+
+```bash
+export PAPERPIPE_LLM_MODEL="gemini/gemini-3-flash-preview"  # LiteLLM identifier
+export PAPERPIPE_LLM_TEMPERATURE=0.3
+```

@@ -1061,8 +1061,8 @@ class TestDownloadSource:
 class TestAddCommand:
     """Unit tests for the add command with mocked network calls."""
 
-    def test_add_paper_already_exists(self, temp_db: Path):
-        """Test that adding duplicate paper fails gracefully (unit test, no network)."""
+    def test_add_existing_paper_is_idempotent_by_arxiv_id(self, temp_db: Path, monkeypatch):
+        """Test that re-adding the same arXiv paper is a no-op (unit test, no network)."""
         # Pre-create the paper directory to simulate existing paper
         paper_dir = temp_db / "papers" / "test-paper"
         paper_dir.mkdir(parents=True)
@@ -1071,13 +1071,17 @@ class TestAddCommand:
         )
         paperpipe.save_index({"test-paper": {"arxiv_id": "1706.03762", "title": "Test", "tags": [], "added": "x"}})
 
+        # Should not fetch metadata again when skipping duplicates
+        monkeypatch.setattr(paperpipe, "fetch_arxiv_metadata", lambda _: (_ for _ in ()).throw(AssertionError()))
+
         runner = CliRunner()
         result = runner.invoke(
             paperpipe.cli,
             ["add", "1706.03762", "--name", "test-paper", "--no-llm"],
         )
 
-        assert "already exists" in result.output
+        assert result.exit_code == 0
+        assert "already added" in result.output.lower()
 
     def test_add_detects_duplicate_in_index(self, temp_db: Path, monkeypatch):
         """Test that add command detects duplicate name in index even without directory."""
@@ -1111,6 +1115,137 @@ class TestAddCommand:
         )
 
         assert "already" in result.output.lower()
+
+    def test_add_duplicate_arxiv_skips_without_network(self, temp_db: Path, monkeypatch):
+        """Test that duplicate arXiv IDs are skipped by default (no extra copy)."""
+        paper_dir = temp_db / "papers" / "attention"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "meta.json").write_text(
+            json.dumps({"arxiv_id": "1706.03762v1", "title": "Old", "authors": [], "abstract": ""})
+        )
+        paperpipe.save_index({"attention": {"arxiv_id": "1706.03762v1", "title": "Old", "tags": [], "added": "x"}})
+
+        monkeypatch.setattr(paperpipe, "fetch_arxiv_metadata", lambda _: (_ for _ in ()).throw(AssertionError()))
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["add", "1706.03762v2", "--no-llm"])
+
+        assert result.exit_code == 0
+        assert "already added" in result.output.lower()
+        # Still only one directory
+        assert sorted([p.name for p in (temp_db / "papers").iterdir() if p.is_dir()]) == ["attention"]
+
+    def test_add_duplicate_arxiv_duplicate_flag_creates_second_copy(self, temp_db: Path, monkeypatch):
+        """Test --duplicate keeps the old behavior of adding another copy."""
+        from datetime import datetime
+
+        # Existing paper uses the default no-LLM auto-name for this arXiv ID.
+        existing_name = "1706_03762"
+        paper_dir = temp_db / "papers" / existing_name
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "meta.json").write_text(
+            json.dumps({"arxiv_id": "1706.03762", "title": "Old", "authors": [], "abstract": ""})
+        )
+        paperpipe.save_index({existing_name: {"arxiv_id": "1706.03762", "title": "Old", "tags": [], "added": "x"}})
+
+        def mock_fetch(arxiv_id: str):
+            return {
+                "arxiv_id": arxiv_id,
+                "title": "Attention Is All You Need",
+                "authors": [],
+                "abstract": "Abstract",
+                "primary_category": "cs.CL",
+                "categories": ["cs.CL"],
+                "published": datetime(2017, 6, 12).isoformat(),
+                "updated": datetime(2017, 6, 12).isoformat(),
+                "doi": None,
+                "journal_ref": None,
+                "pdf_url": "https://arxiv.org/pdf/1706.03762",
+            }
+
+        monkeypatch.setattr(paperpipe, "fetch_arxiv_metadata", mock_fetch)
+
+        def fake_download_pdf(_arxiv_id: str, dest: Path):
+            dest.write_bytes(b"%PDF")
+            return True
+
+        monkeypatch.setattr(paperpipe, "download_pdf", fake_download_pdf)
+        monkeypatch.setattr(paperpipe, "download_source", lambda _arxiv_id, _paper_dir: None)
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["add", "1706.03762", "--duplicate", "--no-llm"])
+
+        assert result.exit_code == 0
+        assert "Added: 1706_03762-2" in result.output
+        assert (temp_db / "papers" / "1706_03762-2" / "meta.json").exists()
+
+    def test_add_duplicate_arxiv_update_refreshes_existing(self, temp_db: Path, monkeypatch):
+        """Test --update refreshes an existing paper in-place."""
+        from datetime import datetime
+
+        name = "attention"
+        paper_dir = temp_db / "papers" / name
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "summary.md").write_text("old summary")
+        (paper_dir / "equations.md").write_text("old equations")
+        (paper_dir / "meta.json").write_text(
+            json.dumps(
+                {
+                    "arxiv_id": "1706.03762",
+                    "title": "Old",
+                    "authors": [],
+                    "abstract": "",
+                    "categories": ["cs.CL"],
+                    "tags": ["old-tag"],
+                    "published": "2017-01-01",
+                    "added": "x",
+                    "has_source": False,
+                    "has_pdf": False,
+                }
+            )
+        )
+        paperpipe.save_index({name: {"arxiv_id": "1706.03762", "title": "Old", "tags": ["old-tag"], "added": "x"}})
+
+        def mock_fetch(arxiv_id: str):
+            return {
+                "arxiv_id": arxiv_id,
+                "title": "New Title",
+                "authors": [],
+                "abstract": "Abstract",
+                "primary_category": "cs.CV",
+                "categories": ["cs.CV"],
+                "published": datetime(2023, 1, 1).isoformat(),
+                "updated": datetime(2023, 1, 1).isoformat(),
+                "doi": None,
+                "journal_ref": None,
+                "pdf_url": "https://arxiv.org/pdf/1706.03762",
+            }
+
+        monkeypatch.setattr(paperpipe, "fetch_arxiv_metadata", mock_fetch)
+
+        def fake_download_pdf(_arxiv_id: str, dest: Path):
+            dest.write_bytes(b"%PDF")
+            return True
+
+        def fake_download_source(_arxiv_id: str, pdir: Path):
+            tex = r"\begin{document}\begin{equation}E=mc^2\end{equation}\end{document}"
+            (pdir / "source.tex").write_text(tex)
+            return tex
+
+        monkeypatch.setattr(paperpipe, "download_pdf", fake_download_pdf)
+        monkeypatch.setattr(paperpipe, "download_source", fake_download_source)
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["add", "1706.03762", "--update", "--name", name, "--no-llm"])
+
+        assert result.exit_code == 0
+        assert "Updated: attention" in result.output
+
+        meta = json.loads((paper_dir / "meta.json").read_text())
+        assert meta["title"] == "New Title"
+        assert meta["added"] == "x"  # preserved
+        assert "computer-vision" in meta["tags"]
+        assert "old-tag" in meta["tags"]
 
 
 class TestAddMultiplePapers:
@@ -1163,12 +1298,8 @@ class TestRemoveMultiplePapers:
         """Test removing multiple papers where some fail."""
         papers_dir = temp_db / "papers"
         (papers_dir / "p1").mkdir(parents=True)
-        (papers_dir / "p1" / "meta.json").write_text(
-            json.dumps({"arxiv_id": "id-p1", "title": "Paper p1"})
-        )
-        paperpipe.save_index(
-            {"p1": {"arxiv_id": "id-p1", "title": "Paper p1", "tags": [], "added": "x"}}
-        )
+        (papers_dir / "p1" / "meta.json").write_text(json.dumps({"arxiv_id": "id-p1", "title": "Paper p1"}))
+        paperpipe.save_index({"p1": {"arxiv_id": "id-p1", "title": "Paper p1", "tags": [], "added": "x"}})
 
         runner = CliRunner()
         # p1 exists, nonexistent does not
@@ -1217,9 +1348,7 @@ class TestRegenerateMultiplePapers:
             json.dumps({"arxiv_id": "id-p1", "title": "Paper p1", "authors": [], "abstract": ""})
         )
         (papers_dir / "p1" / "source.tex").write_text(r"\begin{equation}x=1\end{equation}")
-        paperpipe.save_index(
-            {"p1": {"arxiv_id": "id-p1", "title": "Paper p1", "tags": [], "added": "x"}}
-        )
+        paperpipe.save_index({"p1": {"arxiv_id": "id-p1", "title": "Paper p1", "tags": [], "added": "x"}})
 
         runner = CliRunner()
         # p1 exists, nonexistent does not
@@ -1229,6 +1358,96 @@ class TestRegenerateMultiplePapers:
         assert "Regenerating p1:" in result.output
         assert "not found" in result.output.lower()
         assert "1 failed" in result.output
+
+
+class TestAuditCommand:
+    def test_audit_flags_paper(self, temp_db: Path):
+        papers_dir = temp_db / "papers"
+
+        bad_dir = papers_dir / "bad-paper"
+        bad_dir.mkdir(parents=True)
+        (bad_dir / "meta.json").write_text(
+            json.dumps(
+                {
+                    "arxiv_id": "id-bad",
+                    "title": "Bad Paper",
+                    "authors": [],
+                    "abstract": "This paper discusses occupancy fields.",
+                    "tags": [],
+                }
+            )
+        )
+        (bad_dir / "source.tex").write_text(r"\begin{document}occupancy\end{document}")
+        (bad_dir / "summary.md").write_text("**Eikonal Regularization:** This is important.\n")
+        (bad_dir / "equations.md").write_text(
+            'Based on the provided LaTeX content for the paper **"Some Other Paper"**\n'
+        )
+
+        ok_dir = papers_dir / "ok-paper"
+        ok_dir.mkdir(parents=True)
+        (ok_dir / "meta.json").write_text(
+            json.dumps(
+                {
+                    "arxiv_id": "id-ok",
+                    "title": "Good Paper",
+                    "authors": [],
+                    "abstract": "We present an occupancy method.",
+                    "tags": [],
+                }
+            )
+        )
+        (ok_dir / "source.tex").write_text(r"\begin{document}occupancy\end{document}")
+        (ok_dir / "summary.md").write_text("# Good Paper\n\n**Occupancy:** Used for geometry.\n")
+        (ok_dir / "equations.md").write_text("# Good Paper\n\n## Key Equations\n\n$x = y$\n")
+
+        paperpipe.save_index(
+            {
+                "bad-paper": {"arxiv_id": "id-bad", "title": "Bad Paper", "tags": [], "added": "x"},
+                "ok-paper": {"arxiv_id": "id-ok", "title": "Good Paper", "tags": [], "added": "x"},
+            }
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["audit"])
+        assert result.exit_code == 0
+        assert "flagged" in result.output.lower()
+        assert "bad-paper" in result.output
+        assert "Eikonal" in result.output
+        assert "Some Other Paper" in result.output
+        assert "boilerplate" in result.output.lower()  # Detects "based on the provided"
+        assert "ok-paper" not in result.output  # OK papers are not listed
+
+    def test_audit_regenerate_flagged_papers(self, temp_db: Path):
+        papers_dir = temp_db / "papers"
+
+        bad_dir = papers_dir / "bad-paper"
+        bad_dir.mkdir(parents=True)
+        (bad_dir / "meta.json").write_text(
+            json.dumps(
+                {
+                    "arxiv_id": "id-bad",
+                    "title": "Bad Paper",
+                    "authors": [],
+                    "abstract": "Abstract.",
+                    "tags": [],
+                    "added": "x",
+                }
+            )
+        )
+        (bad_dir / "source.tex").write_text(r"\begin{equation}x=1\end{equation}")
+        (bad_dir / "summary.md").write_text("**Eikonal Regularization:** This is important.\n")
+        (bad_dir / "equations.md").write_text(
+            'Based on the provided LaTeX content for the paper **"Some Other Paper"**\n'
+        )
+
+        paperpipe.save_index({"bad-paper": {"arxiv_id": "id-bad", "title": "Bad Paper", "tags": [], "added": "x"}})
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["audit", "--regenerate", "--no-llm", "-o", "summary,equations"])
+        assert result.exit_code == 0
+        assert "Regenerating bad-paper:" in result.output
+        assert "# Bad Paper" in (bad_dir / "summary.md").read_text()
+        assert "Eikonal" not in (bad_dir / "summary.md").read_text()
 
 
 class TestExport:

@@ -102,6 +102,21 @@ INDEX_FILE = PAPER_DB / "index.json"
 DEFAULT_LLM_MODEL = os.environ.get("PAPERPIPE_LLM_MODEL", "gemini/gemini-3-flash-preview")
 DEFAULT_EMBEDDING_MODEL = os.environ.get("PAPERPIPE_EMBEDDING_MODEL", "gemini/gemini-embedding-001")
 
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw.strip())
+    except Exception:
+        return default
+    return value
+
+
+DEFAULT_LLM_TEMPERATURE = _env_float("PAPERPIPE_LLM_TEMPERATURE", 0.3)
+
+
 # arXiv category mappings for human-readable tags
 CATEGORY_TAGS = {
     "cs.CV": "computer-vision",
@@ -126,6 +141,41 @@ _ARXIV_ANY_RE = re.compile(
 )
 
 _SEARCH_TOKEN_RE = re.compile(r"[a-z0-9]+", flags=re.IGNORECASE)
+_ARXIV_VERSION_SUFFIX_RE = re.compile(r"v\d+$", flags=re.IGNORECASE)
+
+
+def arxiv_base_id(arxiv_id: str) -> str:
+    """Strip the version suffix from an arXiv ID: 1706.03762v2 -> 1706.03762."""
+    return _ARXIV_VERSION_SUFFIX_RE.sub("", (arxiv_id or "").strip())
+
+
+def _arxiv_base_from_any(value: object) -> str:
+    """Best-effort arXiv base ID extraction from IDs/URLs/other strings."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        return arxiv_base_id(normalize_arxiv_id(raw))
+    except ValueError:
+        return arxiv_base_id(raw)
+
+
+def _index_arxiv_base_to_names(index: dict) -> dict[str, list[str]]:
+    """Build a reverse index: arXiv base ID -> list of paper names."""
+    base_to_names: dict[str, list[str]] = {}
+    for name, info in index.items():
+        if not isinstance(info, dict):
+            continue
+        entry_arxiv_id = info.get("arxiv_id")
+        if not entry_arxiv_id:
+            continue
+        base = _arxiv_base_from_any(entry_arxiv_id)
+        if not base:
+            continue
+        base_to_names.setdefault(base, []).append(name)
+    for names in base_to_names.values():
+        names.sort()
+    return base_to_names
 
 
 def normalize_arxiv_id(value: str) -> str:
@@ -219,11 +269,12 @@ def _resolve_paper_name_from_ref(paper_or_arxiv: str, index: dict) -> tuple[Opti
     except ValueError:
         return None, f"Paper not found: {paper_or_arxiv}"
 
-    matches = [name for name, info in index.items() if info.get("arxiv_id") == arxiv_id]
+    arxiv_base = arxiv_base_id(arxiv_id)
+    matches = [name for name, info in index.items() if _arxiv_base_from_any(info.get("arxiv_id", "")) == arxiv_base]
     if len(matches) == 1:
         return matches[0], ""
     if len(matches) > 1:
-        return None, f"Multiple papers match arXiv ID {arxiv_id}: {', '.join(sorted(matches))}"
+        return None, f"Multiple papers match arXiv ID {arxiv_base}: {', '.join(sorted(matches))}"
 
     # Fallback: scan on-disk metadata if index is missing/out-of-date.
     matches = []
@@ -238,13 +289,13 @@ def _resolve_paper_name_from_ref(paper_or_arxiv: str, index: dict) -> tuple[Opti
                 meta = json.loads(meta_path.read_text())
             except Exception:
                 continue
-            if meta.get("arxiv_id") == arxiv_id:
+            if _arxiv_base_from_any(meta.get("arxiv_id", "")) == arxiv_base:
                 matches.append(candidate.name)
 
     if len(matches) == 1:
         return matches[0], ""
     if len(matches) > 1:
-        return None, f"Multiple papers match arXiv ID {arxiv_id}: {', '.join(sorted(matches))}"
+        return None, f"Multiple papers match arXiv ID {arxiv_base}: {', '.join(sorted(matches))}"
 
     return None, f"Paper not found: {paper_or_arxiv}"
 
@@ -380,6 +431,30 @@ def categories_to_tags(categories: list[str]) -> list[str]:
     return list(set(tags))  # Deduplicate
 
 
+_VALID_REGENERATE_FIELDS = {"all", "summary", "equations", "tags", "name"}
+
+
+def _parse_overwrite_option(overwrite: Optional[str]) -> tuple[set[str], bool]:
+    if overwrite is None:
+        return set(), False
+    overwrite_fields = {f.strip().lower() for f in overwrite.split(",") if f.strip()}
+    invalid = overwrite_fields - _VALID_REGENERATE_FIELDS
+    if invalid:
+        raise click.UsageError(f"Invalid --overwrite fields: {', '.join(sorted(invalid))}")
+    return overwrite_fields, "all" in overwrite_fields
+
+
+def _is_arxiv_id_name(name: str) -> bool:
+    """Check if name looks like an arXiv ID (e.g., 1706_03762 or hep-th_9901001)."""
+    # New-style: 1706_03762 or 1706_03762v5
+    if re.match(r"^\d{4}_\d{4,5}(v\d+)?$", name):
+        return True
+    # Old-style: hep-th_9901001
+    if re.match(r"^[a-z-]+_\d{7}$", name):
+        return True
+    return False
+
+
 def fetch_arxiv_metadata(arxiv_id: str) -> dict:
     """Fetch paper metadata from arXiv API."""
     import arxiv
@@ -511,6 +586,55 @@ def extract_equations_simple(tex_content: str) -> str:
     return md
 
 
+_LATEX_SECTION_RE = re.compile(r"\\(sub)*section\*?\{([^}]*)\}", flags=re.IGNORECASE)
+
+
+def _extract_section_headings(tex_content: str, *, max_items: int = 25) -> list[str]:
+    headings: list[str] = []
+    if not tex_content:
+        return headings
+    for match in _LATEX_SECTION_RE.finditer(tex_content):
+        title = (match.group(2) or "").strip()
+        if not title:
+            continue
+        title = re.sub(r"\s+", " ", title)
+        if title and title not in headings:
+            headings.append(title)
+        if len(headings) >= max_items:
+            break
+    return headings
+
+
+def _extract_equation_blocks(tex_content: str) -> list[str]:
+    if not tex_content:
+        return []
+
+    blocks: list[str] = []
+    patterns = [
+        r"\\begin\{equation\*?\}.*?\\end\{equation\*?\}",
+        r"\\begin\{align\*?\}.*?\\end\{align\*?\}",
+        r"\\begin\{gather\*?\}.*?\\end\{gather\*?\}",
+        r"\\\[[\s\S]*?\\\]",
+    ]
+    for pattern in patterns:
+        for match in re.finditer(pattern, tex_content, flags=re.DOTALL):
+            block = match.group(0).strip()
+            if len(block) < 12:
+                continue
+            blocks.append(block)
+
+    # de-dupe preserving order (common when files are concatenated)
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for b in blocks:
+        key = b.strip()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(b)
+    return deduped
+
+
 def _extract_name_from_title(title: str) -> Optional[str]:
     """Extract a short name from title prefix like 'NeRF: ...' → 'nerf'."""
     if ":" not in title:
@@ -549,8 +673,9 @@ Abstract: {meta["abstract"][:500]}"""
         # Clean up the result - take first word/term only
         name = result.strip().lower().split()[0] if result.strip() else None
         if name:
-            name = re.sub(r"[^a-z0-9-]", "", name)
-            if name and len(name) <= 30:
+            # Remove non-alphanumeric except hyphens, strip trailing hyphens
+            name = re.sub(r"[^a-z0-9-]", "", name).strip("-")
+            if name and 3 <= len(name) <= 30:
                 return name
     return None
 
@@ -588,28 +713,34 @@ def generate_auto_name(meta: dict, existing_names: set[str], use_llm: bool = Tru
     return name
 
 
-def generate_llm_content(paper_dir: Path, meta: dict, tex_content: Optional[str]) -> tuple[str, str, list[str]]:
+def generate_llm_content(
+    paper_dir: Path,
+    meta: dict,
+    tex_content: Optional[str],
+    *,
+    audit_reasons: Optional[list[str]] = None,
+) -> tuple[str, str, list[str]]:
     """
     Generate summary, equations.md, and semantic tags using LLM.
     Returns (summary, equations_md, additional_tags)
     """
     if not _litellm_available():
         # Fallback: simple extraction without LLM
-        summary = generate_simple_summary(meta)
+        summary = generate_simple_summary(meta, tex_content)
         equations = extract_equations_simple(tex_content) if tex_content else "No LaTeX source available."
         return summary, equations, []
 
     try:
-        return generate_with_litellm(meta, tex_content)
+        return generate_with_litellm(meta, tex_content, audit_reasons=audit_reasons)
     except Exception as e:
         echo_warning(f"LLM generation failed: {e}")
-        summary = generate_simple_summary(meta)
+        summary = generate_simple_summary(meta, tex_content)
         equations = extract_equations_simple(tex_content) if tex_content else "No LaTeX source available."
         return summary, equations, []
 
 
-def generate_simple_summary(meta: dict) -> str:
-    """Generate a simple summary from metadata (no LLM)."""
+def generate_simple_summary(meta: dict, tex_content: Optional[str] = None) -> str:
+    """Generate a summary from metadata and optionally LaTeX structure (no LLM)."""
     title = meta.get("title") or "Untitled"
     arxiv_id = meta.get("arxiv_id")
     authors = meta.get("authors") or []
@@ -628,11 +759,21 @@ def generate_simple_summary(meta: dict) -> str:
     if categories:
         lines.append(f"**Categories:** {', '.join([str(c) for c in categories])}")
 
-    lines.extend(["", "## Abstract", "", abstract, "", "---"])
+    lines.extend(["", "## Abstract", "", abstract])
+
+    # Include section headings from LaTeX if available
+    if tex_content:
+        headings = _extract_section_headings(tex_content)
+        if headings:
+            lines.extend(["", "## Paper Structure", ""])
+            for h in headings:
+                lines.append(f"- {h}")
+
+    lines.extend(["", "---"])
     regen_target = arxiv_id if arxiv_id else "<paper-name-or-arxiv-id>"
     lines.append(
         "*Summary auto-generated from metadata. Configure an LLM and run "
-        f"`papi regenerate {regen_target}` for a richer summary and equation explanations.*"
+        f"`papi regenerate {regen_target}` for a richer summary.*"
     )
     lines.append("")
     return "\n".join(lines)
@@ -649,7 +790,7 @@ def _litellm_available() -> bool:
 
 
 def _run_llm(prompt: str, *, purpose: str) -> Optional[str]:
-    """Run a prompt through LiteLLM."""
+    """Run a prompt through LiteLLM. Returns None on any failure."""
     try:
         import litellm  # type: ignore[import-not-found]
 
@@ -660,14 +801,12 @@ def _run_llm(prompt: str, *, purpose: str) -> Optional[str]:
 
     model = DEFAULT_LLM_MODEL
     echo_progress(f"  LLM ({model}): generating {purpose}...")
-    debug("LLM request: model=%s, purpose=%s", model, purpose)
 
     try:
         response = litellm.completion(
             model=model,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=2048,
-            temperature=0.3,
+            temperature=DEFAULT_LLM_TEMPERATURE,
         )
         out = response.choices[0].message.content  # type: ignore[union-attr]
         if out:
@@ -680,47 +819,66 @@ def _run_llm(prompt: str, *, purpose: str) -> Optional[str]:
         return None
 
 
-def generate_with_litellm(meta: dict, tex_content: Optional[str]) -> tuple[str, str, list[str]]:
-    """Generate content using LiteLLM."""
+def generate_with_litellm(
+    meta: dict,
+    tex_content: Optional[str],
+    *,
+    audit_reasons: Optional[list[str]] = None,
+) -> tuple[str, str, list[str]]:
+    """Generate summary, equations, and tags using LiteLLM.
 
-    # Prepare context
-    context = f"""Paper: {meta["title"]}
-Authors: {", ".join(meta["authors"][:10])}
-Abstract: {meta["abstract"]}
-"""
+    Simple approach: send title/abstract/raw LaTeX to the LLM and let it decide what's important.
+    """
+    title = str(meta.get("title") or "")
+    authors = meta.get("authors") or []
+    abstract = str(meta.get("abstract") or "")
+
+    # Build context: metadata + raw LaTeX (will be truncated by _run_llm if needed)
+    context_parts = [
+        f"Paper: {title}",
+        f"Authors: {', '.join([str(a) for a in authors[:10]])}",
+        f"Abstract: {abstract}",
+    ]
+    if audit_reasons:
+        context_parts.append("\nPrevious issues to address:")
+        context_parts.extend([f"- {r}" for r in audit_reasons[:8]])
     if tex_content:
-        # Include first ~8000 chars of tex for context
-        context += f"\n\nLaTeX source (truncated):\n{tex_content[:8000]}"
+        context_parts.append("\nLaTeX source:")
+        context_parts.append(tex_content)
+
+    context = "\n".join(context_parts)
 
     # Generate summary
-    summary_prompt = f"""Based on this paper, create a concise technical summary for a software developer implementing the methods. Focus on:
-1. Core contribution (1-2 sentences)
-2. Key method/architecture (bullet points)
-3. Important implementation details
-4. Loss functions or training objectives
+    summary_prompt = f"""Write a technical summary of this paper for a developer implementing the methods.
 
-Keep it under 500 words. Use markdown formatting.
+Include:
+- Core contribution (1-2 sentences)
+- Key methods/architecture
+- Important implementation details
+
+Keep it under 400 words. Use markdown. Only include information from the provided context.
 
 {context}"""
 
     try:
         llm_summary = _run_llm(summary_prompt, purpose="summary")
-        summary = llm_summary if llm_summary else generate_simple_summary(meta)
+        summary = llm_summary if llm_summary else generate_simple_summary(meta, tex_content)
     except Exception:
-        summary = generate_simple_summary(meta)
+        summary = generate_simple_summary(meta, tex_content)
 
     # Generate equations.md
     if tex_content:
-        eq_prompt = f"""Extract the key equations from this LaTeX paper. For each equation:
-1. Show the LaTeX code
-2. Briefly explain what it represents (1 sentence)
-3. Note any important variables
+        eq_prompt = f"""Extract the key equations from this paper's LaTeX source.
 
-Focus on: loss functions, core formulas, key derivations.
-Format as markdown with ```latex blocks.
+For each important equation:
+1. Show the LaTeX
+2. Briefly explain what it represents
+3. Note key variables
 
-LaTeX content:
-{tex_content[:12000]}"""
+Focus on: definitions, loss functions, main results. Skip trivial math.
+Use markdown with ```latex blocks.
+
+{context}"""
 
         try:
             llm_equations = _run_llm(eq_prompt, purpose="equations")
@@ -728,16 +886,15 @@ LaTeX content:
         except Exception:
             equations = extract_equations_simple(tex_content)
     else:
-        equations = "No LaTeX source available for equation extraction."
+        equations = "No LaTeX source available."
 
     # Generate semantic tags
-    tag_prompt = f"""Given this paper title and abstract, suggest 3-5 specific technical tags (single words or hyphenated terms) that would help a researcher find this paper.
+    tag_prompt = f"""Suggest 3-5 technical tags for this paper (lowercase, hyphenated).
+Focus on methods, domains, techniques.
+Return ONLY tags, one per line.
 
-Focus on: methods, architectures, problem domains, key techniques.
-Return ONLY the tags, one per line, lowercase, hyphenated.
-
-Title: {meta["title"]}
-Abstract: {meta["abstract"][:1000]}"""
+Title: {title}
+Abstract: {abstract[:800]}"""
 
     additional_tags = []
     try:
@@ -776,28 +933,70 @@ def _add_single_paper(
     name: Optional[str],
     tags: Optional[str],
     no_llm: bool,
+    duplicate: bool,
+    update: bool,
     index: dict,
     existing_names: set[str],
-) -> tuple[bool, Optional[str]]:
+    base_to_names: dict[str, list[str]],
+) -> tuple[bool, Optional[str], str]:
     """Add a single paper to the database.
 
-    Returns (success, paper_name) tuple.
+    Returns (success, paper_name, action) tuple.
     """
     # Normalize arXiv ID / URL
     try:
         arxiv_id = normalize_arxiv_id(arxiv_id)
     except ValueError as e:
         echo_error(f"Invalid arXiv ID: {e}")
-        return False, None
+        return False, None, "failed"
+
+    base = arxiv_base_id(arxiv_id)
+    existing_for_arxiv = base_to_names.get(base, [])
+
+    if existing_for_arxiv and not duplicate:
+        # Idempotent by default: re-adding the same paper is a no-op.
+        if not update:
+            if name and name not in existing_for_arxiv:
+                echo_error(
+                    f"arXiv {base} already added as {', '.join(existing_for_arxiv)}; use --update or --duplicate."
+                )
+                return False, None, "failed"
+            echo_warning(f"Already added (arXiv {base}): {', '.join(existing_for_arxiv)} (skipping)")
+            return True, existing_for_arxiv[0], "skipped"
+
+        # Update mode: refresh an existing entry in-place.
+        if name:
+            if name not in existing_for_arxiv:
+                echo_error(f"arXiv {base} already added as {', '.join(existing_for_arxiv)}; cannot update '{name}'.")
+                return False, None, "failed"
+            target = name
+        else:
+            if len(existing_for_arxiv) > 1:
+                echo_error(
+                    f"Multiple papers match arXiv {base}: {', '.join(existing_for_arxiv)}. "
+                    "Re-run with --name to pick one, or use --duplicate to add another copy."
+                )
+                return False, None, "failed"
+            target = existing_for_arxiv[0]
+
+        success, paper_name = _update_existing_paper(
+            arxiv_id=arxiv_id,
+            name=target,
+            tags=tags,
+            no_llm=no_llm,
+            index=index,
+            base_to_names=base_to_names,
+        )
+        return success, paper_name, "updated" if success else "failed"
 
     if name:
         paper_dir = PAPERS_DIR / name
         if paper_dir.exists():
             echo_error(f"Paper '{name}' already exists. Use --name to specify a different name.")
-            return False, None
+            return False, None, "failed"
         if name in existing_names:
             echo_error(f"Paper '{name}' already in index. Use --name to specify a different name.")
-            return False, None
+            return False, None, "failed"
 
     # 1. Fetch metadata (needed for auto-name generation)
     echo_progress("  Fetching metadata...")
@@ -805,7 +1004,7 @@ def _add_single_paper(
         meta = fetch_arxiv_metadata(arxiv_id)
     except Exception as e:
         echo_error(f"Error fetching metadata: {e}")
-        return False, None
+        return False, None, "failed"
 
     # 2. Generate name from title if not provided
     if not name:
@@ -816,11 +1015,11 @@ def _add_single_paper(
 
     if paper_dir.exists():
         echo_error(f"Paper '{name}' already exists. Use --name to specify a different name.")
-        return False, None
+        return False, None, "failed"
 
     if name in existing_names:
         echo_error(f"Paper '{name}' already in index. Use --name to specify a different name.")
-        return False, None
+        return False, None, "failed"
 
     paper_dir.mkdir(parents=True)
 
@@ -847,7 +1046,7 @@ def _add_single_paper(
     # 6. Generate summary and equations
     echo_progress("  Generating summary and equations...")
     if no_llm:
-        summary = generate_simple_summary(meta)
+        summary = generate_simple_summary(meta, tex_content)
         equations = extract_equations_simple(tex_content) if tex_content else "No LaTeX source available."
         llm_tags: list[str] = []
     else:
@@ -886,12 +1085,114 @@ def _add_single_paper(
 
     # Update existing_names for subsequent papers in batch
     existing_names.add(name)
+    base_to_names.setdefault(base, []).append(name)
+    base_to_names[base].sort()
 
     echo_success(f"Added: {name}")
     click.echo(f"  Title: {meta['title'][:60]}...")
     click.echo(f"  Tags: {', '.join(all_tags)}")
     click.echo(f"  Location: {paper_dir}")
 
+    return True, name, "added"
+
+
+def _update_existing_paper(
+    *,
+    arxiv_id: str,
+    name: str,
+    tags: Optional[str],
+    no_llm: bool,
+    index: dict,
+    base_to_names: dict[str, list[str]],
+) -> tuple[bool, Optional[str]]:
+    """Refresh an existing paper in-place (PDF/source/meta + generated content)."""
+    paper_dir = PAPERS_DIR / name
+    paper_dir.mkdir(parents=True, exist_ok=True)
+
+    meta_path = paper_dir / "meta.json"
+    prior_meta: dict = {}
+    if meta_path.exists():
+        try:
+            prior_meta = json.loads(meta_path.read_text())
+        except Exception:
+            prior_meta = {}
+
+    echo_progress(f"Updating existing paper: {name}")
+
+    echo_progress("  Fetching metadata...")
+    try:
+        meta = fetch_arxiv_metadata(arxiv_id)
+    except Exception as e:
+        echo_error(f"Error fetching metadata: {e}")
+        return False, None
+
+    # Download PDF (overwrite if present)
+    echo_progress("  Downloading PDF...")
+    pdf_path = paper_dir / "paper.pdf"
+    try:
+        download_pdf(arxiv_id, pdf_path)
+    except Exception as e:
+        echo_warning(f"Could not download PDF: {e}")
+
+    # Download LaTeX source (only overwrites if source is valid)
+    echo_progress("  Downloading LaTeX source...")
+    tex_content = download_source(arxiv_id, paper_dir)
+    if not tex_content:
+        source_path = paper_dir / "source.tex"
+        if source_path.exists():
+            tex_content = source_path.read_text(errors="ignore")
+
+    # Tags: merge prior tags + new auto tags + optional user tags (+ LLM tags if used)
+    auto_tags = categories_to_tags(meta.get("categories", []))
+    prior_tags_raw = prior_meta.get("tags")
+    prior_tags = prior_tags_raw if isinstance(prior_tags_raw, list) else []
+    user_tags = [t.strip() for t in tags.split(",")] if tags else []
+
+    echo_progress("  Generating summary and equations...")
+    if no_llm:
+        summary = generate_simple_summary(meta, tex_content)
+        equations = extract_equations_simple(tex_content) if tex_content else "No LaTeX source available."
+        llm_tags: list[str] = []
+    else:
+        summary, equations, llm_tags = generate_llm_content(paper_dir, meta, tex_content)
+
+    all_tags = list(set([*auto_tags, *prior_tags, *user_tags, *llm_tags]))
+
+    (paper_dir / "summary.md").write_text(summary)
+    (paper_dir / "equations.md").write_text(equations)
+
+    paper_meta = {
+        "arxiv_id": meta.get("arxiv_id"),
+        "title": meta.get("title"),
+        "authors": meta.get("authors", []),
+        "abstract": meta.get("abstract", ""),
+        "categories": meta.get("categories", []),
+        "tags": all_tags,
+        "published": meta.get("published"),
+        "added": prior_meta.get("added") or datetime.now().isoformat(),
+        "has_source": tex_content is not None,
+        "has_pdf": pdf_path.exists(),
+    }
+    meta_path.write_text(json.dumps(paper_meta, indent=2))
+
+    index[name] = {
+        "arxiv_id": meta.get("arxiv_id"),
+        "title": meta.get("title"),
+        "tags": all_tags,
+        "added": paper_meta["added"],
+    }
+    save_index(index)
+
+    base = arxiv_base_id(str(meta.get("arxiv_id") or arxiv_id))
+    base_to_names.setdefault(base, [])
+    if name not in base_to_names[base]:
+        base_to_names[base].append(name)
+        base_to_names[base].sort()
+
+    echo_success(f"Updated: {name}")
+    click.echo(f"  Title: {str(meta.get('title', ''))[:60]}...")
+    click.echo(f"  Tags: {', '.join(all_tags)}")
+    click.echo(f"  Location: {paper_dir}")
     return True, name
 
 
@@ -900,15 +1201,35 @@ def _add_single_paper(
 @click.option("--name", "-n", help="Short name for the paper (only valid with single paper)")
 @click.option("--tags", "-t", help="Additional comma-separated tags (applied to all papers)")
 @click.option("--no-llm", is_flag=True, help="Skip LLM-based generation")
-def add(arxiv_ids: tuple[str, ...], name: Optional[str], tags: Optional[str], no_llm: bool):
+@click.option(
+    "--duplicate",
+    is_flag=True,
+    help="Allow adding a second copy even if this arXiv ID already exists (creates a new name like -2/-3).",
+)
+@click.option(
+    "--update", is_flag=True, help="If this arXiv ID already exists, refresh it in-place instead of skipping."
+)
+def add(
+    arxiv_ids: tuple[str, ...],
+    name: Optional[str],
+    tags: Optional[str],
+    no_llm: bool,
+    duplicate: bool,
+    update: bool,
+):
     """Add one or more papers to the database."""
     if name and len(arxiv_ids) > 1:
         raise click.UsageError("--name can only be used when adding a single paper.")
+    if duplicate and update:
+        raise click.UsageError("Use either --duplicate or --update, not both.")
 
     index = load_index()
     existing_names = set(index.keys())
+    base_to_names = _index_arxiv_base_to_names(index)
 
-    successes = 0
+    added = 0
+    updated = 0
+    skipped = 0
     failures = 0
 
     for i, arxiv_id in enumerate(arxiv_ids, 1):
@@ -917,9 +1238,24 @@ def add(arxiv_ids: tuple[str, ...], name: Optional[str], tags: Optional[str], no
         else:
             echo_progress(f"Adding paper: {arxiv_id}")
 
-        success, _ = _add_single_paper(arxiv_id, name, tags, no_llm, index, existing_names)
+        success, _, action = _add_single_paper(
+            arxiv_id,
+            name,
+            tags,
+            no_llm,
+            duplicate,
+            update,
+            index,
+            existing_names,
+            base_to_names,
+        )
         if success:
-            successes += 1
+            if action == "added":
+                added += 1
+            elif action == "updated":
+                updated += 1
+            elif action == "skipped":
+                skipped += 1
         else:
             failures += 1
 
@@ -927,12 +1263,165 @@ def add(arxiv_ids: tuple[str, ...], name: Optional[str], tags: Optional[str], no
     if len(arxiv_ids) > 1:
         click.echo()
         if failures == 0:
-            echo_success(f"Added {successes} paper(s)")
+            parts = []
+            if added:
+                parts.append(f"added {added}")
+            if updated:
+                parts.append(f"updated {updated}")
+            if skipped:
+                parts.append(f"skipped {skipped}")
+            echo_success(", ".join(parts) if parts else "No changes")
         else:
-            echo_warning(f"Added {successes} paper(s), {failures} failed")
+            parts = []
+            if added:
+                parts.append(f"added {added}")
+            if updated:
+                parts.append(f"updated {updated}")
+            if skipped:
+                parts.append(f"skipped {skipped}")
+            if not parts:
+                parts.append("no changes")
+            echo_warning(f"{', '.join(parts)}, {failures} failed")
 
     if failures > 0:
         raise SystemExit(1)
+
+
+def _regenerate_one_paper(
+    name: str,
+    index: dict,
+    *,
+    no_llm: bool,
+    overwrite_fields: set[str],
+    overwrite_all: bool,
+    audit_reasons: Optional[list[str]] = None,
+) -> tuple[bool, Optional[str]]:
+    """Regenerate fields for a paper. Returns (success, new_name or None)."""
+    paper_dir = PAPERS_DIR / name
+    meta_path = paper_dir / "meta.json"
+    if not meta_path.exists():
+        echo_error(f"Missing metadata for: {name} ({meta_path})")
+        return False, None
+
+    meta = json.loads(meta_path.read_text())
+    tex_content = None
+    source_path = paper_dir / "source.tex"
+    if source_path.exists():
+        tex_content = source_path.read_text(errors="ignore")
+
+    summary_path = paper_dir / "summary.md"
+    equations_path = paper_dir / "equations.md"
+
+    # Determine what needs regeneration
+    if overwrite_all:
+        do_summary = True
+        do_equations = True
+        do_tags = True
+        do_name = True
+    elif overwrite_fields:
+        do_summary = "summary" in overwrite_fields
+        do_equations = "equations" in overwrite_fields
+        do_tags = "tags" in overwrite_fields
+        do_name = "name" in overwrite_fields
+    else:
+        do_summary = not summary_path.exists() or summary_path.stat().st_size == 0
+        do_equations = not equations_path.exists() or equations_path.stat().st_size == 0
+        do_tags = not meta.get("tags")
+        do_name = _is_arxiv_id_name(name)
+
+    if not (do_summary or do_equations or do_tags or do_name):
+        echo_progress(f"  {name}: nothing to regenerate")
+        return True, None
+
+    actions: list[str] = []
+    if do_summary:
+        actions.append("summary")
+    if do_equations:
+        actions.append("equations")
+    if do_tags:
+        actions.append("tags")
+    if do_name:
+        actions.append("name")
+    echo_progress(f"Regenerating {name}: {', '.join(actions)}")
+
+    new_name: Optional[str] = None
+    updated_meta = False
+
+    # Regenerate name if requested
+    if do_name:
+        existing_names = set(index.keys()) - {name}
+        candidate = generate_auto_name(meta, existing_names, use_llm=not no_llm)
+        if candidate != name:
+            new_dir = PAPERS_DIR / candidate
+            if new_dir.exists():
+                echo_warning(f"Cannot rename to '{candidate}' (already exists)")
+            else:
+                paper_dir.rename(new_dir)
+                paper_dir = new_dir
+                summary_path = paper_dir / "summary.md"
+                equations_path = paper_dir / "equations.md"
+                meta_path = paper_dir / "meta.json"
+                new_name = candidate
+                echo_progress(f"  Renamed: {name} → {candidate}")
+
+    # Generate content based on what's needed
+    summary: Optional[str] = None
+    equations: Optional[str] = None
+    llm_tags: list[str] = []
+
+    if do_summary or do_equations or do_tags:
+        if no_llm:
+            if do_summary:
+                summary = generate_simple_summary(meta, tex_content)
+            if do_equations:
+                equations = extract_equations_simple(tex_content) if tex_content else "No LaTeX source available."
+        else:
+            llm_summary, llm_equations, llm_tags = generate_llm_content(
+                paper_dir,
+                meta,
+                tex_content,
+                audit_reasons=audit_reasons,
+            )
+            if do_summary:
+                summary = llm_summary
+            if do_equations:
+                equations = llm_equations
+            if not do_tags:
+                llm_tags = []
+
+    if summary is not None:
+        summary_path.write_text(summary)
+
+    if equations is not None:
+        equations_path.write_text(equations)
+
+    if llm_tags:
+        meta["tags"] = list(set(meta.get("tags", []) + llm_tags))
+        updated_meta = True
+
+    if updated_meta:
+        meta_path.write_text(json.dumps(meta, indent=2))
+
+    # Update index
+    current_name = new_name if new_name else name
+    if new_name:
+        if name in index:
+            del index[name]
+        index[current_name] = {
+            "arxiv_id": meta.get("arxiv_id"),
+            "title": meta.get("title"),
+            "tags": meta.get("tags", []),
+            "added": meta.get("added"),
+        }
+        save_index(index)
+    elif updated_meta:
+        index_entry = index.get(current_name, {})
+        index_entry["tags"] = meta.get("tags", [])
+        index[current_name] = index_entry
+        save_index(index)
+
+    echo_success("  Done")
+    return True, new_name
 
 
 @cli.command()
@@ -945,11 +1434,15 @@ def add(arxiv_ids: tuple[str, ...], name: Optional[str], tags: Optional[str], no
     default=None,
     help="Overwrite fields: 'all' or comma-separated list (summary,equations,tags,name)",
 )
+@click.option("--name", "-n", "set_name", default=None, help="Set name directly (single paper only)")
+@click.option("--tags", "-t", "set_tags", default=None, help="Add tags (comma-separated)")
 def regenerate(
     papers: tuple[str, ...],
     regenerate_all: bool,
     no_llm: bool,
     overwrite: Optional[str],
+    set_name: Optional[str],
+    set_tags: Optional[str],
 ):
     """Regenerate summary/equations for existing papers (by name or arXiv ID).
 
@@ -959,20 +1452,23 @@ def regenerate(
       --overwrite all           Regenerate everything
       --overwrite name          Regenerate name only
       --overwrite tags,summary  Regenerate tags and summary
+
+    Use --name or --tags to set values directly (no LLM):
+
+    \b
+      --name neus-w             Rename paper to 'neus-w'
+      --tags nerf,3d            Add tags 'nerf' and '3d'
     """
     index = load_index()
 
+    # Validate set options
+    if set_name and (regenerate_all or len(papers) != 1):
+        raise click.UsageError("--name can only be used with a single paper.")
+    if (set_name or set_tags) and regenerate_all:
+        raise click.UsageError("--name/--tags cannot be used with --all.")
+
     # Parse overwrite option
-    valid_fields = {"all", "summary", "equations", "tags", "name"}
-    if overwrite is not None:
-        overwrite_fields = {f.strip().lower() for f in overwrite.split(",") if f.strip()}
-        invalid = overwrite_fields - valid_fields
-        if invalid:
-            raise click.UsageError(f"Invalid --overwrite fields: {', '.join(sorted(invalid))}")
-        overwrite_all = "all" in overwrite_fields
-    else:
-        overwrite_fields = set()
-        overwrite_all = False
+    overwrite_fields, overwrite_all = _parse_overwrite_option(overwrite)
 
     if regenerate_all and papers:
         raise click.UsageError("Use either paper(s)/arXiv id(s) OR `--all`, not both.")
@@ -985,152 +1481,14 @@ def regenerate(
         except ValueError:
             normalized = target
 
-        matches = [n for n, info in index.items() if info.get("arxiv_id") == normalized]
+        base = _arxiv_base_from_any(normalized)
+        matches = [n for n, info in index.items() if _arxiv_base_from_any(info.get("arxiv_id", "")) == base]
         if not matches:
             return None
         if len(matches) > 1:
-            echo_error(f"Multiple papers match arXiv ID {normalized}: {', '.join(sorted(matches))}")
+            echo_error(f"Multiple papers match arXiv ID {base}: {', '.join(sorted(matches))}")
             return None
         return matches[0]
-
-    def _is_arxiv_id_name(name: str) -> bool:
-        """Check if name looks like an arXiv ID (e.g., 1706_03762 or hep-th_9901001)."""
-        # New-style: 1706_03762 or 1706_03762v5
-        if re.match(r"^\d{4}_\d{4,5}(v\d+)?$", name):
-            return True
-        # Old-style: hep-th_9901001
-        if re.match(r"^[a-z-]+_\d{7}$", name):
-            return True
-        return False
-
-    def regenerate_one(name: str) -> tuple[bool, Optional[str]]:
-        """Regenerate fields for a paper. Returns (success, new_name or None)."""
-        paper_dir = PAPERS_DIR / name
-        meta_path = paper_dir / "meta.json"
-        if not meta_path.exists():
-            echo_error(f"Missing metadata for: {name} ({meta_path})")
-            return False, None
-
-        meta = json.loads(meta_path.read_text())
-        tex_content = None
-        source_path = paper_dir / "source.tex"
-        if source_path.exists():
-            tex_content = source_path.read_text(errors="ignore")
-
-        summary_path = paper_dir / "summary.md"
-        equations_path = paper_dir / "equations.md"
-
-        # Determine what needs regeneration
-        if overwrite_all:
-            # Overwrite everything
-            do_summary = True
-            do_equations = True
-            do_tags = True
-            do_name = True
-        elif overwrite_fields:
-            # User specified specific fields
-            do_summary = "summary" in overwrite_fields
-            do_equations = "equations" in overwrite_fields
-            do_tags = "tags" in overwrite_fields
-            do_name = "name" in overwrite_fields
-        else:
-            # Only fill missing fields
-            do_summary = not summary_path.exists() or summary_path.stat().st_size == 0
-            do_equations = not equations_path.exists() or equations_path.stat().st_size == 0
-            do_tags = not meta.get("tags")
-            do_name = _is_arxiv_id_name(name)
-
-        if not (do_summary or do_equations or do_tags or do_name):
-            echo_progress(f"  {name}: nothing to regenerate")
-            return True, None
-
-        actions = []
-        if do_summary:
-            actions.append("summary")
-        if do_equations:
-            actions.append("equations")
-        if do_tags:
-            actions.append("tags")
-        if do_name:
-            actions.append("name")
-        echo_progress(f"Regenerating {name}: {', '.join(actions)}")
-
-        new_name: Optional[str] = None
-        updated_meta = False
-
-        # Regenerate name if requested
-        if do_name:
-            existing_names = set(index.keys()) - {name}
-            candidate = generate_auto_name(meta, existing_names, use_llm=not no_llm)
-            if candidate != name:
-                new_dir = PAPERS_DIR / candidate
-                if new_dir.exists():
-                    echo_warning(f"Cannot rename to '{candidate}' (already exists)")
-                else:
-                    paper_dir.rename(new_dir)
-                    paper_dir = new_dir
-                    summary_path = paper_dir / "summary.md"
-                    equations_path = paper_dir / "equations.md"
-                    meta_path = paper_dir / "meta.json"
-                    new_name = candidate
-                    echo_progress(f"  Renamed: {name} → {candidate}")
-
-        # Generate content based on what's needed
-        summary: Optional[str] = None
-        equations: Optional[str] = None
-        llm_tags: list[str] = []
-
-        if do_summary or do_equations or do_tags:
-            if no_llm:
-                if do_summary:
-                    summary = generate_simple_summary(meta)
-                if do_equations:
-                    equations = extract_equations_simple(tex_content) if tex_content else "No LaTeX source available."
-            else:
-                # LLM generates all three together, but we only use what we need
-                llm_summary, llm_equations, llm_tags = generate_llm_content(paper_dir, meta, tex_content)
-                if do_summary:
-                    summary = llm_summary
-                if do_equations:
-                    equations = llm_equations
-                if not do_tags:
-                    llm_tags = []  # Discard if not requested
-
-        # Write files
-        if summary is not None:
-            summary_path.write_text(summary)
-
-        if equations is not None:
-            equations_path.write_text(equations)
-
-        if llm_tags:
-            meta["tags"] = list(set(meta.get("tags", []) + llm_tags))
-            updated_meta = True
-
-        if updated_meta:
-            meta_path.write_text(json.dumps(meta, indent=2))
-
-        # Update index
-        current_name = new_name if new_name else name
-        if new_name:
-            # Remove old entry, add new
-            if name in index:
-                del index[name]
-            index[current_name] = {
-                "arxiv_id": meta.get("arxiv_id"),
-                "title": meta.get("title"),
-                "tags": meta.get("tags", []),
-                "added": meta.get("added"),
-            }
-            save_index(index)
-        elif updated_meta:
-            index_entry = index.get(current_name, {})
-            index_entry["tags"] = meta.get("tags", [])
-            index[current_name] = index_entry
-            save_index(index)
-
-        echo_success("  Done")
-        return True, new_name
 
     # Handle --all flag or "all" as positional argument (when no paper named "all" exists)
     if regenerate_all or (len(papers) == 1 and papers[0] == "all" and "all" not in index):
@@ -1143,7 +1501,13 @@ def regenerate(
         renames: list[tuple[str, str]] = []
         for i, name in enumerate(names, 1):
             echo_progress(f"[{i}/{len(names)}] {name}")
-            success, new_name = regenerate_one(name)
+            success, new_name = _regenerate_one_paper(
+                name,
+                index,
+                no_llm=no_llm,
+                overwrite_fields=overwrite_fields,
+                overwrite_all=overwrite_all,
+            )
             if not success:
                 failures += 1
             elif new_name:
@@ -1161,6 +1525,58 @@ def regenerate(
     if not papers:
         raise click.UsageError("Missing PAPER argument(s) (or pass `--all`).")
 
+    # Handle direct set operations (--name, --tags) for single paper
+    if set_name or set_tags:
+        paper_ref = papers[0]
+        name = resolve_name(paper_ref)
+        if not name:
+            raise click.ClickException(f"Paper not found: {paper_ref}")
+
+        paper_dir = PAPERS_DIR / name
+        meta_path = paper_dir / "meta.json"
+        meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+
+        # Handle --name
+        if set_name:
+            set_name = set_name.strip().lower()
+            set_name = re.sub(r"[^a-z0-9-]", "", set_name).strip("-")
+            if not set_name:
+                raise click.UsageError("Invalid name")
+            if set_name == name:
+                echo_warning(f"Name unchanged: {name}")
+            elif set_name in index:
+                raise click.ClickException(f"Name '{set_name}' already exists")
+            else:
+                new_dir = PAPERS_DIR / set_name
+                paper_dir.rename(new_dir)
+                del index[name]
+                index[set_name] = {
+                    "arxiv_id": meta.get("arxiv_id"),
+                    "title": meta.get("title"),
+                    "tags": meta.get("tags", []),
+                    "added": meta.get("added"),
+                }
+                save_index(index)
+                echo_success(f"Renamed: {name} → {set_name}")
+                name = set_name
+                paper_dir = new_dir
+                meta_path = paper_dir / "meta.json"
+
+        # Handle --tags
+        if set_tags:
+            new_tags = [t.strip().lower() for t in set_tags.split(",") if t.strip()]
+            existing_tags = meta.get("tags", [])
+            all_tags = list(set(existing_tags + new_tags))
+            meta["tags"] = all_tags
+            meta_path.write_text(json.dumps(meta, indent=2))
+            index[name]["tags"] = all_tags
+            save_index(index)
+            echo_success(f"Tags: {', '.join(all_tags)}")
+
+        # If no --overwrite, we're done
+        if not overwrite:
+            return
+
     # Process multiple papers
     successes = 0
     failures = 0
@@ -1176,7 +1592,13 @@ def regenerate(
             failures += 1
             continue
 
-        success, new_name = regenerate_one(name)
+        success, new_name = _regenerate_one_paper(
+            name,
+            index,
+            no_llm=no_llm,
+            overwrite_fields=overwrite_fields,
+            overwrite_all=overwrite_all,
+        )
         if success:
             successes += 1
             if new_name:
@@ -1321,6 +1743,404 @@ def search(query: str, limit: int, fuzzy: bool, tex: bool):
         if matched_fields:
             click.echo(f"  Matches: {', '.join(matched_fields[:6])}")
         click.echo()
+
+
+_AUDIT_EQUATIONS_TITLE_RE = re.compile(r'paper\s+\*\*["“](.+?)["”]\*\*', flags=re.IGNORECASE)
+_AUDIT_BOLD_RE = re.compile(r"\*\*([^*\n]{3,80})\*\*")
+_AUDIT_ACRONYM_RE = re.compile(r"\b[A-Z][A-Z0-9]{2,9}\b")
+
+_AUDIT_IGNORED_WORDS = {
+    "core",
+    "contribution",
+    "key",
+    "method",
+    "architecture",
+    "important",
+    "implementation",
+    "details",
+    "loss",
+    "losses",
+    "functions",
+    "training",
+    "objectives",
+    "results",
+    "discussion",
+    "background",
+    "related",
+    "work",
+    "overview",
+    "summary",
+    "equations",
+    "equation",
+    "notes",
+    "variables",
+    "representation",
+    "standard",
+    "total",
+    "approach",
+    "model",
+    "models",
+    "paper",
+}
+
+# Common acronyms that shouldn't trigger hallucination warnings.
+# Keep this broad and domain-agnostic (general computing, math, common paper terms).
+_AUDIT_ACRONYM_ALLOWLIST = {
+    # General computing/tech
+    "API",
+    "CPU",
+    "GPU",
+    "RAM",
+    "SSD",
+    "HTTP",
+    "JSON",
+    "XML",
+    "SQL",
+    "PDF",
+    "URL",
+    "IEEE",
+    "ACM",
+    # Math/stats
+    "IID",
+    "ODE",
+    "PDE",
+    "SVD",
+    "PCA",
+    "KKT",
+    "CDF",
+    "MSE",
+    "MAE",
+    "RMSE",
+    # Common ML (kept minimal - these are ubiquitous)
+    "AI",
+    "ML",
+    "DL",
+    "RL",
+    "NLP",
+    "LLM",
+    # Norms/metrics
+    "L1",
+    "L2",
+}
+
+# LLM boilerplate phrases that suggest low-quality or templated generation.
+_AUDIT_BOILERPLATE_PHRASES = [
+    "based on the provided",
+    "based on the given",
+    "from the provided",
+    "no latex source available",
+    "no equations available",
+    "the paper presents",
+    "this paper presents",
+    "in this paper, we",
+    "the authors propose",
+    "the authors present",
+    "in conclusion,",
+    "in summary,",
+    "to summarize,",
+    "as shown in the",
+    "as mentioned above",
+    "as discussed above",
+    "it is worth noting",
+    "it should be noted",
+]
+
+
+def _extract_referenced_title_from_equations(text: str) -> Optional[str]:
+    match = _AUDIT_EQUATIONS_TITLE_RE.search(text or "")
+    if not match:
+        return None
+    title = match.group(1).strip()
+    return title or None
+
+
+def _extract_suspicious_tokens_from_summary(summary_text: str) -> list[str]:
+    """
+    Extract a small set of tokens that are likely to be groundable in source.tex/abstract.
+
+    Heuristics:
+    - bold phrases followed by ':' often name specific components ("Eikonal Regularization")
+    - acronyms (ROS, ONNX, CUDA)
+    """
+    tokens: list[str] = []
+
+    for match in _AUDIT_BOLD_RE.finditer(summary_text or ""):
+        phrase = match.group(1).strip()
+        next_char = (summary_text or "")[match.end() : match.end() + 1]
+        if not (phrase.endswith(":") or next_char == ":"):
+            continue
+        phrase = phrase.rstrip(":").strip()
+        for token in re.findall(r"[A-Za-z]{5,}", phrase):
+            if token.lower() in _AUDIT_IGNORED_WORDS:
+                continue
+            tokens.append(token)
+
+    for token in _AUDIT_ACRONYM_RE.findall(summary_text or ""):
+        if token in _AUDIT_ACRONYM_ALLOWLIST:
+            continue
+        tokens.append(token)
+
+    # Dedupe preserving order
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for token in tokens:
+        key = token.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(token)
+    return ordered[:20]
+
+
+def _extract_summary_title(summary_text: str) -> Optional[str]:
+    """Extract title from summary heading (e.g., '# Paper Title' or '## Paper Title')."""
+    if not summary_text:
+        return None
+    for line in summary_text.split("\n")[:5]:
+        line = line.strip()
+        if line.startswith("#"):
+            # Remove markdown heading markers
+            title = line.lstrip("#").strip()
+            if title:
+                return title
+    return None
+
+
+def _check_boilerplate(text: str) -> list[str]:
+    """Return list of boilerplate phrases found in text."""
+    if not text:
+        return []
+    low = text.lower()
+    found = []
+    for phrase in _AUDIT_BOILERPLATE_PHRASES:
+        if phrase in low:
+            found.append(phrase)
+    return found[:3]  # Limit to avoid noisy output
+
+
+def _audit_paper_dir(paper_dir: Path) -> list[str]:
+    reasons: list[str] = []
+    meta_path = paper_dir / "meta.json"
+    summary_path = paper_dir / "summary.md"
+    equations_path = paper_dir / "equations.md"
+    source_path = paper_dir / "source.tex"
+
+    if not meta_path.exists():
+        return ["missing meta.json"]
+
+    try:
+        meta = json.loads(meta_path.read_text())
+    except Exception:
+        return ["invalid meta.json"]
+
+    title = (meta.get("title") or "").strip()
+    abstract = (meta.get("abstract") or "").strip()
+    if not title:
+        reasons.append("meta.json missing title")
+
+    if not summary_path.exists() or summary_path.stat().st_size == 0:
+        reasons.append("missing summary.md")
+    if not equations_path.exists() or equations_path.stat().st_size == 0:
+        reasons.append("missing equations.md")
+
+    equations_text = _read_text_limited(equations_path, max_chars=120_000) if equations_path.exists() else ""
+    summary_text = _read_text_limited(summary_path, max_chars=160_000) if summary_path.exists() else ""
+
+    # Check for title mismatch in equations.md
+    referenced_title = _extract_referenced_title_from_equations(equations_text)
+    if referenced_title and title:
+        ratio = SequenceMatcher(None, referenced_title.lower(), title.lower()).ratio()
+        if ratio < 0.8:
+            reasons.append(f"equations.md references different title: {referenced_title!r}")
+
+    # Check for title mismatch in summary.md heading
+    summary_title = _extract_summary_title(summary_text)
+    if summary_title and title:
+        ratio = SequenceMatcher(None, summary_title.lower(), title.lower()).ratio()
+        if ratio < 0.6:
+            reasons.append(f"summary.md heading doesn't match paper title: {summary_title!r}")
+
+    # Check for incomplete context markers
+    if "provided latex snippet ends" in equations_text.lower():
+        reasons.append("equations.md indicates incomplete LaTeX context")
+
+    # Check for LLM boilerplate in summary
+    boilerplate_in_summary = _check_boilerplate(summary_text)
+    if boilerplate_in_summary:
+        reasons.append(f"summary.md contains boilerplate: {', '.join(repr(p) for p in boilerplate_in_summary)}")
+
+    # Check for LLM boilerplate in equations
+    boilerplate_in_equations = _check_boilerplate(equations_text)
+    if boilerplate_in_equations:
+        reasons.append(f"equations.md contains boilerplate: {', '.join(repr(p) for p in boilerplate_in_equations)}")
+
+    # Check for ungrounded terms in summary (domain-agnostic: extracts specific terms and checks source)
+    evidence_parts: list[str] = [abstract]
+    if source_path.exists():
+        evidence_parts.append(_read_text_limited(source_path, max_chars=800_000))
+    evidence = "\n".join(evidence_parts)
+    evidence_lower = evidence.lower()
+
+    missing_tokens: list[str] = []
+    for token in _extract_suspicious_tokens_from_summary(summary_text):
+        if token.lower() in evidence_lower:
+            continue
+        missing_tokens.append(token)
+        if len(missing_tokens) >= 5:
+            break
+    if missing_tokens:
+        reasons.append(f"summary.md contains terms not found in source/abstract: {', '.join(missing_tokens)}")
+
+    return reasons
+
+
+def _parse_selection_spec(spec: str, *, max_index: int) -> list[int]:
+    raw = (spec or "").strip().lower()
+    if not raw:
+        return []
+    if raw in {"a", "all", "*"}:
+        return list(range(1, max_index + 1))
+
+    selected: set[int] = set()
+    for part in [p.strip() for p in raw.split(",") if p.strip()]:
+        if "-" in part:
+            lo_s, hi_s = [p.strip() for p in part.split("-", 1)]
+            lo = int(lo_s)
+            hi = int(hi_s)
+            if lo > hi:
+                lo, hi = hi, lo
+            for i in range(lo, hi + 1):
+                selected.add(i)
+        else:
+            selected.add(int(part))
+
+    return sorted(i for i in selected if 1 <= i <= max_index)
+
+
+@cli.command()
+@click.argument("papers", nargs=-1)
+@click.option("--all", "audit_all", is_flag=True, help="Audit all papers (default).")
+@click.option("--limit", type=int, default=None, help="Audit only N random papers.")
+@click.option("--seed", type=int, default=None, help="Random seed for --limit sampling.")
+@click.option(
+    "--interactive/--no-interactive", default=None, help="Prompt to regenerate flagged papers (default: auto)."
+)
+@click.option("--regenerate", "do_regenerate", is_flag=True, help="Regenerate all flagged papers.")
+@click.option("--no-llm", is_flag=True, help="Use non-LLM regeneration when regenerating.")
+@click.option(
+    "--overwrite",
+    "-o",
+    default="summary,equations,tags",
+    help="Overwrite fields when regenerating (all or list: summary,equations,tags,name).",
+)
+def audit(
+    papers: tuple[str, ...],
+    audit_all: bool,
+    limit: Optional[int],
+    seed: Optional[int],
+    interactive: Optional[bool],
+    do_regenerate: bool,
+    no_llm: bool,
+    overwrite: str,
+):
+    """Audit generated summaries/equations for obvious issues and optionally regenerate flagged papers."""
+    index = load_index()
+    overwrite_fields, overwrite_all = _parse_overwrite_option(overwrite)
+
+    if audit_all and papers:
+        raise click.UsageError("Use either paper(s)/arXiv id(s) OR `--all`, not both.")
+
+    if not audit_all and not papers:
+        audit_all = True
+
+    if audit_all:
+        names = sorted(index.keys())
+    else:
+        names = []
+        for paper_ref in papers:
+            name, error = _resolve_paper_name_from_ref(paper_ref, index)
+            if not name:
+                raise click.UsageError(error)
+            names.append(name)
+
+    if not names:
+        click.echo("No papers found.")
+        return
+
+    if limit is not None:
+        if limit <= 0:
+            raise click.UsageError("--limit must be > 0")
+        import random
+
+        rng = random.Random(seed)
+        if limit < len(names):
+            names = rng.sample(names, k=limit)
+
+    flagged: list[tuple[str, list[str]]] = []
+    ok_count = 0
+    for name in names:
+        paper_dir = PAPERS_DIR / name
+        if not paper_dir.exists():
+            flagged.append((name, ["missing paper directory"]))
+            continue
+        reasons = _audit_paper_dir(paper_dir)
+        if reasons:
+            flagged.append((name, reasons))
+        else:
+            ok_count += 1
+
+    click.echo(f"Audited {len(names)} paper(s): {ok_count} OK, {len(flagged)} flagged")
+    if not flagged:
+        return
+
+    click.echo()
+    for name, reasons in flagged:
+        click.secho(f"{name}: FLAGGED", fg="yellow")
+        for reason in reasons:
+            click.echo(f"  - {reason}")
+
+    auto_interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    effective_interactive = interactive if interactive is not None else auto_interactive
+
+    if do_regenerate:
+        selected_names = [name for name, _ in flagged]
+    elif effective_interactive:
+        click.echo()
+        if not click.confirm("Regenerate any flagged papers now?", default=False):
+            return
+        click.echo("Select papers by number (e.g. 1,3-5) or 'all':")
+        for i, (name, _) in enumerate(flagged, 1):
+            click.echo(f"  {i}. {name}")
+        try:
+            spec = click.prompt("Selection", default="all", show_default=True)
+            picks = _parse_selection_spec(spec, max_index=len(flagged))
+        except Exception as exc:
+            raise click.ClickException(f"Invalid selection: {exc}") from exc
+        selected_names = [flagged[i - 1][0] for i in picks]
+    else:
+        return
+
+    if not selected_names:
+        return
+
+    reasons_by_name = {n: r for n, r in flagged}
+    failures = 0
+    click.echo()
+    for i, name in enumerate(selected_names, 1):
+        echo_progress(f"[{i}/{len(selected_names)}] {name}")
+        success, _new_name = _regenerate_one_paper(
+            name,
+            index,
+            no_llm=no_llm,
+            overwrite_fields=overwrite_fields,
+            overwrite_all=overwrite_all,
+            audit_reasons=reasons_by_name.get(name),
+        )
+        if not success:
+            failures += 1
+
+    if failures:
+        raise click.ClickException(f"{failures} paper(s) failed to regenerate.")
 
 
 @cli.command()

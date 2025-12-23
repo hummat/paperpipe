@@ -84,6 +84,11 @@ papi add 2303.13476 2106.10689 2112.03907
 # Override auto-generated name with --name (single paper only):
 papi add https://arxiv.org/abs/1706.03762 --name attention
 
+# Re-adding the same arXiv ID is idempotent (skips). Use --update to refresh, or --duplicate for another copy:
+papi add 1706.03762
+papi add 1706.03762 --update --name attention
+papi add 1706.03762 --duplicate
+
 # List papers
 papi list
 papi list --tag sdf
@@ -182,9 +187,10 @@ papi export neuralangelo neus --level equations --to ./paper-context/
 
 | Command | Description |
 |---------|-------------|
-| `papi add <ids-or-urls...>` | Add one or more papers (auto-generates names; downloads PDF, LaTeX, summary) |
+| `papi add <ids-or-urls...>` | Add one or more papers (idempotent by arXiv ID; use `--update`/`--duplicate` for existing) |
 | `papi regenerate <papers...>` | Regenerate summary/equations/tags (use `--overwrite name` to rename) |
 | `papi regenerate --all` | Regenerate for all papers |
+| `papi audit [papers...]` | Audit generated summaries/equations and optionally regenerate flagged papers |
 | `papi remove <papers...>` | Remove one or more papers (by name or arXiv ID/URL) |
 | `papi list [--tag TAG]` | List papers, optionally filtered by tag |
 | `papi search <query>` | Exact search (with fuzzy fallback if no exact matches) across title/tags/metadata + local summaries/equations (use `--exact` to disable fallback; `--tex` includes LaTeX) |
@@ -290,8 +296,13 @@ paperpipe defaults to `gemini/gemini-3-flash-preview`. Override via:
 export PAPERPIPE_LLM_MODEL=gpt-4o  # or any LiteLLM model identifier
 ```
 
+You can also tune LLM generation:
+```bash
+export PAPERPIPE_LLM_TEMPERATURE=0.3  # default: 0.3
+```
+
 Without LLM support, paperpipe falls back to:
-- Metadata-based summaries
+- Metadata + section headings from LaTeX
 - Regex-based equation extraction
 
 ## PaperQA2 Integration
