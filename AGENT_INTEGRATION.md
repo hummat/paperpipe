@@ -51,6 +51,9 @@ papi search "sdf loss"
 # Export equations/summaries into the repo for a coding session
 papi export neuralangelo neus --level equations --to ./paper-context/
 
+# Or print directly to stdout for pasting into a terminal agent session
+papi show neuralangelo neus --level eq
+
 # Add papers (arXiv) / regenerate; use --no-llm to avoid LLM calls
 papi add 2303.13476                      # name auto-generated
 papi add 2303.13476 --name neuralangelo  # or explicit name

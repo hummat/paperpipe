@@ -9,7 +9,7 @@
 | `papi list --tag TAG` | List papers filtered by tag |
 | `papi tags` | List all tags with counts |
 | `papi search "query"` | Search by title, tag, or content |
-| `papi show <name>` | Show paper details |
+| `papi show <papers...>` | Show paper details or print stored content |
 
 ## Paper Management
 
@@ -43,6 +43,15 @@
 | `papi export <names...> --level summary` | Export summaries only |
 | `papi export <names...> --level equations` | Export equations (best for code verification) |
 | `papi export <names...> --level full` | Export full LaTeX source |
+
+## Show Levels (stdout)
+
+| Command | Description |
+|---------|-------------|
+| `papi show <names...>` | Show metadata (default) |
+| `papi show <names...> --level summary` | Print summaries |
+| `papi show <names...> --level equations` | Print equations (best for agent sessions) |
+| `papi show <names...> --level tex` | Print LaTeX source |
 
 ## PaperQA2 Integration
 

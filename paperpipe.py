@@ -2148,38 +2148,73 @@ def audit(
 @click.option(
     "--level",
     "-l",
-    type=click.Choice(["summary", "equations", "full"]),
+    type=click.Choice(["summary", "equations", "full"], case_sensitive=False),
     default="summary",
     help="What to export",
 )
-@click.option("--to", "dest", type=click.Path(), help="Destination directory")
-def export(papers: tuple, level: str, dest: Optional[str]):
+@click.option(
+    "--to",
+    "dest",
+    type=click.Path(),
+    help="Destination directory",
+)
+def export(papers: tuple[str, ...], level: str, dest: Optional[str]):
     """Export paper context for a coding session."""
+    level_norm = (level or "").strip().lower()
+
+    index = load_index()
+
+    if dest == "-":
+        raise click.UsageError("Use `papi show ... --level ...` to print to stdout; `export` only writes to a directory.")
+
     dest_path = Path(dest) if dest else Path.cwd() / "paper-context"
     dest_path.mkdir(exist_ok=True)
 
-    for paper in papers:
-        paper_dir = PAPERS_DIR / paper
-        if not paper_dir.exists():
-            echo_error(f"Paper not found: {paper}")
+    if level_norm == "summary":
+        src_name = "summary.md"
+        out_suffix = "_summary.md"
+        missing_msg = "No summary found"
+    elif level_norm == "equations":
+        src_name = "equations.md"
+        out_suffix = "_equations.md"
+        missing_msg = "No equations found"
+    else:  # full
+        src_name = "source.tex"
+        out_suffix = ".tex"
+        missing_msg = "No LaTeX source found"
+
+    successes = 0
+    failures = 0
+
+    for paper_ref in papers:
+        name, error = _resolve_paper_name_from_ref(paper_ref, index)
+        if not name:
+            echo_error(error)
+            failures += 1
             continue
 
-        if level == "summary":
-            src = paper_dir / "summary.md"
-            if src.exists():
-                shutil.copy(src, dest_path / f"{paper}_summary.md")
-        elif level == "equations":
-            src = paper_dir / "equations.md"
-            if src.exists():
-                shutil.copy(src, dest_path / f"{paper}_equations.md")
-        else:  # full
-            src = paper_dir / "source.tex"
-            if src.exists():
-                shutil.copy(src, dest_path / f"{paper}.tex")
-            else:
-                echo_error(f"No LaTeX source for {paper}")
+        paper_dir = PAPERS_DIR / name
+        if not paper_dir.exists():
+            echo_error(f"Paper not found: {paper_ref}")
+            failures += 1
+            continue
 
-    echo_success(f"Exported {len(papers)} paper(s) to {dest_path}")
+        src = paper_dir / src_name
+        if not src.exists():
+            echo_error(f"{missing_msg}: {name}")
+            failures += 1
+            continue
+
+        dest_file = dest_path / f"{name}{out_suffix}"
+        shutil.copy(src, dest_file)
+        successes += 1
+
+    if failures == 0:
+        echo_success(f"Exported {successes} paper(s) to {dest_path}")
+        return
+
+    echo_warning(f"Exported {successes} paper(s), {failures} failed (see errors above).")
+    raise SystemExit(1)
 
 
 @cli.command(context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))
@@ -2686,25 +2721,97 @@ def models(
 
 
 @cli.command()
-@click.argument("paper")
-def show(paper: str):
-    """Show details of a paper."""
-    paper_dir = PAPERS_DIR / paper
-    if not paper_dir.exists():
-        echo_error(f"Paper not found: {paper}")
-        return
+@click.argument("papers", nargs=-1, required=True)
+@click.option(
+    "--level",
+    "-l",
+    type=click.Choice(["meta", "summary", "equations", "eq", "tex", "latex", "full"], case_sensitive=False),
+    default="meta",
+    show_default=True,
+    help="What to show (prints to stdout).",
+)
+def show(papers: tuple[str, ...], level: str):
+    """Show paper details or print saved content (summary/equations/LaTeX)."""
+    index = load_index()
 
-    meta_file = paper_dir / "meta.json"
-    if meta_file.exists():
-        meta = json.loads(meta_file.read_text())
-        click.echo(f"Title: {meta['title']}")
-        click.echo(f"arXiv: {meta['arxiv_id']}")
-        click.echo(f"Authors: {', '.join(meta['authors'][:5])}")
-        click.echo(f"Tags: {', '.join(meta.get('tags', []))}")
-        click.echo(f"Has PDF: {meta.get('has_pdf', False)}")
-        click.echo(f"Has LaTeX: {meta.get('has_source', False)}")
-        click.echo(f"\nFiles: {', '.join(f.name for f in paper_dir.iterdir())}")
-        click.echo(f"Location: {paper_dir}")
+    level_norm = (level or "").strip().lower()
+    if level_norm == "eq":
+        level_norm = "equations"
+    if level_norm in {"latex", "tex", "full"}:
+        level_norm = "tex"
+
+    if level_norm == "summary":
+        src_name = "summary.md"
+        missing_msg = "No summary found"
+    elif level_norm == "equations":
+        src_name = "equations.md"
+        missing_msg = "No equations found"
+    elif level_norm == "tex":
+        src_name = "source.tex"
+        missing_msg = "No LaTeX source found"
+    else:
+        src_name = ""
+        missing_msg = ""
+
+    first_output = True
+    for paper_ref in papers:
+        name, error = _resolve_paper_name_from_ref(paper_ref, index)
+        if not name:
+            echo_error(error)
+            continue
+
+        paper_dir = PAPERS_DIR / name
+        if not paper_dir.exists():
+            echo_error(f"Paper not found: {paper_ref}")
+            continue
+
+        if not first_output:
+            click.echo("\n\n---\n")
+        first_output = False
+
+        meta_path = paper_dir / "meta.json"
+        meta: dict = {}
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text())
+            except Exception:
+                meta = {}
+
+        click.echo(f"# {name}")
+
+        if level_norm == "meta":
+            title = (meta.get("title") or "").strip()
+            arxiv_id = (meta.get("arxiv_id") or "").strip()
+            authors = meta.get("authors") or []
+            tags = meta.get("tags") or []
+            has_pdf = bool(meta.get("has_pdf", False))
+            has_source = bool(meta.get("has_source", False))
+
+            if title:
+                click.echo(f"- Title: {title}")
+            if arxiv_id:
+                click.echo(f"- arXiv: {arxiv_id}")
+            if authors:
+                click.echo(f"- Authors: {', '.join([str(a) for a in authors[:8]])}")
+            if tags:
+                click.echo(f"- Tags: {', '.join([str(t) for t in tags])}")
+            click.echo(f"- Has PDF: {has_pdf}")
+            click.echo(f"- Has LaTeX: {has_source}")
+            click.echo(f"- Location: {paper_dir}")
+            try:
+                click.echo(f"- Files: {', '.join(sorted(f.name for f in paper_dir.iterdir()))}")
+            except Exception:
+                pass
+            continue
+
+        src = paper_dir / src_name
+        if not src.exists():
+            echo_error(f"{missing_msg}: {name}")
+            continue
+
+        click.echo(f"- Content: {level_norm}")
+        click.echo()
+        click.echo(src.read_text(errors="ignore").rstrip("\n"))
 
 
 @cli.command()

@@ -183,6 +183,12 @@ If you want paper context inside your repo (useful for agents that can’t acces
 papi export neuralangelo neus --level equations --to ./paper-context/
 ```
 
+If you want to paste context directly into a terminal agent session, print to stdout:
+
+```bash
+papi show neuralangelo neus --level eq
+```
+
 ## Commands
 
 | Command | Description |
@@ -194,7 +200,7 @@ papi export neuralangelo neus --level equations --to ./paper-context/
 | `papi remove <papers...>` | Remove one or more papers (by name or arXiv ID/URL) |
 | `papi list [--tag TAG]` | List papers, optionally filtered by tag |
 | `papi search <query>` | Exact search (with fuzzy fallback if no exact matches) across title/tags/metadata + local summaries/equations (use `--exact` to disable fallback; `--tex` includes LaTeX) |
-| `papi show <name>` | Show paper details |
+| `papi show <papers...>` | Show paper details or print stored content |
 | `papi export <papers...>` | Export context files to a directory |
 | `papi ask <query> [args]` | Query papers via PaperQA2 (supports all pqa args) |
 | `papi models` | Probe which models work with your API keys |
@@ -231,6 +237,20 @@ papi export neuralangelo neus --level equations
 
 # Full LaTeX source (most complete)
 papi export neuralangelo neus --level full
+```
+
+## Show Levels (stdout)
+
+```bash
+# Metadata (default)
+papi show neuralangelo
+
+# Print equations (for piping into agent sessions)
+papi show neuralangelo neus --level eq
+
+# Print summary / LaTeX
+papi show neuralangelo --level summary
+papi show neuralangelo --level tex
 ```
 
 ## Workflow Example

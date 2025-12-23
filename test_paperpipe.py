@@ -738,6 +738,74 @@ class TestCli:
         assert "paper1" in data
         assert data["paper1"]["title"] == "Paper One"
 
+    def test_show_equations_stdout(self, temp_db: Path):
+        paper_dir = temp_db / "papers" / "test-paper"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "meta.json").write_text(
+            json.dumps(
+                {
+                    "arxiv_id": "2301.00001",
+                    "title": "Test Paper Title",
+                    "authors": ["Alice"],
+                    "tags": ["ml"],
+                }
+            )
+        )
+        (paper_dir / "equations.md").write_text("# Key Equations\n\n```latex\nE=mc^2\n```\n")
+        paperpipe.save_index({"test-paper": {"arxiv_id": "2301.00001", "title": "Test Paper Title", "tags": ["ml"]}})
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["show", "test-paper", "--level", "eq"])
+        assert result.exit_code == 0
+        assert "# test-paper" in result.output
+        assert "Content: equations" in result.output
+        assert "E=mc^2" in result.output
+
+    def test_show_multiple_papers_separated(self, temp_db: Path):
+        for name, arxiv_id in [("paper-a", "2301.00001"), ("paper-b", "2301.00002")]:
+            paper_dir = temp_db / "papers" / name
+            paper_dir.mkdir(parents=True)
+            (paper_dir / "meta.json").write_text(json.dumps({"arxiv_id": arxiv_id, "title": f"Title {name}"}))
+            (paper_dir / "equations.md").write_text(f"# Eq\n\n{name}\n")
+
+        paperpipe.save_index(
+            {
+                "paper-a": {"arxiv_id": "2301.00001", "title": "Title paper-a", "tags": []},
+                "paper-b": {"arxiv_id": "2301.00002", "title": "Title paper-b", "tags": []},
+            }
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["show", "paper-a", "paper-b", "--level", "equations"])
+        assert result.exit_code == 0
+        assert "# paper-a" in result.output
+        assert "# paper-b" in result.output
+        assert "\n---\n" in result.output
+
+    def test_export_to_dash_is_rejected(self, temp_db: Path):
+        paper_dir = temp_db / "papers" / "test-paper"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "equations.md").write_text("x\n")
+        paperpipe.save_index({"test-paper": {"arxiv_id": "2301.00001", "title": "T", "tags": []}})
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["export", "test-paper", "--level", "equations", "--to", "-"])
+        assert result.exit_code != 0
+        assert "export` only writes to a directory" in result.output.lower()
+
+    def test_export_copies_equations_to_directory(self, temp_db: Path, tmp_path: Path):
+        paper_dir = temp_db / "papers" / "test-paper"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "equations.md").write_text("eq\n")
+        paperpipe.save_index({"test-paper": {"arxiv_id": "2301.00001", "title": "T", "tags": []}})
+
+        runner = CliRunner()
+        out_dir = tmp_path / "paper-context"
+        result = runner.invoke(paperpipe.cli, ["export", "test-paper", "--level", "equations", "--to", str(out_dir)])
+        assert result.exit_code == 0
+        assert (out_dir / "test-paper_equations.md").exists()
+        assert (out_dir / "test-paper_equations.md").read_text() == "eq\n"
+
 
 class TestFetchArxivMetadata:
     """Unit tests for fetch_arxiv_metadata with mocked arxiv library."""

@@ -85,7 +85,7 @@ Runtime data is stored outside the repo in `~/.paperpipe/` (PDFs, LaTeX, summari
 
 ## Agent-Specific Instructions
 
-- When Python code or tooling (`pyproject.toml`, CI) is touched, run `uv run ruff check .`, `uv run pyright`,
-  and `uv run pytest -m "not integration"` (or note what you skipped).
+- When Python code or tooling (`pyproject.toml`, CI) is touched, run `uv run ruff format .` (first),
+  then `uv run ruff check .`, `uv run pyright`, and `uv run pytest -m "not integration"` (or note what you skipped).
 - When changing CLI surface area (commands/options/output) or user-facing behavior (env vars, database layout),
   update `README.md`, `AGENT_INTEGRATION.md`, `skill/SKILL.md`, and `skill/commands.md` as needed.
