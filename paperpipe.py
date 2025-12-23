@@ -2165,7 +2165,9 @@ def export(papers: tuple[str, ...], level: str, dest: Optional[str]):
     index = load_index()
 
     if dest == "-":
-        raise click.UsageError("Use `papi show ... --level ...` to print to stdout; `export` only writes to a directory.")
+        raise click.UsageError(
+            "Use `papi show ... --level ...` to print to stdout; `export` only writes to a directory."
+        )
 
     dest_path = Path(dest) if dest else Path.cwd() / "paper-context"
     dest_path.mkdir(exist_ok=True)
@@ -2884,6 +2886,73 @@ def tags():
 def path():
     """Print the paper database path."""
     click.echo(PAPER_DB)
+
+
+@cli.command("install-skill")
+@click.option(
+    "--claude", "targets", flag_value="claude", multiple=True, help="Install for Claude Code (~/.claude/skills)"
+)
+@click.option("--codex", "targets", flag_value="codex", multiple=True, help="Install for Codex CLI (~/.codex/skills)")
+@click.option("--force", is_flag=True, help="Overwrite existing skill installation")
+def install_skill(targets: tuple[str, ...], force: bool):
+    """Install the papi skill for Claude Code and/or Codex CLI.
+
+    Creates a symlink from the skill directory to the appropriate location.
+
+    \b
+    Examples:
+        papi install-skill              # Install for both Claude Code and Codex CLI
+        papi install-skill --claude     # Install for Claude Code only
+        papi install-skill --codex      # Install for Codex CLI only
+        papi install-skill --force      # Overwrite existing installation
+    """
+    # Find the skill directory relative to this module
+    module_dir = Path(__file__).parent
+    skill_source = module_dir / "skill"
+
+    if not skill_source.exists():
+        echo_error(f"Skill directory not found at {skill_source}")
+        echo_error("This may happen if paperpipe was installed without the skill files.")
+        raise SystemExit(1)
+
+    # Default to both if no specific target given
+    install_targets = set(targets) if targets else {"claude", "codex"}
+
+    target_dirs = {
+        "claude": Path.home() / ".claude" / "skills",
+        "codex": Path.home() / ".codex" / "skills",
+    }
+
+    installed = []
+    for target in sorted(install_targets):
+        skills_dir = target_dirs[target]
+        dest = skills_dir / "papi"
+
+        # Check if already installed
+        if dest.exists() or dest.is_symlink():
+            if not force:
+                if dest.is_symlink() and dest.resolve() == skill_source.resolve():
+                    echo(f"{target}: already installed at {dest}")
+                    continue
+                echo_warning(f"{target}: {dest} already exists (use --force to overwrite)")
+                continue
+            # Remove existing
+            if dest.is_symlink() or dest.is_file():
+                dest.unlink()
+            elif dest.is_dir():
+                shutil.rmtree(dest)
+
+        # Create parent directory if needed
+        skills_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create symlink
+        dest.symlink_to(skill_source)
+        installed.append((target, dest))
+        echo_success(f"{target}: installed at {dest} -> {skill_source}")
+
+    if installed:
+        echo()
+        echo("Restart your CLI to activate the skill.")
 
 
 if __name__ == "__main__":

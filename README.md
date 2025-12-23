@@ -126,33 +126,21 @@ Default database root is `~/.paperpipe/` (override with `PAPER_DB_PATH`; see `pa
 > **Tip:** See [AGENT_INTEGRATION.md](AGENT_INTEGRATION.md) for a ready-to-use snippet you can append to your
 > repo's agent instructions file (for example `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`).
 
-### Claude Code Skill
+### Claude Code / Codex CLI Skill
 
-For [Claude Code](https://github.com/anthropics/claude-code) users, paperpipe includes a skill that
-automatically activates when you ask about papers, verification, or equations.
-
-**Install globally** (available in all projects):
+paperpipe includes a skill that automatically activates when you ask about papers,
+verification, or equations. Install it for Claude Code and/or Codex CLI:
 
 ```bash
-# Symlink the skill to your global skills directory
-mkdir -p ~/.claude/skills
-ln -s /path/to/paperpipe/skill ~/.claude/skills/papi
+# Install for both Claude Code and Codex CLI
+papi install-skill
+
+# Or install for a specific CLI only
+papi install-skill --claude
+papi install-skill --codex
 ```
 
-### Codex CLI Skill
-
-Codex CLI reads skills from `$CODEX_HOME/skills` (defaults to `~/.codex/skills`).
-
-**Install globally** (available in all projects):
-
-```bash
-mkdir -p ~/.codex/skills
-ln -s /path/to/paperpipe/skill ~/.codex/skills/papi
-```
-
-Restart Codex CLI after installing a new skill.
-
-The skill lives in `skill/` and can also be copied directly to other projects.
+Restart your CLI after installing the skill.
 
 Most coding-agent CLIs can read local files directly. The best workflow is:
 
@@ -206,6 +194,7 @@ papi show neuralangelo neus --level eq
 | `papi models` | Probe which models work with your API keys |
 | `papi tags` | List all tags with counts |
 | `papi path` | Print database location |
+| `papi install-skill` | Install the papi skill for Claude Code / Codex CLI |
 | `--quiet/-q` | Suppress progress messages |
 | `--verbose/-v` | Enable debug output |
 

@@ -76,10 +76,10 @@ Documentation = "https://github.com/hummat/paperpipe#readme"
 Repository = "https://github.com/hummat/paperpipe"
 
 [tool.hatch.build.targets.wheel]
-only-include = ["paperpipe.py", "README.md", "LICENSE", "AGENT_INTEGRATION.md"]
+only-include = ["paperpipe.py", "README.md", "LICENSE", "AGENT_INTEGRATION.md", "skill"]
 
 [tool.hatch.build.targets.sdist]
-only-include = ["paperpipe.py", "pyproject.toml", "README.md", "LICENSE", "AGENT_INTEGRATION.md"]
+only-include = ["paperpipe.py", "pyproject.toml", "README.md", "LICENSE", "AGENT_INTEGRATION.md", "skill"]
 
 [tool.pytest.ini_options]
 addopts = "--cov=paperpipe --cov-report=term-missing -m 'not integration'"
