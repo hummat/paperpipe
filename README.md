@@ -15,30 +15,7 @@ A unified paper database for coding agents + [PaperQA2](https://github.com/Futur
 
 ## Installation
 
-### With uv (recommended)
-
-```bash
-# Basic installation
-uv pip install paperpipe
-
-# With LLM support (for better summaries/equations)
-uv pip install 'paperpipe[llm]'
-
-# With PaperQA2 integration
-uv pip install 'paperpipe[paperqa]'
-
-# Everything
-uv pip install 'paperpipe[all]'
-```
-
-Or install from source:
-```bash
-git clone https://github.com/hummat/paperpipe
-cd paperpipe
-uv pip install -e ".[all]"
-```
-
-### With pip
+Install from PyPI (use `uv pip` if you use uv; otherwise use `pip`):
 
 ```bash
 # Basic installation
@@ -57,21 +34,11 @@ pip install 'paperpipe[paperqa-media]'
 pip install 'paperpipe[all]'
 ```
 
-Or install from source:
+Install from source:
 ```bash
 git clone https://github.com/hummat/paperpipe
 cd paperpipe
-pip install -e ".[all]"
-```
-
-## Development
-
-```bash
-# Install app + dev tooling (ruff, pyright, pytest)
-make deps
-
-# Format + lint + typecheck + unit tests
-make check
+pip install -e ".[all]"  # or: uv pip install -e ".[all]"
 ```
 
 ## Release (GitHub + PyPI)
@@ -224,10 +191,6 @@ papi show neuralangelo neus --level eq
 | `--quiet/-q` | Suppress progress messages |
 | `--verbose/-v` | Enable debug output |
 
-## Roadmap
-
-Planned features are tracked in `ROADMAP.md`.
-
 ## Tagging
 
 Papers are automatically tagged from three sources:
@@ -356,9 +319,7 @@ chosen provider (PaperQA2 uses LiteLLM identifiers for `--llm` and `--embedding`
 For better summaries and equation extraction, install with LLM support:
 
 ```bash
-pip install 'paperpipe[llm]'
-# or with uv:
-uv pip install 'paperpipe[llm]'
+pip install 'paperpipe[llm]'  # or: uv pip install 'paperpipe[llm]'
 ```
 
 This installs LiteLLM, which supports many providers. Set the appropriate API key:
@@ -448,6 +409,16 @@ You can ingest local PDFs as first-class entries:
 ```bash
 papi add --pdf /path/to/paper.pdf --title "Some Paper"
 papi add --pdf ./paper.pdf --title "Some Paper" --name some-paper --tags my-project
+```
+
+## Development
+
+```bash
+# Install app + dev tooling (ruff, pyright, pytest)
+make deps
+
+# Format + lint + typecheck + unit tests
+make check
 ```
 
 ## Credits
