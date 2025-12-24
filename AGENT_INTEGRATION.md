@@ -26,6 +26,8 @@ Per-paper files live at: `<paper_db>/papers/{paper}/`
 - `equations.md` — key equations + explanations (best for implementation verification)
 - `source.tex` — full LaTeX (if available)
 - `paper.pdf` — PDF (used by PaperQA2)
+- `<paper_db>/.pqa_papers/` — PaperQA2 input staging (PDF-only; created on first `papi ask`)
+- `<paper_db>/.pqa_index/` — PaperQA2 index cache (created on first `papi ask`; override via `PAPERPIPE_PQA_INDEX_DIR`)
 
 ### When to Use What
 

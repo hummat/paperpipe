@@ -87,5 +87,7 @@ Runtime data is stored outside the repo in `~/.paperpipe/` (PDFs, LaTeX, summari
 
 - When Python code or tooling (`pyproject.toml`, CI) is touched, run `uv run ruff format .` (first),
   then `uv run ruff check .`, `uv run pyright`, and `uv run pytest -m "not integration"` (or note what you skipped).
+- Prefer running `ruff`, `pyright`, and `pytest` directly (not via `uv`) when they’re available in the currently active
+  pyenv/venv; fall back to `uv run ...` when they aren’t.
 - When changing CLI surface area (commands/options/output) or user-facing behavior (env vars, database layout),
   update `README.md`, `AGENT_INTEGRATION.md`, `skill/SKILL.md`, and `skill/commands.md` as needed.

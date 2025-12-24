@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "paperpipe"
-version = "0.1.0"
+version = "0.1.1"
 description = "Unified paper database for coding agents + PaperQA2"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -52,7 +52,7 @@ all = [
 dev = [
     "build>=1.0.0",
     "pyright>=1.1.385",
-    "pytest>=7.0.0",
+    "pytest-cov>=7.0.0",
     "ruff>=0.1.0",
     "twine>=5.0.0",
 ]

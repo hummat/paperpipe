@@ -382,6 +382,61 @@ def _pillow_available() -> bool:
     return importlib.util.find_spec("PIL") is not None
 
 
+def _refresh_pqa_pdf_staging_dir(*, staging_dir: Path) -> int:
+    """
+    Create/update a flat directory containing only PDFs (one per paper) for PaperQA2 indexing.
+
+    PaperQA2's default file filter includes Markdown. Since paperpipe stores generated `summary.md`
+    and `equations.md` alongside each `paper.pdf`, we stage just PDFs to avoid indexing the generated
+    artifacts.
+
+    Returns the number of PDFs linked/copied into the staging directory.
+    """
+    staging_dir.mkdir(parents=True, exist_ok=True)
+
+    # Clear prior contents (best-effort) so removed papers don't linger in the index.
+    try:
+        for child in staging_dir.iterdir():
+            try:
+                if child.is_dir():
+                    shutil.rmtree(child)
+                else:
+                    child.unlink()
+            except Exception:
+                debug("Failed cleaning pqa staging entry: %s", child)
+    except Exception:
+        debug("Failed listing pqa staging dir: %s", staging_dir)
+
+    count = 0
+    if not PAPERS_DIR.exists():
+        return 0
+
+    for paper_dir in PAPERS_DIR.iterdir():
+        if not paper_dir.is_dir():
+            continue
+        pdf_src = paper_dir / "paper.pdf"
+        if not pdf_src.exists():
+            continue
+
+        pdf_dest = staging_dir / f"{paper_dir.name}.pdf"
+        try:
+            if pdf_dest.exists() or pdf_dest.is_symlink():
+                pdf_dest.unlink()
+            # Use relative symlinks so the DB can be moved/copied as a unit between machines.
+            rel_target = os.path.relpath(pdf_src, start=pdf_dest.parent)
+            pdf_dest.symlink_to(rel_target)
+        except Exception:
+            try:
+                shutil.copy2(pdf_src, pdf_dest)
+            except Exception:
+                debug("Failed staging PDF for PaperQA2: %s", pdf_src)
+                continue
+
+        count += 1
+
+    return count
+
+
 @dataclass(frozen=True)
 class _ModelProbeResult:
     kind: str
@@ -917,10 +972,10 @@ Abstract: {abstract[:800]}"""
 
 
 @click.group()
-@click.version_option(version="0.1.0")
+@click.version_option(version="0.1.1")
 @click.option("--quiet", "-q", is_flag=True, help="Suppress progress messages.")
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug output.")
-def cli(quiet: bool, verbose: bool):
+def cli(quiet: bool = False, verbose: bool = False):
     """paperpipe: Unified paper database for coding agents + PaperQA2."""
     set_quiet(quiet)
     if verbose:
@@ -2221,7 +2276,6 @@ def export(papers: tuple[str, ...], level: str, dest: Optional[str]):
 
 @cli.command(context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))
 @click.argument("query")
-@click.option("--papers", "-p", help="Limit to specific papers (comma-separated)")
 @click.option(
     "--llm",
     default=DEFAULT_LLM_MODEL,
@@ -2235,7 +2289,7 @@ def export(papers: tuple[str, ...], level: str, dest: Optional[str]):
     help="Embedding model to use",
 )
 @click.pass_context
-def ask(ctx, query: str, papers: Optional[str], llm: Optional[str], embedding: Optional[str]):
+def ask(ctx, query: str, llm: Optional[str], embedding: Optional[str]):
     """
     Query papers using PaperQA2 (if installed).
 
@@ -2291,6 +2345,32 @@ def ask(ctx, query: str, papers: Optional[str], llm: Optional[str], embedding: O
     if embedding_for_pqa:
         cmd.extend(["--embedding", embedding_for_pqa])
 
+    # Persist the PaperQA index under the paper DB by default so repeated queries reuse embeddings.
+    # Users can override via explicit pqa args.
+    has_index_dir_override = any(
+        arg == "--agent.index.index_directory"
+        or arg == "--agent.index.index-directory"
+        or arg.startswith(("--agent.index.index_directory=", "--agent.index.index-directory="))
+        for arg in ctx.args
+    )
+    if not has_index_dir_override:
+        index_dir = Path(os.environ.get("PAPERPIPE_PQA_INDEX_DIR") or (PAPER_DB / ".pqa_index")).expanduser()
+        index_dir.mkdir(parents=True, exist_ok=True)
+        cmd.extend(["--agent.index.index_directory", str(index_dir)])
+
+    # PaperQA2 currently indexes Markdown by default; avoid indexing paperpipe's generated `summary.md`
+    # / `equations.md` by staging only PDFs in a separate directory.
+    has_paper_dir_override = any(
+        arg == "--agent.index.paper_directory"
+        or arg == "--agent.index.paper-directory"
+        or arg.startswith(("--agent.index.paper_directory=", "--agent.index.paper-directory="))
+        for arg in ctx.args
+    )
+    if not has_paper_dir_override:
+        staging_dir = (PAPER_DB / ".pqa_papers").expanduser()
+        _refresh_pqa_pdf_staging_dir(staging_dir=staging_dir)
+        cmd.extend(["--agent.index.paper_directory", str(staging_dir)])
+
     summary_llm_default = os.environ.get("PAPERPIPE_PQA_SUMMARY_LLM") or llm_for_pqa
     enrichment_llm_default = os.environ.get("PAPERPIPE_PQA_ENRICHMENT_LLM") or llm_for_pqa
 
@@ -2315,24 +2395,7 @@ def ask(ctx, query: str, papers: Optional[str], llm: Optional[str], embedding: O
 
     cmd.extend(["ask", query])
 
-    # Run PaperQA2 on the papers directory
-    if papers:
-        # Create temp dir with just the specified papers' PDFs
-        with tempfile.TemporaryDirectory() as tmpdir:
-            for p in papers.split(","):
-                pdf = PAPERS_DIR / p.strip() / "paper.pdf"
-                if pdf.exists():
-                    shutil.copy(pdf, Path(tmpdir) / f"{p.strip()}.pdf")
-            subprocess.run(cmd, cwd=tmpdir)
-    else:
-        # Create a directory of all PDFs for pqa
-        with tempfile.TemporaryDirectory() as tmpdir:
-            for paper_dir in PAPERS_DIR.iterdir():
-                if paper_dir.is_dir():
-                    pdf = paper_dir / "paper.pdf"
-                    if pdf.exists():
-                        shutil.copy(pdf, Path(tmpdir) / f"{paper_dir.name}.pdf")
-            subprocess.run(cmd, cwd=tmpdir)
+    subprocess.run(cmd, cwd=PAPERS_DIR)
 
 
 @cli.command()

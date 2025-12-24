@@ -1578,15 +1578,15 @@ class TestAskCommand:
         monkeypatch.setattr(paperpipe, "_pillow_available", lambda: False)
 
         # Mock subprocess.run
-        mock_run_calls = []
+        mock_run_calls: list[tuple[list[str], dict]] = []
 
         def mock_run(cmd, **kwargs):
-            mock_run_calls.append(cmd)
+            mock_run_calls.append((cmd, kwargs))
             return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="Answer")
 
         monkeypatch.setattr(subprocess, "run", mock_run)
 
-        # Add a dummy paper so the loop over PAPERS_DIR works
+        # Add a dummy paper PDF so PaperQA has something to index.
         (temp_db / "papers" / "test-paper").mkdir(parents=True)
         (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
 
@@ -1610,12 +1610,16 @@ class TestAskCommand:
         assert result.exit_code == 0
 
         # Verify pqa was called with correct args
-        pqa_call = next(c for c in mock_run_calls if c[0] == "pqa")
+        pqa_call, pqa_kwargs = next(c for c in mock_run_calls if c[0][0] == "pqa")
         assert "pqa" in pqa_call
         assert "--settings" in pqa_call
         assert "default" in pqa_call
         assert "--parsing.multimodal" in pqa_call
         assert "OFF" in pqa_call
+        assert "--agent.index.index_directory" in pqa_call
+        assert str(temp_db / ".pqa_index") in pqa_call
+        assert "--agent.index.paper_directory" in pqa_call
+        assert str(temp_db / ".pqa_papers") in pqa_call
         assert "ask" in pqa_call
         assert "query" in pqa_call
         assert "--llm" in pqa_call
@@ -1632,15 +1636,17 @@ class TestAskCommand:
         assert "0.7" in pqa_call
         assert "--verbosity" in pqa_call
         assert "2" in pqa_call
+        assert pqa_kwargs.get("cwd") == paperpipe.PAPERS_DIR
+        assert (temp_db / ".pqa_papers" / "test-paper.pdf").exists()
 
     def test_ask_does_not_override_user_settings(self, temp_db: Path, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
         monkeypatch.setattr(paperpipe, "_pillow_available", lambda: False)
 
-        mock_run_calls = []
+        mock_run_calls: list[tuple[list[str], dict]] = []
 
         def mock_run(cmd, **kwargs):
-            mock_run_calls.append(cmd)
+            mock_run_calls.append((cmd, kwargs))
             return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="Answer")
 
         monkeypatch.setattr(subprocess, "run", mock_run)
@@ -1653,7 +1659,7 @@ class TestAskCommand:
 
         assert result.exit_code == 0
 
-        pqa_call = next(c for c in mock_run_calls if c[0] == "pqa")
+        pqa_call, _pqa_kwargs = next(c for c in mock_run_calls if c[0][0] == "pqa")
         assert "--settings" not in pqa_call
         assert "default" not in pqa_call
         assert "-s" in pqa_call
@@ -1663,10 +1669,10 @@ class TestAskCommand:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
         monkeypatch.setattr(paperpipe, "_pillow_available", lambda: False)
 
-        mock_run_calls = []
+        mock_run_calls: list[tuple[list[str], dict]] = []
 
         def mock_run(cmd, **kwargs):
-            mock_run_calls.append(cmd)
+            mock_run_calls.append((cmd, kwargs))
             return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="Answer")
 
         monkeypatch.setattr(subprocess, "run", mock_run)
@@ -1682,7 +1688,7 @@ class TestAskCommand:
 
         assert result.exit_code == 0
 
-        pqa_call = next(c for c in mock_run_calls if c[0] == "pqa")
+        pqa_call, _pqa_kwargs = next(c for c in mock_run_calls if c[0][0] == "pqa")
         assert "--parsing.multimodal" in pqa_call
         assert "ON_WITHOUT_ENRICHMENT" in pqa_call
         assert "OFF" not in pqa_call
@@ -1691,10 +1697,10 @@ class TestAskCommand:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
         monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
 
-        mock_run_calls = []
+        mock_run_calls: list[tuple[list[str], dict]] = []
 
         def mock_run(cmd, **kwargs):
-            mock_run_calls.append(cmd)
+            mock_run_calls.append((cmd, kwargs))
             return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="Answer")
 
         monkeypatch.setattr(subprocess, "run", mock_run)
@@ -1707,8 +1713,65 @@ class TestAskCommand:
 
         assert result.exit_code == 0
 
-        pqa_call = next(c for c in mock_run_calls if c[0] == "pqa")
+        pqa_call, _pqa_kwargs = next(c for c in mock_run_calls if c[0][0] == "pqa")
         assert "--parsing.multimodal" not in pqa_call
+
+    def test_ask_does_not_override_user_index_directory(self, temp_db: Path, monkeypatch):
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
+
+        mock_run_calls: list[tuple[list[str], dict]] = []
+
+        def mock_run(cmd, **kwargs):
+            mock_run_calls.append((cmd, kwargs))
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="Answer")
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+        (temp_db / "papers" / "test-paper").mkdir(parents=True)
+        (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
+
+        runner = CliRunner()
+        result = runner.invoke(
+            paperpipe.cli,
+            ["ask", "query", "--agent.index.index_directory", "/custom/index"],
+        )
+
+        assert result.exit_code == 0
+
+        pqa_call, _pqa_kwargs = next(c for c in mock_run_calls if c[0][0] == "pqa")
+        assert "--agent.index.index_directory" in pqa_call
+        # User-provided value should be preserved; paperpipe should not append its default.
+        assert "/custom/index" in pqa_call
+        assert str(temp_db / ".pqa_index") not in pqa_call
+
+    def test_ask_does_not_override_user_paper_directory(self, temp_db: Path, monkeypatch):
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
+
+        mock_run_calls: list[tuple[list[str], dict]] = []
+
+        def mock_run(cmd, **kwargs):
+            mock_run_calls.append((cmd, kwargs))
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="Answer")
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+        (temp_db / "papers" / "test-paper").mkdir(parents=True)
+        (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
+
+        runner = CliRunner()
+        result = runner.invoke(
+            paperpipe.cli,
+            ["ask", "query", "--agent.index.paper_directory", "/custom/papers"],
+        )
+
+        assert result.exit_code == 0
+
+        pqa_call, _pqa_kwargs = next(c for c in mock_run_calls if c[0][0] == "pqa")
+        assert "--agent.index.paper_directory" in pqa_call
+        assert "/custom/papers" in pqa_call
+        assert str(temp_db / ".pqa_papers") not in pqa_call
 
 
 class TestModelsCommand:

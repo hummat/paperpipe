@@ -103,6 +103,16 @@ papi export neuralangelo neus --level equations --to ./paper-context/
 papi ask "What are the key differences between NeuS and Neuralangelo loss functions?"
 ```
 
+`papi ask` runs PaperQA2 (`pqa`) directly on your local paper database. The first query may take a while
+while PaperQA2 builds its index; subsequent queries reuse it (stored at `<paper_db>/.pqa_index/` by default).
+Override the index location by passing `--agent.index.index_directory ...` through to `pqa`, or with
+`PAPERPIPE_PQA_INDEX_DIR`.
+By default, `papi ask` indexes **PDFs only** (it avoids indexing paperpipe’s generated `summary.md` / `equations.md`
+Markdown files by staging PDFs under `<paper_db>/.pqa_papers/`). If you previously ran `papi ask` and PaperQA2
+indexed Markdown, delete `<paper_db>/.pqa_index/` once to force a clean rebuild.
+You can also override the models PaperQA2 uses for summarization/enrichment with
+`PAPERPIPE_PQA_SUMMARY_LLM` and `PAPERPIPE_PQA_ENRICHMENT_LLM` (or pass `--summary_llm` / `--parsing.enrichment_llm`).
+
 ## Database Structure
 
 Default database root is `~/.paperpipe/` (override with `PAPER_DB_PATH`; see `papi path`).
@@ -110,6 +120,8 @@ Default database root is `~/.paperpipe/` (override with `PAPER_DB_PATH`; see `pa
 ```
 <paper_db>/
 ├── index.json                    # Quick lookup index
+├── .pqa_papers/                  # PaperQA2 input staging (PDF-only; created on first `papi ask`)
+├── .pqa_index/                   # PaperQA2 index cache (created on first `papi ask`)
 ├── papers/
 │   ├── neuralangelo/
 │   │   ├── meta.json             # Metadata + tags
@@ -320,6 +332,7 @@ When both paperpipe and [PaperQA2](https://github.com/Future-House/paper-qa) are
 
 ```bash
 # paperpipe stores PDFs in <paper_db>/papers/*/paper.pdf (see `papi path`)
+# `papi ask` stages PDFs under <paper_db>/.pqa_papers/ so PaperQA2 doesn’t index generated Markdown.
 # paperpipe ask routes to PaperQA2 for complex queries
 
 papi ask "What optimizer settings do these papers recommend?"
