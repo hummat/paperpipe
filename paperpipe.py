@@ -33,7 +33,7 @@ import click
 # TOML config support (stdlib on 3.11+, tomli on 3.10)
 try:
     import tomllib  # type: ignore[attr-defined]
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     import tomli as tomllib  # type: ignore[import-not-found]  # noqa: F401
 
 # Simple debug logger (only used with --verbose)
@@ -144,7 +144,7 @@ def load_config() -> dict[str, Any]:
         if not isinstance(cfg, dict):
             cfg = {}
     except Exception as e:
-        debug("Failed to parse config.toml (%s): %s", str(path), str(e))
+        debug("Failed to parse config.toml (%s) [%s]: %s", str(path), type(e).__name__, str(e))
         cfg = {}
 
     _CONFIG_CACHE = (path, mtime, cfg)
@@ -326,6 +326,12 @@ def _slugify_title(title: str, *, max_len: int = 60) -> str:
 
 
 def _parse_authors(authors: Optional[str]) -> list[str]:
+    """Parse authors from a CLI string.
+
+    Conventions:
+    - Prefer `;` as the separator (avoids splitting on commas inside "Last, First").
+    - If no `;` is present, accept comma-separated values, but preserve a single "Last, First" author.
+    """
     raw = (authors or "").strip()
     if not raw:
         return []
@@ -340,6 +346,15 @@ def _parse_authors(authors: Optional[str]) -> list[str]:
 
     parts = [a.strip() for a in raw.split(",")]
     return [a for a in parts if a]
+
+
+def _looks_like_pdf(path: Path) -> bool:
+    """Return True if the file likely is a PDF (best-effort magic header check)."""
+    try:
+        head = path.read_bytes()[:1024]
+    except Exception:
+        return False
+    return b"%PDF-" in head
 
 
 def _generate_local_pdf_name(meta: dict, *, use_llm: bool) -> str:
@@ -1448,6 +1463,9 @@ def _add_local_pdf(
     """Add a local PDF as a first-class paper entry."""
     if not pdf.exists() or not pdf.is_file():
         echo_error(f"PDF not found: {pdf}")
+        return False, None
+    if not _looks_like_pdf(pdf):
+        echo_error(f"File does not look like a PDF (missing %PDF- header): {pdf}")
         return False, None
 
     title = (title or "").strip()

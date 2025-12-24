@@ -27,7 +27,7 @@ Goal: let users fix missing/low-quality assets after initial ingest.
   - `--regen equations|summary|tags|all`
   - `--backup` (keep `paper.pdf.bak`, `source.tex.bak`, etc.)
 
-### 3) `papi bibtex` (export)
+### 2) `papi bibtex` (export)
 
 Goal: easy citation export that integrates with LaTeX workflows.
 
@@ -39,7 +39,7 @@ Goal: easy citation export that integrates with LaTeX workflows.
   - `--to library.bib` (write/append)
   - `--key-style name|doi|arxiv|slug`
 
-### 4) `papi import-bib` (bulk ingest)
+### 3) `papi import-bib` (bulk ingest)
 
 Goal: bootstrap a library from an existing BibTeX file.
 

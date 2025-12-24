@@ -68,11 +68,19 @@ pip install -e ".[all]"
 
 ```bash
 # Install app + dev tooling (ruff, pyright, pytest)
-uv sync --group dev
+make deps
 
-uv run ruff check .
-uv run pyright
-uv run pytest -m "not integration"
+# Format + lint + typecheck + unit tests
+make check
+```
+
+## Release (GitHub + PyPI)
+
+This repo publishes to PyPI when a GitHub Release is published (see `.github/workflows/publish.yml`).
+
+```bash
+# Bump versions first (pyproject.toml + paperpipe.py), then:
+make release VERSION=0.2.0
 ```
 
 ## Quick Start

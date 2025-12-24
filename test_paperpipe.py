@@ -1271,6 +1271,18 @@ class TestAddCommand:
         assert result.exit_code != 0
         assert "--title" in result.output
 
+    def test_add_local_pdf_rejects_non_pdf(self, temp_db: Path):
+        bad_path = temp_db / "not-a-pdf.txt"
+        bad_path.write_text("hello")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            paperpipe.cli,
+            ["add", "--pdf", str(bad_path), "--title", "Some Paper", "--no-llm"],
+        )
+        assert result.exit_code != 0
+        assert "does not look like a pdf" in result.output.lower()
+
     def test_add_local_pdf_rejects_invalid_year(self, temp_db: Path):
         pdf_path = temp_db / "local.pdf"
         pdf_path.write_bytes(b"%PDF-1.4\n%local\n")
