@@ -1187,6 +1187,118 @@ class TestDownloadSource:
 class TestAddCommand:
     """Unit tests for the add command with mocked network calls."""
 
+    def test_generate_auto_name_local_meta_uses_slug(self):
+        # Local/meta-only papers should fall back to a stable title slug, not "unknown".
+        meta = {"title": "Some Paper", "authors": [], "abstract": ""}
+        assert paperpipe.generate_auto_name(meta, set(), use_llm=False) == "some-paper"
+
+    def test_parse_authors_keeps_last_first_single_author(self):
+        assert paperpipe._parse_authors("Smith, John") == ["Smith, John"]
+
+    def test_add_rejects_unsafe_name_without_network(self, temp_db: Path, monkeypatch):
+        monkeypatch.setattr(paperpipe, "fetch_arxiv_metadata", lambda _: (_ for _ in ()).throw(AssertionError()))
+
+        runner = CliRunner()
+        result = runner.invoke(
+            paperpipe.cli,
+            ["add", "1706.03762", "--name", "../bad", "--no-llm"],
+        )
+
+        assert result.exit_code != 0
+        assert "invalid paper name" in result.output.lower()
+
+    def test_add_local_pdf_ingests_and_indexes(self, temp_db: Path):
+        pdf_path = temp_db / "local.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n%local\n")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            paperpipe.cli,
+            [
+                "add",
+                "--pdf",
+                str(pdf_path),
+                "--title",
+                "Some Paper",
+                "--authors",
+                "A; B",
+                "--abstract",
+                "Short abstract.",
+                "--year",
+                "2024",
+                "--venue",
+                "NeurIPS",
+                "--doi",
+                "10.1234/example",
+                "--url",
+                "https://example.com/paper",
+                "--tags",
+                "ml,vision",
+                "--no-llm",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+
+        name = "some-paper"
+        paper_dir = temp_db / "papers" / name
+        assert (paper_dir / "paper.pdf").read_bytes() == pdf_path.read_bytes()
+        assert (paper_dir / "summary.md").exists()
+        assert (paper_dir / "equations.md").exists()
+
+        meta = json.loads((paper_dir / "meta.json").read_text())
+        assert meta["arxiv_id"] is None
+        assert meta["title"] == "Some Paper"
+        assert meta["authors"] == ["A", "B"]
+        assert meta["abstract"] == "Short abstract."
+        assert meta["year"] == 2024
+        assert meta["venue"] == "NeurIPS"
+        assert meta["doi"] == "10.1234/example"
+        assert meta["url"] == "https://example.com/paper"
+        assert meta["has_pdf"] is True
+        assert meta["has_source"] is False
+
+        index = paperpipe.load_index()
+        assert name in index
+        assert index[name]["arxiv_id"] is None
+
+    def test_add_local_pdf_requires_title(self, temp_db: Path):
+        pdf_path = temp_db / "local.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n%local\n")
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["add", "--pdf", str(pdf_path), "--no-llm"])
+        assert result.exit_code != 0
+        assert "--title" in result.output
+
+    def test_add_local_pdf_rejects_invalid_year(self, temp_db: Path):
+        pdf_path = temp_db / "local.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n%local\n")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            paperpipe.cli,
+            ["add", "--pdf", str(pdf_path), "--title", "Some Paper", "--year", "12", "--no-llm"],
+        )
+        assert result.exit_code != 0
+        assert "invalid --year" in result.output.lower()
+
+    def test_add_local_pdf_name_conflict_fails_fast(self, temp_db: Path):
+        # Existing entry with auto-name "some-paper"
+        (temp_db / "papers" / "some-paper").mkdir(parents=True)
+        paperpipe.save_index({"some-paper": {"arxiv_id": None, "title": "Old", "tags": [], "added": "x"}})
+
+        pdf_path = temp_db / "local.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n%local\n")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            paperpipe.cli,
+            ["add", "--pdf", str(pdf_path), "--title", "Some Paper", "--no-llm"],
+        )
+        assert result.exit_code != 0
+        assert "name conflict" in result.output.lower()
+
     def test_add_existing_paper_is_idempotent_by_arxiv_id(self, temp_db: Path, monkeypatch):
         """Test that re-adding the same arXiv paper is a no-op (unit test, no network)."""
         # Pre-create the paper directory to simulate existing paper
@@ -1386,6 +1498,41 @@ class TestAddMultiplePapers:
         )
         assert result.exit_code != 0
         assert "--name can only be used when adding a single paper" in result.output
+
+
+class TestInstallSkillCommand:
+    def test_install_skill_creates_symlink_for_codex(self, temp_db: Path, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["install-skill", "--codex"])
+        assert result.exit_code == 0, result.output
+
+        dest = tmp_path / ".codex" / "skills" / "papi"
+        assert dest.is_symlink()
+        assert dest.resolve() == (Path(__file__).parent / "skill").resolve()
+
+    def test_install_skill_existing_dest_requires_force(self, temp_db: Path, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        dest = tmp_path / ".codex" / "skills" / "papi"
+        dest.mkdir(parents=True)
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["install-skill", "--codex"])
+        assert result.exit_code == 0
+        assert "use --force" in result.output.lower()
+
+    def test_install_skill_force_overwrites_existing_file(self, temp_db: Path, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        dest = tmp_path / ".codex" / "skills" / "papi"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text("not a symlink")
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["install-skill", "--codex", "--force"])
+        assert result.exit_code == 0, result.output
+
+        assert dest.is_symlink()
 
 
 class TestRemoveMultiplePapers:

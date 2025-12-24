@@ -12,37 +12,7 @@ It is not a commitment to specific timelines.
 
 ## Planned (next)
 
-### 1) Non-arXiv ingestion via `papi add --pdf`
-
-Goal: treat local PDFs as first-class papers (list/search/export/ask) without requiring arXiv.
-
-- **Command**
-  - `papi add --pdf /path/to/paper.pdf --title "Some Paper" [options]`
-- **Required**
-  - `--pdf PATH`
-  - `--title TEXT` (used to auto-generate a stable paper name, consistent with arXiv adds)
-- **Name generation**
-  - Default: slugify title (optionally LLM-shortened, like arXiv auto-names)
-  - Override: `--name NAME`
-- **Optional metadata**
-  - `--authors "A; B; C"` (or a repeatable flag; TBD)
-  - `--year YYYY`
-  - `--venue TEXT`
-  - `--doi DOI`
-  - `--url URL`
-  - `--tags t1,t2`
-- **Storage**
-  - Create/ensure `<paper_db>/papers/<name>/`
-  - Copy PDF to `paper.pdf`
-  - Write `meta.json` with `arxiv_id: null` and `has_pdf: true`
-  - Create `notes.md` if missing
-  - Best-effort `summary.md` / `equations.md`:
-    - If a LaTeX source is not available, equations extraction may be minimal.
-- **Constraints / non-goals (MVP)**
-  - No DOI/OpenReview/Crossref/Semantic Scholar lookup in the MVP.
-  - Name conflicts must fail fast with a clear error.
-
-### 2) `papi attach` (upgrade/attach files)
+### 1) `papi attach` (upgrade/attach files)
 
 Goal: let users fix missing/low-quality assets after initial ingest.
 
@@ -100,3 +70,9 @@ Goal: bootstrap a library from an existing BibTeX file.
 - Semantic embedding search with a dedicated local vector index
 - Watch/notifications for new papers
 - Zotero/Mendeley integration
+
+## Completed
+
+### Non-arXiv ingestion via `papi add --pdf` (MVP)
+
+Implemented (see `README.md` → “Non-arXiv Papers” for usage and examples).

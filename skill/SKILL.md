@@ -77,6 +77,7 @@ papi add https://arxiv.org/abs/2303.13476     # URLs work too
 papi add 2303.13476 --name my-custom-name     # override auto-name
 papi add 2303.13476 --update                  # refresh existing paper in-place
 papi add 2303.13476 --duplicate               # add a second copy (-2/-3 suffix)
+papi add --pdf /path/to/paper.pdf --title "Some Paper" --tags my-project  # local PDF ingest
 ```
 
 ## See Also

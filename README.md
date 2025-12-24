@@ -89,6 +89,9 @@ papi add 1706.03762
 papi add 1706.03762 --update --name attention
 papi add 1706.03762 --duplicate
 
+# Add local PDFs (non-arXiv)
+papi add --pdf /path/to/paper.pdf --title "Some Paper" --tags my-project
+
 # List papers
 papi list
 papi list --tag sdf
@@ -194,7 +197,8 @@ papi show neuralangelo neus --level eq
 
 | Command | Description |
 |---------|-------------|
-| `papi add <ids-or-urls...>` | Add one or more papers (idempotent by arXiv ID; use `--update`/`--duplicate` for existing) |
+| `papi add <ids-or-urls...>` | Add one or more arXiv papers (idempotent by arXiv ID; use `--update`/`--duplicate` for existing) |
+| `papi add --pdf PATH --title TEXT` | Add a local PDF as a first-class paper |
 | `papi regenerate <papers...>` | Regenerate summary/equations/tags (use `--overwrite name` to rename) |
 | `papi regenerate --all` | Regenerate for all papers |
 | `papi audit [papers...]` | Audit generated summaries/equations and optionally regenerate flagged papers |
@@ -431,18 +435,11 @@ papi models --verbose
 
 ## Non-arXiv Papers
 
-PaperPipe currently focuses on arXiv ingestion (`papi add <arxiv-id-or-url>`). For papers not on arXiv you can still
-store files for agents to read, but they will not show up in `papi list/search` unless you also add index/meta
-entries.
+You can ingest local PDFs as first-class entries:
 
 ```bash
-PAPER_DB="$(papi path)"
-mkdir -p "$PAPER_DB/papers/my-paper"
-cp /path/to/paper.pdf "$PAPER_DB/papers/my-paper/paper.pdf"
-# Create:
-# - "$PAPER_DB/papers/my-paper/summary.md"
-# - "$PAPER_DB/papers/my-paper/equations.md"
-# (optional) "$PAPER_DB/papers/my-paper/source.tex"
+papi add --pdf /path/to/paper.pdf --title "Some Paper"
+papi add --pdf ./paper.pdf --title "Some Paper" --name some-paper --tags my-project
 ```
 
 ## Credits

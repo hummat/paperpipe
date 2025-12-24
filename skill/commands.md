@@ -17,6 +17,7 @@
 | Command | Description |
 |---------|-------------|
 | `papi add <arxiv-id-or-url>` | Add paper (name auto-generated; idempotent by arXiv ID) |
+| `papi add --pdf PATH --title TEXT` | Add local PDF as a first-class paper |
 | `papi add <arxiv> --name <n> --tags t1,t2` | Add with explicit name/tags |
 | `papi add <arxiv> --update [--name <n>]` | Refresh an existing paper in-place |
 | `papi add <arxiv> --duplicate` | Add another copy even if it already exists |

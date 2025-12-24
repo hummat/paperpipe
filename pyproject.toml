@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "paperpipe"
-version = "0.1.1"
+version = "0.2.0"
 description = "Unified paper database for coding agents + PaperQA2"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -83,7 +83,7 @@ only-include = ["paperpipe.py", "README.md", "ROADMAP.md", "LICENSE", "AGENT_INT
 only-include = ["paperpipe.py", "pyproject.toml", "README.md", "ROADMAP.md", "LICENSE", "AGENT_INTEGRATION.md", "skill"]
 
 [tool.pytest.ini_options]
-addopts = "--cov=paperpipe --cov-report=term-missing -m 'not integration'"
+addopts = "--cov=paperpipe --cov-report=term-missing --cov-fail-under=75 -m 'not integration'"
 markers = [
     "integration: marks tests as integration tests (may require network/external services)",
     "slow: marks tests as slow",

@@ -66,6 +66,7 @@ papi add 2303.13476                      # name auto-generated
 papi add 2303.13476 --name neuralangelo  # or explicit name
 papi add 2303.13476 --update             # refresh existing paper in-place
 papi add 2303.13476 --duplicate          # add a second copy (-2/-3 suffix)
+papi add --pdf ./paper.pdf --title "Some Paper" --tags my-project  # local PDF ingest
 papi regenerate neuralangelo --no-llm
 
 # Audit generated content for obvious issues (and optionally regenerate flagged papers)

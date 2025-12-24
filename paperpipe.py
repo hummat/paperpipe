@@ -304,6 +304,61 @@ def normalize_tags(tags: list[str]) -> list[str]:
     return sorted(set(out))
 
 
+def _format_title_short(title: str, *, max_len: int = 60) -> str:
+    t = (title or "").strip()
+    if len(t) <= max_len:
+        return t
+    return t[:max_len].rstrip() + "..."
+
+
+def _slugify_title(title: str, *, max_len: int = 60) -> str:
+    """Best-effort slug for local PDF ingestion (stable, human-readable)."""
+    raw = (title or "").strip().lower()
+    raw = raw.replace("’", "'")
+    raw = re.sub(r"[\"']", "", raw)
+    slug = re.sub(r"[^a-z0-9]+", "-", raw)
+    slug = re.sub(r"-{2,}", "-", slug).strip("-")
+    if not slug:
+        return "paper"
+    if len(slug) > max_len:
+        slug = slug[:max_len].rstrip("-")
+    return slug or "paper"
+
+
+def _parse_authors(authors: Optional[str]) -> list[str]:
+    raw = (authors or "").strip()
+    if not raw:
+        return []
+    # Prefer semicolons, since commas can appear in "Last, First" names.
+    if ";" in raw:
+        parts = [a.strip() for a in raw.split(";")]
+        return [a for a in parts if a]
+
+    # If there's exactly one comma, assume a single "Last, First" author.
+    if raw.count(",") == 1 and ", " in raw:
+        return [raw]
+
+    parts = [a.strip() for a in raw.split(",")]
+    return [a for a in parts if a]
+
+
+def _generate_local_pdf_name(meta: dict, *, use_llm: bool) -> str:
+    """Generate a base name for local PDF ingestion (no collision suffixing)."""
+    title = str(meta.get("title") or "").strip()
+    if not title:
+        return "paper"
+
+    name = _extract_name_from_title(title)
+    if not name and use_llm and _litellm_available():
+        name = _generate_name_with_llm(meta)
+    if not name:
+        name = _slugify_title(title)
+
+    name = (name or "").strip().lower()
+    name = re.sub(r"[^a-z0-9-]", "", name).strip("-")
+    return name or "paper"
+
+
 def ensure_notes_file(paper_dir: Path, meta: dict) -> Path:
     notes_path = paper_dir / "notes.md"
     if notes_path.exists():
@@ -970,9 +1025,14 @@ def generate_auto_name(meta: dict, existing_names: set[str], use_llm: bool = Tru
     if not name and use_llm and _litellm_available():
         name = _generate_name_with_llm(meta)
 
-    # Fallback to arxiv ID
+    # Fallback:
+    # - arXiv ingest: arxiv ID
+    # - local/meta-only ingest: slugified title
     if not name:
-        name = arxiv_id.replace("/", "_").replace(".", "_")
+        if arxiv_id and arxiv_id != "unknown":
+            name = str(arxiv_id).replace("/", "_").replace(".", "_")
+        else:
+            name = _slugify_title(str(title))
 
     # Handle collisions
     base_name = name
@@ -1188,7 +1248,7 @@ Abstract: {abstract[:800]}"""
 
 
 @click.group()
-@click.version_option(version="0.1.1")
+@click.version_option(version="0.2.0")
 @click.option("--quiet", "-q", is_flag=True, help="Suppress progress messages.")
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug output.")
 def cli(quiet: bool = False, verbose: bool = False):
@@ -1261,6 +1321,9 @@ def _add_single_paper(
         return success, paper_name, "updated" if success else "failed"
 
     if name:
+        if not _is_safe_paper_name(name):
+            echo_error(f"Invalid paper name: {name!r}")
+            return False, None, "failed"
         paper_dir = PAPERS_DIR / name
         if paper_dir.exists():
             echo_error(f"Paper '{name}' already exists. Use --name to specify a different name.")
@@ -1361,11 +1424,113 @@ def _add_single_paper(
     base_to_names[base].sort()
 
     echo_success(f"Added: {name}")
-    click.echo(f"  Title: {meta['title'][:60]}...")
+    click.echo(f"  Title: {_format_title_short(str(meta['title']))}")
     click.echo(f"  Tags: {', '.join(all_tags)}")
     click.echo(f"  Location: {paper_dir}")
 
     return True, name, "added"
+
+
+def _add_local_pdf(
+    *,
+    pdf: Path,
+    title: str,
+    name: Optional[str],
+    tags: Optional[str],
+    authors: Optional[str],
+    abstract: Optional[str],
+    year: Optional[int],
+    venue: Optional[str],
+    doi: Optional[str],
+    url: Optional[str],
+    no_llm: bool,
+) -> tuple[bool, Optional[str]]:
+    """Add a local PDF as a first-class paper entry."""
+    if not pdf.exists() or not pdf.is_file():
+        echo_error(f"PDF not found: {pdf}")
+        return False, None
+
+    title = (title or "").strip()
+    if not title:
+        echo_error("Missing title for local PDF ingestion.")
+        return False, None
+
+    abstract_text = (abstract or "").strip()
+    if not abstract_text:
+        abstract_text = "No abstract available (local PDF)."
+
+    if year is not None and not (1000 <= year <= 3000):
+        echo_error("Invalid --year (expected YYYY)")
+        return False, None
+
+    index = load_index()
+    existing_names = set(index.keys())
+
+    if name:
+        if not _is_safe_paper_name(name):
+            echo_error(f"Invalid paper name: {name!r}")
+            return False, None
+        if name in existing_names or (PAPERS_DIR / name).exists():
+            echo_error(f"Paper '{name}' already exists. Use --name to specify a different name.")
+            return False, None
+    else:
+        candidate = _generate_local_pdf_name({"title": title, "abstract": ""}, use_llm=not no_llm)
+        if candidate in existing_names or (PAPERS_DIR / candidate).exists():
+            echo_error(
+                f"Name conflict for local PDF '{title}': '{candidate}' already exists. "
+                "Re-run with --name to pick a different name."
+            )
+            return False, None
+        name = candidate
+        echo_progress(f"  Auto-generated name: {name}")
+
+    if not name:
+        echo_error("Failed to determine a paper name (use --name to set one explicitly).")
+        return False, None
+    paper_dir = PAPERS_DIR / name
+    paper_dir.mkdir(parents=True)
+
+    echo_progress("  Copying PDF...")
+    dest_pdf = paper_dir / "paper.pdf"
+    shutil.copy2(pdf, dest_pdf)
+
+    user_tags = [t.strip() for t in (tags or "").split(",") if t.strip()]
+    all_tags = normalize_tags(user_tags)
+
+    meta: dict[str, Any] = {
+        "arxiv_id": None,
+        "title": title,
+        "authors": _parse_authors(authors),
+        "abstract": abstract_text,
+        "categories": [],
+        "tags": all_tags,
+        "published": None,
+        "year": year,
+        "venue": (venue or "").strip() or None,
+        "doi": (doi or "").strip() or None,
+        "url": (url or "").strip() or None,
+        "added": datetime.now().isoformat(),
+        "has_source": False,
+        "has_pdf": dest_pdf.exists(),
+    }
+
+    # Best-effort artifacts (no PDF parsing in MVP)
+    summary = generate_simple_summary(meta, None)
+    equations = "No LaTeX source available."
+
+    (paper_dir / "summary.md").write_text(summary)
+    (paper_dir / "equations.md").write_text(equations)
+    (paper_dir / "meta.json").write_text(json.dumps(meta, indent=2))
+    ensure_notes_file(paper_dir, meta)
+
+    index[name] = {"arxiv_id": None, "title": title, "tags": all_tags, "added": meta["added"]}
+    save_index(index)
+
+    echo_success(f"Added: {name}")
+    click.echo(f"  Title: {_format_title_short(title)}")
+    click.echo(f"  Tags: {', '.join(all_tags)}")
+    click.echo(f"  Location: {paper_dir}")
+    return True, name
 
 
 def _update_existing_paper(
@@ -1463,14 +1628,25 @@ def _update_existing_paper(
         base_to_names[base].sort()
 
     echo_success(f"Updated: {name}")
-    click.echo(f"  Title: {str(meta.get('title', ''))[:60]}...")
+    click.echo(f"  Title: {_format_title_short(str(meta.get('title', '')))}")
     click.echo(f"  Tags: {', '.join(all_tags)}")
     click.echo(f"  Location: {paper_dir}")
     return True, name
 
 
 @cli.command()
-@click.argument("arxiv_ids", nargs=-1, required=True)
+@click.argument("arxiv_ids", nargs=-1, required=False)
+@click.option("--pdf", type=click.Path(exists=True, dir_okay=False, path_type=Path), help="Ingest a local PDF.")
+@click.option("--title", help="Title for local PDF ingest (required with --pdf).")
+@click.option(
+    "--authors",
+    help="Authors for local PDF ingest (use ';' as separator; supports single 'Last, First' without splitting).",
+)
+@click.option("--abstract", help="Abstract for local PDF ingest.")
+@click.option("--year", type=int, help="Year for local PDF ingest (YYYY).")
+@click.option("--venue", help="Venue/journal for local PDF ingest.")
+@click.option("--doi", help="DOI for local PDF ingest.")
+@click.option("--url", help="URL for the paper (publisher/project page).")
 @click.option("--name", "-n", help="Short name for the paper (only valid with single paper)")
 @click.option("--tags", "-t", help="Additional comma-separated tags (applied to all papers)")
 @click.option("--no-llm", is_flag=True, help="Skip LLM-based generation")
@@ -1484,6 +1660,14 @@ def _update_existing_paper(
 )
 def add(
     arxiv_ids: tuple[str, ...],
+    pdf: Optional[Path],
+    title: Optional[str],
+    authors: Optional[str],
+    abstract: Optional[str],
+    year: Optional[int],
+    venue: Optional[str],
+    doi: Optional[str],
+    url: Optional[str],
     name: Optional[str],
     tags: Optional[str],
     no_llm: bool,
@@ -1491,6 +1675,33 @@ def add(
     update: bool,
 ):
     """Add one or more papers to the database."""
+    if pdf:
+        if arxiv_ids:
+            raise click.UsageError("Use either arXiv IDs/URLs OR `--pdf`, not both.")
+        if not title or not title.strip():
+            raise click.UsageError("Missing required option: --title (required with --pdf).")
+        if duplicate or update:
+            raise click.UsageError("--duplicate/--update are only supported for arXiv ingestion.")
+        success, _ = _add_local_pdf(
+            pdf=pdf,
+            title=title,
+            name=name,
+            tags=tags,
+            authors=authors,
+            abstract=abstract,
+            year=year,
+            venue=venue,
+            doi=doi,
+            url=url,
+            no_llm=no_llm,
+        )
+        if not success:
+            raise SystemExit(1)
+        return
+
+    if not arxiv_ids:
+        raise click.UsageError("Missing arXiv ID/URL argument(s) (or pass `--pdf`).")
+
     if name and len(arxiv_ids) > 1:
         raise click.UsageError("--name can only be used when adding a single paper.")
     if duplicate and update:
