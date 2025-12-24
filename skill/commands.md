@@ -10,6 +10,7 @@
 | `papi tags` | List all tags with counts |
 | `papi search "query"` | Search by title, tag, or content |
 | `papi show <papers...>` | Show paper details or print stored content |
+| `papi notes <paper>` | Open or print per-paper implementation notes |
 
 ## Paper Management
 
@@ -53,6 +54,13 @@
 | `papi show <names...> --level equations` | Print equations (best for agent sessions) |
 | `papi show <names...> --level tex` | Print LaTeX source |
 
+## Notes
+
+| Command | Description |
+|---------|-------------|
+| `papi notes <name>` | Open `{paper}/notes.md` in `$EDITOR` (creates if missing) |
+| `papi notes <name> --print` | Print notes to stdout |
+
 ## PaperQA2 Integration
 
 | Command | Description |
@@ -79,6 +87,7 @@ Located at `<paper_db>/papers/{name}/`:
 | `source.tex` | Full LaTeX source | Exact definitions |
 | `meta.json` | Metadata + tags | Programmatic access |
 | `paper.pdf` | PDF file | PaperQA2 RAG |
+| `notes.md` | Your implementation notes | Gotchas/snippets |
 
 ## LLM Configuration (Optional)
 

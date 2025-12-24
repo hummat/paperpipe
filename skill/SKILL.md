@@ -54,6 +54,7 @@ export PAPERPIPE_LLM_TEMPERATURE=0.3
 1. Identify which paper(s) the code references (check comments, function names, README)
 2. Read `{db}/papers/{name}/equations.md` — compare symbol-by-symbol with implementation
 3. If ambiguous, check `{db}/papers/{name}/source.tex` for exact definitions
+4. Check `{db}/papers/{name}/notes.md` for local implementation gotchas (or run `papi notes {name}`)
 
 ### 4. For implementation guidance
 

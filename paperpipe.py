@@ -25,10 +25,16 @@ from datetime import datetime
 from difflib import SequenceMatcher, get_close_matches
 from io import StringIO
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import urlparse
 
 import click
+
+# TOML config support (stdlib on 3.11+, tomli on 3.10)
+try:
+    import tomllib  # type: ignore[attr-defined]
+except Exception:  # pragma: no cover
+    import tomli as tomllib  # type: ignore[import-not-found]  # noqa: F401
 
 # Simple debug logger (only used with --verbose)
 _debug_logger = logging.getLogger("paperpipe")
@@ -98,23 +104,233 @@ PAPER_DB = _paper_db_root()
 PAPERS_DIR = PAPER_DB / "papers"
 INDEX_FILE = PAPER_DB / "index.json"
 
-# LLM defaults (overridable via env vars) - uses LiteLLM model identifiers
-DEFAULT_LLM_MODEL = os.environ.get("PAPERPIPE_LLM_MODEL", "gemini/gemini-3-flash-preview")
-DEFAULT_EMBEDDING_MODEL = os.environ.get("PAPERPIPE_EMBEDDING_MODEL", "gemini/gemini-embedding-001")
+DEFAULT_LLM_MODEL_FALLBACK = "gemini/gemini-3-flash-preview"
+DEFAULT_EMBEDDING_MODEL_FALLBACK = "gemini/gemini-embedding-001"
+DEFAULT_LLM_TEMPERATURE_FALLBACK = 0.3
+
+_CONFIG_CACHE: Optional[tuple[Path, Optional[float], dict[str, Any]]] = None
 
 
-def _env_float(name: str, default: float) -> float:
-    raw = os.environ.get(name)
-    if raw is None or not raw.strip():
-        return default
+def _config_path() -> Path:
+    configured = os.environ.get("PAPERPIPE_CONFIG_PATH")
+    if configured:
+        return Path(configured).expanduser()
+    return (PAPER_DB / "config.toml").expanduser()
+
+
+def load_config() -> dict[str, Any]:
+    """Load config from <paper_db>/config.toml (or PAPERPIPE_CONFIG_PATH).
+
+    Returns an empty dict if missing or invalid.
+    """
+    path = _config_path()
     try:
-        value = float(raw.strip())
-    except Exception:
-        return default
-    return value
+        mtime = path.stat().st_mtime
+    except FileNotFoundError:
+        mtime = None
+
+    global _CONFIG_CACHE
+    if _CONFIG_CACHE and _CONFIG_CACHE[0] == path and _CONFIG_CACHE[1] == mtime:
+        return _CONFIG_CACHE[2]
+
+    if mtime is None:
+        cfg: dict[str, Any] = {}
+        _CONFIG_CACHE = (path, None, cfg)
+        return cfg
+
+    try:
+        raw = path.read_bytes()
+        cfg = tomllib.loads(raw.decode("utf-8"))
+        if not isinstance(cfg, dict):
+            cfg = {}
+    except Exception as e:
+        debug("Failed to parse config.toml (%s): %s", str(path), str(e))
+        cfg = {}
+
+    _CONFIG_CACHE = (path, mtime, cfg)
+    return cfg
 
 
-DEFAULT_LLM_TEMPERATURE = _env_float("PAPERPIPE_LLM_TEMPERATURE", 0.3)
+def _config_get(cfg: dict[str, Any], keys: tuple[str, ...], default: Any = None) -> Any:
+    cur: Any = cfg
+    for key in keys:
+        if not isinstance(cur, dict):
+            return default
+        if key not in cur:
+            return default
+        cur = cur[key]
+    return cur
+
+
+def _setting_str(*, env: str, keys: tuple[str, ...], default: str) -> str:
+    val = os.environ.get(env)
+    if val is not None and val.strip():
+        return val.strip()
+    cfg = load_config()
+    raw = _config_get(cfg, keys)
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return default
+
+
+def _setting_float(*, env: str, keys: tuple[str, ...], default: float) -> float:
+    val = os.environ.get(env)
+    if val is not None and val.strip():
+        try:
+            return float(val.strip())
+        except Exception:
+            return default
+    cfg = load_config()
+    raw = _config_get(cfg, keys)
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    if isinstance(raw, str) and raw.strip():
+        try:
+            return float(raw.strip())
+        except Exception:
+            return default
+    return default
+
+
+def default_llm_model() -> str:
+    return _setting_str(env="PAPERPIPE_LLM_MODEL", keys=("llm", "model"), default=DEFAULT_LLM_MODEL_FALLBACK)
+
+
+def default_embedding_model() -> str:
+    return _setting_str(
+        env="PAPERPIPE_EMBEDDING_MODEL",
+        keys=("embedding", "model"),
+        default=DEFAULT_EMBEDDING_MODEL_FALLBACK,
+    )
+
+
+def default_llm_temperature() -> float:
+    return _setting_float(
+        env="PAPERPIPE_LLM_TEMPERATURE",
+        keys=("llm", "temperature"),
+        default=DEFAULT_LLM_TEMPERATURE_FALLBACK,
+    )
+
+
+def default_pqa_settings_name() -> str:
+    cfg = load_config()
+    raw = _config_get(cfg, ("paperqa", "settings"))
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return "default"
+
+
+def default_pqa_llm_model() -> str:
+    cfg = load_config()
+    raw = _config_get(cfg, ("paperqa", "llm"))
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return default_llm_model()
+
+
+def default_pqa_embedding_model() -> str:
+    cfg = load_config()
+    raw = _config_get(cfg, ("paperqa", "embedding"))
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return default_embedding_model()
+
+
+def default_pqa_index_dir() -> Path:
+    configured = os.environ.get("PAPERPIPE_PQA_INDEX_DIR")
+    if configured and configured.strip():
+        return Path(configured).expanduser()
+    cfg = load_config()
+    raw = _config_get(cfg, ("paperqa", "index_dir"))
+    if isinstance(raw, str) and raw.strip():
+        return Path(raw.strip()).expanduser()
+    return (PAPER_DB / ".pqa_index").expanduser()
+
+
+def default_pqa_summary_llm(fallback: Optional[str]) -> Optional[str]:
+    configured = os.environ.get("PAPERPIPE_PQA_SUMMARY_LLM")
+    if configured and configured.strip():
+        return configured.strip()
+    cfg = load_config()
+    raw = _config_get(cfg, ("paperqa", "summary_llm"))
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return fallback
+
+
+def default_pqa_enrichment_llm(fallback: Optional[str]) -> Optional[str]:
+    configured = os.environ.get("PAPERPIPE_PQA_ENRICHMENT_LLM")
+    if configured and configured.strip():
+        return configured.strip()
+    cfg = load_config()
+    raw = _config_get(cfg, ("paperqa", "enrichment_llm"))
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return fallback
+
+
+def tag_aliases() -> dict[str, str]:
+    cfg = load_config()
+    raw = _config_get(cfg, ("tags", "aliases"))
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for k, v in raw.items():
+        if not isinstance(k, str) or not isinstance(v, str):
+            continue
+        k_norm = k.strip().lower()
+        v_norm = v.strip().lower()
+        if k_norm and v_norm:
+            out[k_norm] = v_norm
+    return out
+
+
+def normalize_tag(tag: str) -> str:
+    t = tag.strip().lower().replace(" ", "-")
+    t = re.sub(r"[^a-z0-9-]", "", t).strip("-")
+    if not t:
+        return ""
+    aliases = tag_aliases()
+    return aliases.get(t, t)
+
+
+def normalize_tags(tags: list[str]) -> list[str]:
+    out: list[str] = []
+    for t in tags:
+        n = normalize_tag(t)
+        if n:
+            out.append(n)
+    # Preserve a stable order for UX and deterministic tests
+    return sorted(set(out))
+
+
+def ensure_notes_file(paper_dir: Path, meta: dict) -> Path:
+    notes_path = paper_dir / "notes.md"
+    if notes_path.exists():
+        return notes_path
+
+    title = str(meta.get("title") or "").strip()
+    header = f"# Notes{': ' + title if title else ''}".rstrip()
+    body = "\n".join(
+        [
+            header,
+            "",
+            "## Implementation Notes",
+            "",
+            "- Gotchas / pitfalls:",
+            "- Hyperparameters / defaults:",
+            "- Mapping to equations (e.g., eq. 7):",
+            "",
+            "## Code Snippets",
+            "",
+            "```",
+            "# paste snippets here",
+            "```",
+            "",
+        ]
+    )
+    notes_path.write_text(body)
+    return notes_path
 
 
 # arXiv category mappings for human-readable tags
@@ -476,14 +692,14 @@ def save_index(index: dict):
 
 def categories_to_tags(categories: list[str]) -> list[str]:
     """Convert arXiv categories to human-readable tags."""
-    tags = []
+    tags: list[str] = []
     for cat in categories:
         if cat in CATEGORY_TAGS:
             tags.append(CATEGORY_TAGS[cat])
         else:
             # Use the category itself as a tag (e.g., cs.CV -> cs-cv)
             tags.append(cat.lower().replace(".", "-"))
-    return list(set(tags))  # Deduplicate
+    return normalize_tags(tags)
 
 
 _VALID_REGENERATE_FIELDS = {"all", "summary", "equations", "tags", "name"}
@@ -854,14 +1070,14 @@ def _run_llm(prompt: str, *, purpose: str) -> Optional[str]:
         echo_error("LiteLLM not installed. Install with: pip install litellm")
         return None
 
-    model = DEFAULT_LLM_MODEL
+    model = default_llm_model()
     echo_progress(f"  LLM ({model}): generating {purpose}...")
 
     try:
         response = litellm.completion(
             model=model,
             messages=[{"role": "user", "content": prompt}],
-            temperature=DEFAULT_LLM_TEMPERATURE,
+            temperature=default_llm_temperature(),
         )
         out = response.choices[0].message.content  # type: ignore[union-attr]
         if out:
@@ -1108,7 +1324,7 @@ def _add_single_paper(
         summary, equations, llm_tags = generate_llm_content(paper_dir, meta, tex_content)
 
     # Combine all tags
-    all_tags = list(set(auto_tags + user_tags + llm_tags))
+    all_tags = normalize_tags([*auto_tags, *user_tags, *llm_tags])
 
     # 7. Save files
     (paper_dir / "summary.md").write_text(summary)
@@ -1128,6 +1344,7 @@ def _add_single_paper(
         "has_pdf": pdf_path.exists(),
     }
     (paper_dir / "meta.json").write_text(json.dumps(paper_meta, indent=2))
+    ensure_notes_file(paper_dir, paper_meta)
 
     # 8. Update index
     index[name] = {
@@ -1211,7 +1428,7 @@ def _update_existing_paper(
     else:
         summary, equations, llm_tags = generate_llm_content(paper_dir, meta, tex_content)
 
-    all_tags = list(set([*auto_tags, *prior_tags, *user_tags, *llm_tags]))
+    all_tags = normalize_tags([*auto_tags, *prior_tags, *user_tags, *llm_tags])
 
     (paper_dir / "summary.md").write_text(summary)
     (paper_dir / "equations.md").write_text(equations)
@@ -1229,6 +1446,7 @@ def _update_existing_paper(
         "has_pdf": pdf_path.exists(),
     }
     meta_path.write_text(json.dumps(paper_meta, indent=2))
+    ensure_notes_file(paper_dir, paper_meta)
 
     index[name] = {
         "arxiv_id": meta.get("arxiv_id"),
@@ -1451,11 +1669,13 @@ def _regenerate_one_paper(
         equations_path.write_text(equations)
 
     if llm_tags:
-        meta["tags"] = list(set(meta.get("tags", []) + llm_tags))
+        meta["tags"] = normalize_tags([*meta.get("tags", []), *llm_tags])
         updated_meta = True
 
     if updated_meta:
         meta_path.write_text(json.dumps(meta, indent=2))
+
+    ensure_notes_file(paper_dir, meta)
 
     # Update index
     current_name = new_name if new_name else name
@@ -1621,7 +1841,7 @@ def regenerate(
         if set_tags:
             new_tags = [t.strip().lower() for t in set_tags.split(",") if t.strip()]
             existing_tags = meta.get("tags", [])
-            all_tags = list(set(existing_tags + new_tags))
+            all_tags = normalize_tags([*existing_tags, *new_tags])
             meta["tags"] = all_tags
             meta_path.write_text(json.dumps(meta, indent=2))
             index[name]["tags"] = all_tags
@@ -2278,14 +2498,14 @@ def export(papers: tuple[str, ...], level: str, dest: Optional[str]):
 @click.argument("query")
 @click.option(
     "--llm",
-    default=DEFAULT_LLM_MODEL,
-    show_default=True,
+    default=None,
+    show_default=False,
     help=("LLM model to use (PaperQA/LiteLLM id; e.g., gpt-5.2, claude-sonnet-4-5, gemini/gemini-2.5-flash)"),
 )
 @click.option(
     "--embedding",
-    default=DEFAULT_EMBEDDING_MODEL,
-    show_default=True,
+    default=None,
+    show_default=False,
     help="Embedding model to use",
 )
 @click.pass_context
@@ -2313,7 +2533,7 @@ def ask(ctx, query: str, llm: Optional[str], embedding: Optional[str]):
     # (which bypasses JSON config loading) unless the user explicitly passes `--settings/-s`.
     has_settings_flag = any(arg in {"--settings", "-s"} or arg.startswith("--settings=") for arg in ctx.args)
     if not has_settings_flag:
-        cmd.extend(["--settings", "default"])
+        cmd.extend(["--settings", default_pqa_settings_name()])
 
     # PaperQA2 can attempt PDF image extraction (multimodal parsing). If Pillow isn't installed,
     # PyPDF raises at import-time when accessing `page.images`. Disable multimodal parsing unless
@@ -2333,12 +2553,12 @@ def ask(ctx, query: str, llm: Optional[str], embedding: Optional[str]):
     if llm_source != click.core.ParameterSource.DEFAULT:
         llm_for_pqa = llm
     elif not has_settings_flag:
-        llm_for_pqa = llm
+        llm_for_pqa = default_pqa_llm_model()
 
     if embedding_source != click.core.ParameterSource.DEFAULT:
         embedding_for_pqa = embedding
     elif not has_settings_flag:
-        embedding_for_pqa = embedding
+        embedding_for_pqa = default_pqa_embedding_model()
 
     if llm_for_pqa:
         cmd.extend(["--llm", llm_for_pqa])
@@ -2354,7 +2574,7 @@ def ask(ctx, query: str, llm: Optional[str], embedding: Optional[str]):
         for arg in ctx.args
     )
     if not has_index_dir_override:
-        index_dir = Path(os.environ.get("PAPERPIPE_PQA_INDEX_DIR") or (PAPER_DB / ".pqa_index")).expanduser()
+        index_dir = default_pqa_index_dir()
         index_dir.mkdir(parents=True, exist_ok=True)
         cmd.extend(["--agent.index.index_directory", str(index_dir)])
 
@@ -2371,8 +2591,8 @@ def ask(ctx, query: str, llm: Optional[str], embedding: Optional[str]):
         _refresh_pqa_pdf_staging_dir(staging_dir=staging_dir)
         cmd.extend(["--agent.index.paper_directory", str(staging_dir)])
 
-    summary_llm_default = os.environ.get("PAPERPIPE_PQA_SUMMARY_LLM") or llm_for_pqa
-    enrichment_llm_default = os.environ.get("PAPERPIPE_PQA_ENRICHMENT_LLM") or llm_for_pqa
+    summary_llm_default = default_pqa_summary_llm(llm_for_pqa)
+    enrichment_llm_default = default_pqa_enrichment_llm(llm_for_pqa)
 
     has_summary_llm_override = any(
         arg in {"--summary_llm", "--summary-llm"} or arg.startswith(("--summary_llm=", "--summary-llm="))
@@ -2666,12 +2886,12 @@ def models(
             ]
         else:
             completion_models = [
-                DEFAULT_LLM_MODEL,
+                default_llm_model(),
                 "gpt-4o",
                 "claude-sonnet-4-20250514",
             ]
             embedding_models = [
-                DEFAULT_EMBEDDING_MODEL,
+                default_embedding_model(),
                 "text-embedding-3-small",
                 "voyage/voyage-3-large",
             ]
@@ -2877,6 +3097,63 @@ def show(papers: tuple[str, ...], level: str):
         click.echo(f"- Content: {level_norm}")
         click.echo()
         click.echo(src.read_text(errors="ignore").rstrip("\n"))
+
+
+@cli.command()
+@click.argument("papers", nargs=-1, required=True)
+@click.option("--print", "print_", is_flag=True, help="Print notes to stdout instead of opening an editor.")
+@click.option(
+    "--edit/--no-edit",
+    default=None,
+    help="Open notes in $EDITOR (default: edit for a single paper; otherwise print paths).",
+)
+def notes(papers: tuple[str, ...], print_: bool, edit: Optional[bool]):
+    """Open or print per-paper implementation notes (notes.md)."""
+    index = load_index()
+
+    effective_edit = edit
+    if effective_edit is None:
+        effective_edit = (not print_) and (len(papers) == 1)
+
+    if effective_edit and len(papers) != 1:
+        raise click.UsageError("--edit can only be used with a single paper. Use --print for multiple.")
+
+    first_output = True
+    for paper_ref in papers:
+        name, error = _resolve_paper_name_from_ref(paper_ref, index)
+        if not name:
+            raise click.ClickException(error)
+
+        paper_dir = PAPERS_DIR / name
+        if not paper_dir.exists():
+            raise click.ClickException(f"Paper not found: {paper_ref}")
+
+        meta_path = paper_dir / "meta.json"
+        meta: dict = {}
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text())
+            except Exception:
+                meta = {}
+
+        notes_path = ensure_notes_file(paper_dir, meta)
+
+        if print_:
+            if not first_output:
+                click.echo("\n\n---\n")
+            first_output = False
+            click.echo(f"# {name} ({notes_path})")
+            click.echo()
+            click.echo(notes_path.read_text(errors="ignore").rstrip("\n"))
+            continue
+
+        if effective_edit:
+            try:
+                click.edit(filename=str(notes_path))
+            except Exception as exc:
+                raise click.ClickException(f"Failed to open editor for {notes_path}: {exc}") from exc
+        else:
+            click.echo(str(notes_path))
 
 
 @cli.command()

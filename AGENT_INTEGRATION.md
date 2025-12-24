@@ -24,6 +24,7 @@ Per-paper files live at: `<paper_db>/papers/{paper}/`
 - `meta.json` — metadata + tags
 - `summary.md` — coding-context overview
 - `equations.md` — key equations + explanations (best for implementation verification)
+- `notes.md` — implementation notes (yours; created automatically)
 - `source.tex` — full LaTeX (if available)
 - `paper.pdf` — PDF (used by PaperQA2)
 - `<paper_db>/.pqa_papers/` — PaperQA2 input staging (PDF-only; created on first `papi ask`)
@@ -55,6 +56,10 @@ papi export neuralangelo neus --level equations --to ./paper-context/
 
 # Or print directly to stdout for pasting into a terminal agent session
 papi show neuralangelo neus --level eq
+
+# Open or print per-paper implementation notes
+papi notes neuralangelo
+papi notes neuralangelo --print
 
 # Add papers (arXiv) / regenerate; use --no-llm to avoid LLM calls
 papi add 2303.13476                      # name auto-generated

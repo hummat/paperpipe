@@ -63,6 +63,64 @@ class TestEnsureDb:
         assert temp_db.exists()
 
 
+class TestConfigToml:
+    def test_config_toml_sets_defaults(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("PAPERPIPE_LLM_MODEL", raising=False)
+        monkeypatch.delenv("PAPERPIPE_EMBEDDING_MODEL", raising=False)
+        monkeypatch.delenv("PAPERPIPE_LLM_TEMPERATURE", raising=False)
+
+        (temp_db / "config.toml").write_text(
+            "\n".join(
+                [
+                    "[llm]",
+                    'model = "gpt-4o-mini"',
+                    "temperature = 0.42",
+                    "",
+                    "[embedding]",
+                    'model = "text-embedding-3-small"',
+                    "",
+                    "[tags.aliases]",
+                    'cv = "computer-vision"',
+                    "",
+                ]
+            )
+        )
+        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+
+        assert paperpipe.default_llm_model() == "gpt-4o-mini"
+        assert paperpipe.default_embedding_model() == "text-embedding-3-small"
+        assert paperpipe.default_llm_temperature() == 0.42
+        assert paperpipe.normalize_tag("cv") == "computer-vision"
+
+    def test_env_overrides_config(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        (temp_db / "config.toml").write_text(
+            "\n".join(
+                [
+                    "[llm]",
+                    'model = "config-model"',
+                    "",
+                ]
+            )
+        )
+        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        monkeypatch.setenv("PAPERPIPE_LLM_MODEL", "env-model")
+        assert paperpipe.default_llm_model() == "env-model"
+
+
+class TestNotesCommand:
+    def test_notes_creates_file_and_prints(self, temp_db: Path):
+        paper_dir = temp_db / "papers" / "my-paper"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "meta.json").write_text(json.dumps({"title": "Test Paper"}))
+        paperpipe.save_index({"my-paper": {"title": "Test Paper", "tags": [], "added": "now"}})
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["notes", "my-paper", "--print"])
+        assert result.exit_code == 0
+        assert (paper_dir / "notes.md").exists()
+        assert "# my-paper" in result.output
+
+
 class TestIndex:
     def test_load_empty_index(self, temp_db: Path):
         index = paperpipe.load_index()
@@ -1910,9 +1968,6 @@ class TestModelsCommand:
         monkeypatch.setenv("GEMINI_API_KEY", "x")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
         monkeypatch.setenv("VOYAGE_API_KEY", "x")
-
-        monkeypatch.setattr(paperpipe, "DEFAULT_LLM_MODEL", "gemini/gemini-3-flash-preview")
-        monkeypatch.setattr(paperpipe, "DEFAULT_EMBEDDING_MODEL", "text-embedding-3-small")
 
         runner = CliRunner()
         result = runner.invoke(paperpipe.cli, ["models", "--json"])

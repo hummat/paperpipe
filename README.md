@@ -128,7 +128,8 @@ Default database root is `~/.paperpipe/` (override with `PAPER_DB_PATH`; see `pa
 │   │   ├── paper.pdf             # For PaperQA2
 │   │   ├── source.tex            # Full LaTeX (if available)
 │   │   ├── summary.md            # Coding-context summary
-│   │   └── equations.md          # Key equations extracted
+│   │   ├── equations.md          # Key equations extracted
+│   │   └── notes.md              # Your implementation notes (created automatically)
 │   └── neus/
 │       └── ...
 ```
@@ -201,6 +202,7 @@ papi show neuralangelo neus --level eq
 | `papi list [--tag TAG]` | List papers, optionally filtered by tag |
 | `papi search <query>` | Exact search (with fuzzy fallback if no exact matches) across title/tags/metadata + local summaries/equations (use `--exact` to disable fallback; `--tex` includes LaTeX) |
 | `papi show <papers...>` | Show paper details or print stored content |
+| `papi notes <paper>` | Open or print per-paper implementation notes (`notes.md`) |
 | `papi export <papers...>` | Export context files to a directory |
 | `papi ask <query> [args]` | Query papers via PaperQA2 (supports all pqa args) |
 | `papi models` | Probe which models work with your API keys |
@@ -209,6 +211,10 @@ papi show neuralangelo neus --level eq
 | `papi install-skill` | Install the papi skill for Claude Code / Codex CLI |
 | `--quiet/-q` | Suppress progress messages |
 | `--verbose/-v` | Enable debug output |
+
+## Roadmap
+
+Planned features are tracked in `ROADMAP.md`.
 
 ## Tagging
 
@@ -254,6 +260,18 @@ papi show neuralangelo --level summary
 papi show neuralangelo --level tex
 ```
 
+## Notes (per paper)
+
+paperpipe creates a `notes.md` per paper for implementation notes, gotchas, and code snippets.
+
+```bash
+# Open in $EDITOR (creates notes.md if missing)
+papi notes neuralangelo
+
+# Print notes to stdout (useful for piping into an agent session)
+papi notes neuralangelo --print
+```
+
 ## Workflow Example
 
 ```bash
@@ -280,6 +298,33 @@ papi remove volsdf neus
 Set custom database location:
 ```bash
 export PAPER_DB_PATH=/path/to/your/papers
+```
+
+### config.toml
+
+In addition to env vars, you can use a persistent config file at `<paper_db>/config.toml`
+(override the location with `PAPERPIPE_CONFIG_PATH`).
+
+Precedence is: **CLI flags > env vars > config.toml > built-in defaults**.
+
+Example:
+```toml
+[llm]
+model = "gemini/gemini-3-flash-preview"
+temperature = 0.3
+
+[embedding]
+model = "gemini/gemini-embedding-001"
+
+[paperqa]
+settings = "default"
+index_dir = "~/.paperpipe/.pqa_index"
+summary_llm = "gemini/gemini-3-flash-preview"
+enrichment_llm = "gemini/gemini-3-flash-preview"
+
+[tags.aliases]
+cv = "computer-vision"
+nerf = "neural-radiance-field"
 ```
 
 ## Environment Setup
