@@ -677,46 +677,70 @@ def _refresh_pqa_pdf_staging_dir(*, staging_dir: Path) -> int:
     artifacts.
 
     Returns the number of PDFs linked/copied into the staging directory.
+
+    Note: This function preserves existing valid symlinks to maintain their modification times.
+    PaperQA2 uses file modification times to track which files it has already indexed, so
+    recreating symlinks would cause unnecessary re-indexing.
     """
     staging_dir.mkdir(parents=True, exist_ok=True)
 
-    # Clear prior contents (best-effort) so removed papers don't linger in the index.
+    # Build set of expected symlink names based on current papers.
+    expected_names: set[str] = set()
+    paper_sources: dict[str, Path] = {}  # symlink name -> source PDF path
+
+    if PAPERS_DIR.exists():
+        for paper_dir in PAPERS_DIR.iterdir():
+            if not paper_dir.is_dir():
+                continue
+            pdf_src = paper_dir / "paper.pdf"
+            if not pdf_src.exists():
+                continue
+            name = f"{paper_dir.name}.pdf"
+            expected_names.add(name)
+            paper_sources[name] = pdf_src
+
+    # Remove stale entries (papers that were removed) - best-effort cleanup.
     try:
         for child in staging_dir.iterdir():
-            try:
-                if child.is_dir():
-                    shutil.rmtree(child)
-                else:
-                    child.unlink()
-            except Exception:
-                debug("Failed cleaning pqa staging entry: %s", child)
+            if child.name not in expected_names:
+                try:
+                    if child.is_dir():
+                        shutil.rmtree(child)
+                    else:
+                        child.unlink()
+                except Exception:
+                    debug("Failed cleaning pqa staging entry: %s", child)
     except Exception:
         debug("Failed listing pqa staging dir: %s", staging_dir)
 
+    # Create/repair symlinks only where needed, preserving existing valid ones.
     count = 0
-    if not PAPERS_DIR.exists():
-        return 0
+    for name, pdf_src in paper_sources.items():
+        pdf_dest = staging_dir / name
+        rel_target = os.path.relpath(pdf_src, start=pdf_dest.parent)
 
-    for paper_dir in PAPERS_DIR.iterdir():
-        if not paper_dir.is_dir():
-            continue
-        pdf_src = paper_dir / "paper.pdf"
-        if not pdf_src.exists():
-            continue
-
-        pdf_dest = staging_dir / f"{paper_dir.name}.pdf"
-        try:
-            if pdf_dest.exists() or pdf_dest.is_symlink():
-                pdf_dest.unlink()
-            # Use relative symlinks so the DB can be moved/copied as a unit between machines.
-            rel_target = os.path.relpath(pdf_src, start=pdf_dest.parent)
-            pdf_dest.symlink_to(rel_target)
-        except Exception:
+        # Check if existing symlink is valid and points to the right target.
+        needs_update = True
+        if pdf_dest.is_symlink():
             try:
-                shutil.copy2(pdf_src, pdf_dest)
+                # Symlink exists - check if it points to the correct target and is valid.
+                current_target = os.readlink(pdf_dest)
+                if current_target == rel_target and pdf_dest.exists():
+                    needs_update = False
             except Exception:
-                debug("Failed staging PDF for PaperQA2: %s", pdf_src)
-                continue
+                pass  # Broken or unreadable symlink, will recreate.
+
+        if needs_update:
+            try:
+                if pdf_dest.exists() or pdf_dest.is_symlink():
+                    pdf_dest.unlink()
+                pdf_dest.symlink_to(rel_target)
+            except Exception:
+                try:
+                    shutil.copy2(pdf_src, pdf_dest)
+                except Exception:
+                    debug("Failed staging PDF for PaperQA2: %s", pdf_src)
+                    continue
 
         count += 1
 
@@ -1263,7 +1287,7 @@ Abstract: {abstract[:800]}"""
 
 
 @click.group()
-@click.version_option(version="0.2.0")
+@click.version_option(version="0.2.1")
 @click.option("--quiet", "-q", is_flag=True, help="Suppress progress messages.")
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug output.")
 def cli(quiet: bool = False, verbose: bool = False):
@@ -2928,6 +2952,22 @@ def ask(ctx, query: str, llm: Optional[str], embedding: Optional[str]):
         index_dir = default_pqa_index_dir()
         index_dir.mkdir(parents=True, exist_ok=True)
         cmd.extend(["--agent.index.index_directory", str(index_dir)])
+
+    # Set an explicit index name based on the embedding model to ensure the same index is reused
+    # across runs. PaperQA2 auto-generates a hash from all settings, which can vary due to
+    # dynamic defaults, causing unnecessary re-indexing. Using an explicit name tied to the
+    # embedding model ensures index reuse while still creating a new index when the embedding
+    # model changes (since embeddings from different models are incompatible).
+    has_index_name_override = any(
+        arg in {"--index", "-i", "--agent.index.name"}
+        or arg.startswith(("--index=", "--agent.index.name="))
+        for arg in ctx.args
+    )
+    if not has_index_name_override and embedding_for_pqa:
+        # Create a stable index name from the embedding model.
+        # Replace special chars that might cause filesystem issues.
+        safe_name = embedding_for_pqa.replace("/", "_").replace(":", "_")
+        cmd.extend(["--agent.index.name", f"paperpipe_{safe_name}"])
 
     # PaperQA2 currently indexes Markdown by default; avoid indexing paperpipe's generated `summary.md`
     # / `equations.md` by staging only PDFs in a separate directory.

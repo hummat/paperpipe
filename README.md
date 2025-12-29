@@ -47,7 +47,7 @@ This repo publishes to PyPI when a GitHub Release is published (see `.github/wor
 
 ```bash
 # Bump versions first (pyproject.toml + paperpipe.py), then:
-make release VERSION=0.2.0
+make release
 ```
 
 ## Quick Start
