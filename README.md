@@ -88,6 +88,8 @@ Override the index location by passing `--agent.index.index_directory ...` throu
 By default, `papi ask` indexes **PDFs only** (it avoids indexing paperpipe’s generated `summary.md` / `equations.md`
 Markdown files by staging PDFs under `<paper_db>/.pqa_papers/`). If you previously ran `papi ask` and PaperQA2
 indexed Markdown, delete `<paper_db>/.pqa_index/` once to force a clean rebuild.
+If PaperQA2 previously failed to index a PDF, it records it as `ERROR` and will not retry automatically; re-run
+with `papi ask "..." --pqa-retry-failed-index` (or pass `--agent.rebuild_index true` to rebuild the whole index).
 You can also override the models PaperQA2 uses for summarization/enrichment with
 `PAPERPIPE_PQA_SUMMARY_LLM` and `PAPERPIPE_PQA_ENRICHMENT_LLM` (or pass `--summary_llm` / `--parsing.enrichment_llm`).
 

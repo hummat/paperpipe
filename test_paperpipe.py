@@ -2,10 +2,12 @@
 
 import json
 import os
+import pickle
 import shutil
 import subprocess
 import sys
 import types
+import zlib
 from pathlib import Path
 
 import pytest
@@ -1837,6 +1839,7 @@ class TestAskCommand:
         assert str(temp_db / ".pqa_index") in pqa_call
         assert "--agent.index.paper_directory" in pqa_call
         assert str(temp_db / ".pqa_papers") in pqa_call
+        assert "--agent.index.sync_with_paper_directory" in pqa_call
         assert "ask" in pqa_call
         assert "query" in pqa_call
         assert "--llm" in pqa_call
@@ -1855,6 +1858,39 @@ class TestAskCommand:
         assert "2" in pqa_call
         assert pqa_kwargs.get("cwd") == paperpipe.PAPERS_DIR
         assert (temp_db / ".pqa_papers" / "test-paper.pdf").exists()
+
+    def test_ask_retry_failed_index_clears_error_markers(self, temp_db: Path, monkeypatch):
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
+
+        mock_run_calls: list[tuple[list[str], dict]] = []
+
+        def mock_run(cmd, **kwargs):
+            mock_run_calls.append((cmd, kwargs))
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="Answer")
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+        (temp_db / "papers" / "test-paper").mkdir(parents=True)
+        (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
+
+        # Pretend PaperQA2 previously marked this staged file as ERROR.
+        index_dir = temp_db / ".pqa_index" / "paperpipe_my-embed"
+        index_dir.mkdir(parents=True)
+        files_zip = index_dir / "files.zip"
+        files_zip.write_bytes(
+            zlib.compress(pickle.dumps({"test-paper.pdf": "ERROR"}, protocol=pickle.HIGHEST_PROTOCOL))
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            paperpipe.cli,
+            ["ask", "query", "--llm", "my-llm", "--embedding", "my-embed", "--pqa-retry-failed-index"],
+        )
+        assert result.exit_code == 0
+
+        mapping = paperpipe._paperqa_load_index_files_map(files_zip)
+        assert mapping == {}
 
     def test_ask_does_not_override_user_settings(self, temp_db: Path, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)

@@ -73,9 +73,12 @@
 Notes:
 - The first `papi ask` may take a while while PaperQA2 builds its index; by default it is cached under `<paper_db>/.pqa_index/`.
 - By default, `papi ask` stages PDFs under `<paper_db>/.pqa_papers/` so PaperQA2 doesn’t index generated Markdown.
+- By default, `papi ask` syncs the PaperQA2 index with the staged PDFs (so newly added papers get indexed on the next ask).
 - Override the index directory by passing `--agent.index.index_directory ...` through to `pqa`, or with `PAPERPIPE_PQA_INDEX_DIR`.
 - Override PaperQA2’s summarization/enrichment models with `PAPERPIPE_PQA_SUMMARY_LLM` and `PAPERPIPE_PQA_ENRICHMENT_LLM`
   (or pass `--summary_llm` / `--parsing.enrichment_llm`).
+- If PaperQA2 previously failed to index some PDFs, it records them as `ERROR` and won’t retry automatically; re-run with
+  `papi ask "..." --pqa-retry-failed-index` (or pass `--agent.rebuild_index true`).
 
 ## Per-Paper Files
 

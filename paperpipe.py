@@ -13,12 +13,14 @@ import json
 import logging
 import math
 import os
+import pickle
 import re
 import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
+import zlib
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from datetime import datetime
@@ -745,6 +747,70 @@ def _refresh_pqa_pdf_staging_dir(*, staging_dir: Path) -> int:
         count += 1
 
     return count
+
+
+def _extract_flag_value(args: list[str], *, names: set[str]) -> Optional[str]:
+    """
+    Extract a value from argv-style args for flags like:
+      --flag value
+      --flag=value
+    """
+    for i, arg in enumerate(args):
+        if arg in names:
+            if i + 1 < len(args):
+                return args[i + 1]
+            return None
+        for name in names:
+            if arg.startswith(f"{name}="):
+                return arg.split("=", 1)[1]
+    return None
+
+
+def _paperqa_index_files_path(*, index_directory: Path, index_name: str) -> Path:
+    return Path(index_directory) / index_name / "files.zip"
+
+
+def _paperqa_load_index_files_map(path: Path) -> Optional[dict[str, str]]:
+    try:
+        raw = zlib.decompress(path.read_bytes())
+        obj = pickle.loads(raw)
+    except Exception:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    out: dict[str, str] = {}
+    for k, v in obj.items():
+        if isinstance(k, str) and isinstance(v, str):
+            out[k] = v
+    return out
+
+
+def _paperqa_clear_failed_documents(*, index_directory: Path, index_name: str) -> tuple[int, list[str]]:
+    """
+    Clear PaperQA2's "ERROR" failure markers so it can retry indexing those docs.
+
+    PaperQA2 records a per-file status in `<index>/files.zip` (zlib-compressed pickle).
+    If a file is marked as ERROR, PaperQA2 treats it as already processed and won't retry
+    unless you rebuild the entire index. Clearing those keys makes PaperQA2 treat them as new.
+    """
+    files_path = _paperqa_index_files_path(index_directory=index_directory, index_name=index_name)
+    if not files_path.exists():
+        return 0, []
+
+    mapping = _paperqa_load_index_files_map(files_path)
+    if mapping is None:
+        return 0, []
+
+    failed = sorted([k for k, v in mapping.items() if v == "ERROR"])
+    if not failed:
+        return 0, []
+
+    for k in failed:
+        mapping.pop(k, None)
+
+    payload = zlib.compress(pickle.dumps(mapping, protocol=pickle.HIGHEST_PROTOCOL))
+    files_path.write_bytes(payload)
+    return len(failed), failed
 
 
 @dataclass(frozen=True)
@@ -2883,8 +2949,13 @@ def export(papers: tuple[str, ...], level: str, dest: Optional[str]):
     show_default=False,
     help="Embedding model to use",
 )
+@click.option(
+    "--pqa-retry-failed-index",
+    is_flag=True,
+    help="Retry PaperQA2 docs previously marked failed (clears ERROR markers in the index).",
+)
 @click.pass_context
-def ask(ctx, query: str, llm: Optional[str], embedding: Optional[str]):
+def ask(ctx, query: str, llm: Optional[str], embedding: Optional[str], pqa_retry_failed_index: bool):
     """
     Query papers using PaperQA2 (if installed).
 
@@ -2959,8 +3030,7 @@ def ask(ctx, query: str, llm: Optional[str], embedding: Optional[str]):
     # embedding model ensures index reuse while still creating a new index when the embedding
     # model changes (since embeddings from different models are incompatible).
     has_index_name_override = any(
-        arg in {"--index", "-i", "--agent.index.name"}
-        or arg.startswith(("--index=", "--agent.index.name="))
+        arg in {"--index", "-i", "--agent.index.name"} or arg.startswith(("--index=", "--agent.index.name="))
         for arg in ctx.args
     )
     if not has_index_name_override and embedding_for_pqa:
@@ -2981,6 +3051,22 @@ def ask(ctx, query: str, llm: Optional[str], embedding: Optional[str]):
         staging_dir = (PAPER_DB / ".pqa_papers").expanduser()
         _refresh_pqa_pdf_staging_dir(staging_dir=staging_dir)
         cmd.extend(["--agent.index.paper_directory", str(staging_dir)])
+
+    # Default to syncing the index with the paper directory so newly-added PDFs are indexed
+    # automatically during `papi ask`. Users can override by passing the flag explicitly.
+    has_sync_override = any(
+        arg == "--agent.index.sync_with_paper_directory"
+        or arg == "--agent.index.sync-with-paper-directory"
+        or arg.startswith(
+            (
+                "--agent.index.sync_with_paper_directory=",
+                "--agent.index.sync-with-paper-directory=",
+            )
+        )
+        for arg in ctx.args
+    )
+    if not has_sync_override:
+        cmd.extend(["--agent.index.sync_with_paper_directory", "true"])
 
     summary_llm_default = default_pqa_summary_llm(llm_for_pqa)
     enrichment_llm_default = default_pqa_enrichment_llm(llm_for_pqa)
@@ -3003,6 +3089,36 @@ def ask(ctx, query: str, llm: Optional[str], embedding: Optional[str]):
 
     # Add any extra arguments passed after the known options
     cmd.extend(ctx.args)
+
+    # If the index previously recorded failed documents, PaperQA2 will not retry them
+    # (they are treated as already processed). Optionally clear those failure markers.
+    index_dir_raw = _extract_flag_value(
+        cmd,
+        names={"--agent.index.index_directory", "--agent.index.index-directory"},
+    )
+    index_name_raw = _extract_flag_value(
+        cmd,
+        names={"--agent.index.name"},
+    ) or _extract_flag_value(cmd, names={"--index", "-i"})
+
+    if index_dir_raw and index_name_raw:
+        files_path = _paperqa_index_files_path(index_directory=Path(index_dir_raw), index_name=index_name_raw)
+        mapping = _paperqa_load_index_files_map(files_path) if files_path.exists() else None
+        failed_count = sum(1 for v in (mapping or {}).values() if v == "ERROR")
+        if failed_count and not pqa_retry_failed_index:
+            echo_warning(
+                f"PaperQA2 index '{index_name_raw}' has {failed_count} failed document(s) (marked ERROR); "
+                "PaperQA2 will not retry them automatically. Re-run with --pqa-retry-failed-index "
+                "or pass --agent.rebuild_index true to rebuild the whole index."
+            )
+        if pqa_retry_failed_index:
+            cleared, cleared_files = _paperqa_clear_failed_documents(
+                index_directory=Path(index_dir_raw),
+                index_name=index_name_raw,
+            )
+            if cleared:
+                echo_progress(f"Cleared {cleared} failed PaperQA2 document(s) for retry.")
+                debug("Cleared failed PaperQA2 docs: %s", ", ".join(cleared_files[:50]))
 
     cmd.extend(["ask", query])
 
