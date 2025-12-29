@@ -24,7 +24,7 @@ type:
 	@pyright
 
 test:
-	@pytest -m "not integration"
+	@uv run pytest -m "not integration"
 
 check: fmt lint type test
 

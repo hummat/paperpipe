@@ -2254,29 +2254,33 @@ _AUDIT_BOLD_RE = re.compile(r"\*\*([^*\n]{3,80})\*\*")
 _AUDIT_ACRONYM_RE = re.compile(r"\b[A-Z][A-Z0-9]{2,9}\b")
 
 _AUDIT_IGNORED_WORDS = {
+    # Section/document terms
     "core",
     "contribution",
     "key",
-    "method",
-    "architecture",
-    "important",
-    "implementation",
-    "details",
-    "loss",
-    "losses",
-    "functions",
-    "training",
-    "objectives",
-    "results",
-    "discussion",
-    "background",
-    "related",
-    "work",
     "overview",
     "summary",
     "equations",
     "equation",
     "notes",
+    "details",
+    "discussion",
+    "background",
+    "related",
+    "work",
+    "results",
+    "paper",
+    # Generic ML/technical terms
+    "method",
+    "methods",
+    "architecture",
+    "important",
+    "implementation",
+    "loss",
+    "losses",
+    "functions",
+    "training",
+    "objectives",
     "variables",
     "representation",
     "standard",
@@ -2284,7 +2288,42 @@ _AUDIT_IGNORED_WORDS = {
     "approach",
     "model",
     "models",
-    "paper",
+    # Common technical vocabulary (often used in summaries but not always in abstracts)
+    "optimization",
+    "regularization",
+    "extraction",
+    "refinement",
+    "distillation",
+    "supervision",
+    "efficiency",
+    "handling",
+    "flexibility",
+    "robustness",
+    "strategy",
+    "schedule",
+    "scheduler",
+    "processing",
+    "calculation",
+    "masking",
+    "residuals",
+    "hyperparameters",
+    "hyperparameter",
+    "awareness",
+    "hardware",
+    "specs",
+    "normalization",
+    "initialization",
+    "convergence",
+    "inference",
+    "prediction",
+    "interpolation",
+    "extrapolation",
+    "aggregation",
+    "sampling",
+    "weighting",
+    "management",
+    "configuration",
+    "integration",
 }
 
 # Common acronyms that shouldn't trigger hallucination warnings.
@@ -2294,6 +2333,7 @@ _AUDIT_ACRONYM_ALLOWLIST = {
     "API",
     "CPU",
     "GPU",
+    "TPU",
     "RAM",
     "SSD",
     "HTTP",
@@ -2304,6 +2344,11 @@ _AUDIT_ACRONYM_ALLOWLIST = {
     "URL",
     "IEEE",
     "ACM",
+    "CUDA",
+    "FPS",
+    "RGB",
+    "RGBA",
+    "HDR",
     # Math/stats
     "IID",
     "ODE",
@@ -2315,38 +2360,62 @@ _AUDIT_ACRONYM_ALLOWLIST = {
     "MSE",
     "MAE",
     "RMSE",
-    # Common ML (kept minimal - these are ubiquitous)
+    "PSNR",
+    "SSIM",
+    "LPIPS",
+    "IOU",
+    # Common ML architectures and techniques
     "AI",
     "ML",
     "DL",
     "RL",
     "NLP",
     "LLM",
+    "CNN",
+    "RNN",
+    "MLP",
+    "LSTM",
+    "GRU",
+    "GAN",
+    "VAE",
+    "BERT",
+    "GPT",
+    "VIT",
+    "CLIP",
+    # Optimizers/training
+    "SGD",
+    "ADAM",
+    "LBFGS",
+    "BCE",
+    # Graphics/vision
+    "SDF",
+    "BRDF",
+    "BSDF",
+    "HDR",
+    "LOD",
+    "FOV",
     # Norms/metrics
     "L1",
     "L2",
 }
 
-# LLM boilerplate phrases that suggest low-quality or templated generation.
+# LLM boilerplate phrases that indicate prompt leakage or missing content.
+# Only flag phrases that are actual problems, not normal academic writing style.
 _AUDIT_BOILERPLATE_PHRASES = [
+    # Prompt leakage (LLM responding to instructions rather than generating content)
     "based on the provided",
     "based on the given",
     "from the provided",
+    "from the given",
+    "i cannot",
+    "i can't",
+    "i don't have access",
+    "i do not have access",
+    # Missing content indicators
     "no latex source available",
     "no equations available",
-    "the paper presents",
-    "this paper presents",
-    "in this paper, we",
-    "the authors propose",
-    "the authors present",
-    "in conclusion,",
-    "in summary,",
-    "to summarize,",
-    "as shown in the",
-    "as mentioned above",
-    "as discussed above",
-    "it is worth noting",
-    "it should be noted",
+    "no source available",
+    "not available in the",
 ]
 
 
@@ -2458,11 +2527,64 @@ def _audit_paper_dir(paper_dir: Path) -> list[str]:
             reasons.append(f"equations.md references different title: {referenced_title!r}")
 
     # Check for title mismatch in summary.md heading
+    # Instead of similarity matching, check if paper's short name/acronym appears in heading
+    # Allow generic section headings that don't claim to be about a specific paper
+    _GENERIC_HEADING_PREFIXES = {
+        "core contribution",
+        "key methods",
+        "key contribution",
+        "technical summary",
+        "summary",
+        "overview",
+        "main contribution",
+        "architecture",
+        "methods",
+    }
     summary_title = _extract_summary_title(summary_text)
     if summary_title and title:
-        ratio = SequenceMatcher(None, summary_title.lower(), title.lower()).ratio()
-        if ratio < 0.6:
-            reasons.append(f"summary.md heading doesn't match paper title: {summary_title!r}")
+        summary_lower = summary_title.lower()
+        # Skip check for generic headings (they don't claim to be about a specific paper)
+        is_generic = any(
+            summary_lower.startswith(prefix) or summary_lower == prefix for prefix in _GENERIC_HEADING_PREFIXES
+        )
+        if not is_generic:
+            title_lower = title.lower()
+            # Extract short name (before colon) and acronyms from title
+            short_name = title.split(":")[0].strip() if ":" in title else None
+            acronyms = re.findall(r"\b[A-Z][A-Za-z]*[A-Z]+[A-Za-z]*\b|\b[A-Z]{2,}\b", title)
+            # Check if short name or any acronym appears in heading
+            found_match = False
+            if short_name and short_name.lower() in summary_lower:
+                found_match = True
+            for acr in acronyms:
+                if acr.lower() in summary_lower:
+                    found_match = True
+                    break
+            # Also accept if significant title words appear
+            if not found_match:
+                title_words = [
+                    w
+                    for w in re.findall(r"[A-Za-z]{4,}", title_lower)
+                    if w
+                    not in {
+                        "with",
+                        "from",
+                        "this",
+                        "that",
+                        "using",
+                        "based",
+                        "neural",
+                        "learning",
+                        "network",
+                        "networks",
+                    }
+                ]
+                for word in title_words[:5]:
+                    if word in summary_lower:
+                        found_match = True
+                        break
+            if not found_match:
+                reasons.append(f"summary.md heading doesn't reference paper: {summary_title!r}")
 
     # Check for incomplete context markers
     if "provided latex snippet ends" in equations_text.lower():
