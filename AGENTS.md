@@ -39,7 +39,8 @@ Runtime data is stored outside the repo in `~/.paperpipe/` (PDFs, LaTeX, summari
 - `uv sync --group dev`: install dev deps via uv (matches CI).
 - `pip install -e ".[all]"`: editable install with all optional features (LLM + PaperQA2 integration).
 - `papi --help`: show CLI commands and options.
-- `pytest`: run the full test suite.
+- `pytest`: run the default test suite (note: `pyproject.toml` sets `-m 'not integration'` in `addopts`).
+- `pytest -m "integration or not integration"`: run all tests (including integration) while keeping other `addopts`.
 - `pytest -m "not integration"`: skip tests that may require network or external CLIs.
 - `pytest -m integration`: run network-dependent integration tests.
 - `ruff check .`: run lint (configured for 100-char lines and import sorting).

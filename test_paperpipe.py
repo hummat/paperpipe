@@ -2922,7 +2922,7 @@ class TestPaperQAIntegration:
         # Then query it
         result = runner.invoke(
             paperpipe.cli,
-            ["ask", "What is the attention mechanism?", "-p", "attention-pqa"],
+            ["ask", "What is the attention mechanism?"],
         )
 
         # Should get some response (not just the fallback)
