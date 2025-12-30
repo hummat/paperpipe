@@ -1005,6 +1005,18 @@ class TestCli:
         assert (out_dir / "test-paper_equations.md").exists()
         assert (out_dir / "test-paper_equations.md").read_text() == "eq\n"
 
+    def test_export_accepts_eq_alias(self, temp_db: Path, tmp_path: Path):
+        paper_dir = temp_db / "papers" / "test-paper"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "equations.md").write_text("eq\n")
+        paperpipe.save_index({"test-paper": {"arxiv_id": "2301.00001", "title": "T", "tags": []}})
+
+        runner = CliRunner()
+        out_dir = tmp_path / "paper-context"
+        result = runner.invoke(paperpipe.cli, ["export", "test-paper", "--level", "eq", "--to", str(out_dir)])
+        assert result.exit_code == 0
+        assert (out_dir / "test-paper_equations.md").exists()
+
 
 class TestFetchArxivMetadata:
     """Unit tests for fetch_arxiv_metadata with mocked arxiv library."""

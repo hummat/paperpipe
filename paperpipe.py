@@ -3058,7 +3058,7 @@ def audit(
 @click.option(
     "--level",
     "-l",
-    type=click.Choice(["summary", "equations", "full"], case_sensitive=False),
+    type=click.Choice(["summary", "equations", "eq", "full"], case_sensitive=False),
     default="summary",
     help="What to export",
 )
@@ -3071,6 +3071,8 @@ def audit(
 def export(papers: tuple[str, ...], level: str, dest: Optional[str]):
     """Export paper context for a coding session."""
     level_norm = (level or "").strip().lower()
+    if level_norm == "eq":
+        level_norm = "equations"
 
     index = load_index()
 
