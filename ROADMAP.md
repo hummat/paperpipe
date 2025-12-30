@@ -13,7 +13,32 @@ It is not a commitment to specific timelines.
 
 ## Planned (next)
 
-### 1) Local LLM via Ollama (core + `papi ask`)
+### 1) Refactor: split `paperpipe.py` into a `src/` package
+
+Goal: make the codebase maintainable without changing CLI behavior or on-disk database formats.
+
+- **Constraints**
+  - Keep CLI surface area stable (commands/options/output).
+  - Keep runtime data layout stable (`~/.paperpipe/…`, `papers/*/{paper.pdf,source.tex,meta.json,…}`).
+  - Avoid behavior changes during the refactor; keep diffs mechanical.
+- **Packaging**
+  - Move to a `src/` layout (e.g., `src/paperpipe/*.py`) and update `pyproject.toml` accordingly.
+  - Keep `papi` entrypoint stable (likely `paperpipe.cli:cli`).
+  - Consider keeping a thin `paperpipe.py` shim for backwards compatibility (imports + delegates to the package).
+- **Proposed module split (initial cut)**
+  - `paperpipe/cli.py`: Click group + command wiring
+  - `paperpipe/config.py`: config/env precedence + defaults
+  - `paperpipe/store.py`: paths, index/meta read/write, paper directory helpers
+  - `paperpipe/arxiv.py`: arXiv fetch/download/source extraction
+  - `paperpipe/llm.py`: LiteLLM wrappers + prompts
+  - `paperpipe/paperqa.py`: `papi ask` orchestration + staging/index handling
+  - `paperpipe/search.py`: local search helpers
+  - `paperpipe/audit.py`: summary/equation audit logic
+  - `paperpipe/util.py`: small shared helpers (logging, IO limits, etc.)
+- **Test plan**
+  - Keep existing tests; add a minimal “CLI smokes” unit test for import/entrypoint regressions if needed.
+
+### 2) Local LLM via Ollama (core + `papi ask`)
 
 Goal: make a zero-cloud setup the default happy path: local generation for `add/regenerate` and local RAG via
 PaperQA2 (when installed).
@@ -30,7 +55,26 @@ PaperQA2 (when installed).
   - Ensure `papi ask --llm ... --embedding ...` works cleanly with Ollama identifiers.
   - Add docs/examples for local-only `papi ask` (including an embedding model choice).
 
-### 2) `papi attach` (upgrade/attach files)
+### 3) `papi ask`: PaperQA2 output stream hygiene
+
+Goal: make `papi ask` output match the rest of paperpipe: quiet by default, high-signal, and debuggable when needed.
+
+- **Default behavior**
+  - Suppress PaperQA2’s verbose streaming logs by default.
+  - Print a concise summary aligned with paperpipe’s style:
+    - progress: “Indexing N PDFs…”, “Querying…”
+    - result: final answer text
+    - sources: a short, stable list of cited papers/files (and any missing/failed docs)
+- **Debug/verbose mode**
+  - `-v/--verbose` should surface PaperQA2’s raw output for troubleshooting.
+  - Preserve color when possible:
+    - If passthrough to a real TTY preserves color, keep it.
+    - Otherwise accept “no color” and provide an explicit `--pqa-raw` passthrough mode.
+- **Failure handling**
+  - Detect common PaperQA2 failure patterns (crash loops, bad PDFs) and show actionable guidance, not walls of logs.
+  - Keep the existing crash triage (identify the crashing document) but present it in a compact, paperpipe-style report.
+
+### 4) `papi attach` (upgrade/attach files)
 
 Goal: let users fix missing/low-quality assets after initial ingest.
 
@@ -48,7 +92,7 @@ Goal: let users fix missing/low-quality assets after initial ingest.
   - `--regen equations|summary|tags|all`
   - `--backup` (keep `paper.pdf.bak`, `source.tex.bak`, etc.)
 
-### 3) `papi bibtex` (export)
+### 5) `papi bibtex` (export)
 
 Goal: easy citation export that integrates with LaTeX workflows.
 
@@ -63,7 +107,7 @@ Goal: easy citation export that integrates with LaTeX workflows.
   - `--to library.bib` (write/append)
   - `--key-style name|doi|arxiv|slug`
 
-### 4) `papi import-bib` (bulk ingest)
+### 6) `papi import-bib` (bulk ingest)
 
 Goal: bootstrap a library from an existing BibTeX file.
 
