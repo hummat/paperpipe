@@ -89,9 +89,9 @@ By default, `papi ask` indexes **PDFs only** (it avoids indexing paperpipe’s g
 Markdown files by staging PDFs under `<paper_db>/.pqa_papers/`). If you previously ran `papi ask` and PaperQA2
 indexed Markdown, delete `<paper_db>/.pqa_index/` once to force a clean rebuild.
 If PaperQA2 previously failed to index a PDF, it records it as `ERROR` and will not retry automatically; re-run
-with `papi ask "..." --pqa-retry-failed-index` (or pass `--agent.rebuild_index true` to rebuild the whole index).
+with `papi ask "..." --retry-failed` (or `--rebuild-index` to rebuild the whole index).
 You can also override the models PaperQA2 uses for summarization/enrichment with
-`PAPERPIPE_PQA_SUMMARY_LLM` and `PAPERPIPE_PQA_ENRICHMENT_LLM` (or pass `--summary_llm` / `--parsing.enrichment_llm`).
+`PAPERPIPE_PQA_SUMMARY_LLM` and `PAPERPIPE_PQA_ENRICHMENT_LLM` (or use `--summary-llm` / `--parsing.enrichment_llm`).
 
 ## Database Structure
 
@@ -185,7 +185,7 @@ papi show neuralangelo neus --level eq
 | `papi show <papers...>` | Show paper details or print stored content |
 | `papi notes <paper>` | Open or print per-paper implementation notes (`notes.md`) |
 | `papi export <papers...>` | Export context files to a directory |
-| `papi ask <query> [args]` | Query papers via PaperQA2 (supports all pqa args) |
+| `papi ask <query> [opts]` | Query papers via PaperQA2 (first-class opts + passthrough) |
 | `papi models` | Probe which models work with your API keys |
 | `papi tags` | List all tags with counts |
 | `papi path` | Print database location |
@@ -352,36 +352,63 @@ When both paperpipe and [PaperQA2](https://github.com/Future-House/paper-qa) are
 
 ```bash
 # paperpipe stores PDFs in <paper_db>/papers/*/paper.pdf (see `papi path`)
-# `papi ask` stages PDFs under <paper_db>/.pqa_papers/ so PaperQA2 doesn’t index generated Markdown.
+# `papi ask` stages PDFs under <paper_db>/.pqa_papers/ so PaperQA2 doesn't index generated Markdown.
 # paperpipe ask routes to PaperQA2 for complex queries
 
 papi ask "What optimizer settings do these papers recommend?"
+```
 
-# PaperQA uses LiteLLM model identifiers for `--llm` and `--embedding`.
-# You can also pass through any other `pqa ask` flags after the query/options.
-# By default, `papi ask` uses `pqa --settings default` to avoid failures caused by stale user
-# settings files; pass `-s/--settings <name>` to use a specific PaperQA2 settings profile.
-# `papi ask` also defaults to `--llm gemini/gemini-3-flash-preview` and `--embedding gemini/gemini-embedding-001`
-# unless you pick a PaperQA2 settings profile with `-s/--settings` (in that case, the profile controls).
-# If Pillow is not installed, `papi ask` also forces `--parsing.multimodal OFF` to avoid PDF
-# image extraction errors; pass your own `--parsing...` args to override.
-#
-# Examples (specify LLM + embedding):
+### First-Class Options
+
+The most common PaperQA2 options are exposed as first-class `papi ask` flags:
+
+| Flag | Description |
+|------|-------------|
+| `--llm MODEL` | LLM for answer generation (LiteLLM id) |
+| `--summary-llm MODEL` | LLM for evidence summarization (often cheaper) |
+| `--embedding MODEL` | Embedding model for text chunks |
+| `-t, --temperature FLOAT` | LLM temperature (0.0-1.0) |
+| `-v, --verbosity INT` | Logging level (0-3; 3 = log all LLM calls) |
+| `--answer-length TEXT` | Target answer length (e.g., "about 200 words") |
+| `--evidence-k INT` | Number of evidence pieces to retrieve (default: 10) |
+| `--max-sources INT` | Max sources to cite in answer (default: 5) |
+| `--timeout FLOAT` | Agent timeout in seconds (default: 500) |
+| `--concurrency INT` | Indexing concurrency (default: 1) |
+| `--rebuild-index` | Force full index rebuild |
+| `--retry-failed` | Retry previously failed documents |
+
+Any additional arguments are passed through to `pqa` (e.g., `--agent.search_count 10`).
+
+```bash
+# Examples with first-class options:
+
+# Use a cheaper model for summarization
+papi ask "Compare the loss functions" --llm gpt-4o --summary-llm gpt-4o-mini
+
+# Increase verbosity and evidence retrieval
+papi ask "Explain eq. 4" -v 2 --evidence-k 15 --max-sources 8
+
+# Shorter answers with lower temperature
+papi ask "Summarize the methods" --answer-length "about 50 words" -t 0.1
+
+# Force index rebuild after adding new papers
+papi ask "What's new?" --rebuild-index
+
+# Specific model combinations:
 # Gemini 3 Flash + Google Embeddings
 papi ask "Explain the architecture" --llm "gemini/gemini-3-flash-preview" --embedding "gemini/gemini-embedding-001"
-
-# Gemini 3 Pro + Google Embeddings
-papi ask "Give a detailed derivation of eq. 4 and explain implementation pitfalls" --llm "gemini/gemini-3-pro-preview" --embedding "gemini/gemini-embedding-001"
 
 # Claude Sonnet 4.5 + Voyage AI Embeddings
 papi ask "Compare the loss functions" --llm "claude-sonnet-4-5" --embedding "voyage/voyage-3-large"
 
 # GPT-5.2 + OpenAI Embeddings
 papi ask "How to implement eq 4?" --llm "gpt-5.2" --embedding "text-embedding-3-large"
-
-# Pass any arbitrary PaperQA2 arguments (e.g., temperature, verbosity)
-papi ask "Summarize the methods" --summary-llm gpt-4o-mini --temperature 0.2 --verbosity 2
 ```
+
+By default, `papi ask` uses `pqa --settings default` to avoid failures caused by stale user
+settings files; pass `-s/--settings <name>` to use a specific PaperQA2 settings profile.
+If Pillow is not installed, `papi ask` forces `--parsing.multimodal OFF` to avoid PDF
+image extraction errors; pass your own `--parsing...` args to override.
 
 ### Model Probing
 

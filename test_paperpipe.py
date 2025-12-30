@@ -108,6 +108,120 @@ class TestConfigToml:
         monkeypatch.setenv("PAPERPIPE_LLM_MODEL", "env-model")
         assert paperpipe.default_llm_model() == "env-model"
 
+    def test_pqa_config_from_toml(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        for env_var in [
+            "PAPERPIPE_PQA_TEMPERATURE",
+            "PAPERPIPE_PQA_VERBOSITY",
+            "PAPERPIPE_PQA_ANSWER_LENGTH",
+            "PAPERPIPE_PQA_EVIDENCE_K",
+            "PAPERPIPE_PQA_MAX_SOURCES",
+            "PAPERPIPE_PQA_TIMEOUT",
+            "PAPERPIPE_PQA_CONCURRENCY",
+        ]:
+            monkeypatch.delenv(env_var, raising=False)
+
+        (temp_db / "config.toml").write_text(
+            "\n".join(
+                [
+                    "[paperqa]",
+                    "temperature = 0.5",
+                    "verbosity = 2",
+                    'answer_length = "about 100 words"',
+                    "evidence_k = 15",
+                    "max_sources = 8",
+                    "timeout = 300.0",
+                    "concurrency = 4",
+                ]
+            )
+        )
+        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+
+        assert paperpipe.default_pqa_temperature() == 0.5
+        assert paperpipe.default_pqa_verbosity() == 2
+        assert paperpipe.default_pqa_answer_length() == "about 100 words"
+        assert paperpipe.default_pqa_evidence_k() == 15
+        assert paperpipe.default_pqa_max_sources() == 8
+        assert paperpipe.default_pqa_timeout() == 300.0
+        assert paperpipe.default_pqa_concurrency() == 4
+
+    def test_pqa_config_env_overrides_toml(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        (temp_db / "config.toml").write_text(
+            "\n".join(
+                [
+                    "[paperqa]",
+                    "temperature = 0.5",
+                    "concurrency = 4",
+                ]
+            )
+        )
+        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        monkeypatch.setenv("PAPERPIPE_PQA_TEMPERATURE", "0.9")
+        monkeypatch.setenv("PAPERPIPE_PQA_CONCURRENCY", "8")
+
+        assert paperpipe.default_pqa_temperature() == 0.9
+        assert paperpipe.default_pqa_concurrency() == 8
+
+    def test_pqa_config_defaults_when_unset(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        for env_var in [
+            "PAPERPIPE_PQA_TEMPERATURE",
+            "PAPERPIPE_PQA_VERBOSITY",
+            "PAPERPIPE_PQA_ANSWER_LENGTH",
+            "PAPERPIPE_PQA_EVIDENCE_K",
+            "PAPERPIPE_PQA_MAX_SOURCES",
+            "PAPERPIPE_PQA_TIMEOUT",
+            "PAPERPIPE_PQA_CONCURRENCY",
+        ]:
+            monkeypatch.delenv(env_var, raising=False)
+        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+
+        # These return None when unset (no hardcoded default)
+        assert paperpipe.default_pqa_temperature() is None
+        assert paperpipe.default_pqa_verbosity() is None
+        assert paperpipe.default_pqa_answer_length() is None
+        assert paperpipe.default_pqa_evidence_k() is None
+        assert paperpipe.default_pqa_max_sources() is None
+        assert paperpipe.default_pqa_timeout() is None
+        # concurrency defaults to 1
+        assert paperpipe.default_pqa_concurrency() == 1
+
+    def test_pqa_config_invalid_env_values_fallback(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        """Invalid env var values should fall back to config/defaults."""
+        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        # Set invalid (non-numeric) values for numeric env vars
+        monkeypatch.setenv("PAPERPIPE_PQA_TEMPERATURE", "not-a-number")
+        monkeypatch.setenv("PAPERPIPE_PQA_VERBOSITY", "high")
+        monkeypatch.setenv("PAPERPIPE_PQA_EVIDENCE_K", "many")
+        monkeypatch.setenv("PAPERPIPE_PQA_MAX_SOURCES", "all")
+        monkeypatch.setenv("PAPERPIPE_PQA_TIMEOUT", "forever")
+        monkeypatch.setenv("PAPERPIPE_PQA_CONCURRENCY", "max")
+
+        # Should fall back to None (no config) or default
+        assert paperpipe.default_pqa_temperature() is None
+        assert paperpipe.default_pqa_verbosity() is None
+        assert paperpipe.default_pqa_evidence_k() is None
+        assert paperpipe.default_pqa_max_sources() is None
+        assert paperpipe.default_pqa_timeout() is None
+        assert paperpipe.default_pqa_concurrency() == 1  # Falls back to default
+
+    def test_pqa_config_env_vars_direct(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        """Test env vars are read correctly without config file."""
+        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        monkeypatch.setenv("PAPERPIPE_PQA_TEMPERATURE", "0.7")
+        monkeypatch.setenv("PAPERPIPE_PQA_VERBOSITY", "3")
+        monkeypatch.setenv("PAPERPIPE_PQA_ANSWER_LENGTH", "short")
+        monkeypatch.setenv("PAPERPIPE_PQA_EVIDENCE_K", "20")
+        monkeypatch.setenv("PAPERPIPE_PQA_MAX_SOURCES", "10")
+        monkeypatch.setenv("PAPERPIPE_PQA_TIMEOUT", "600.5")
+        monkeypatch.setenv("PAPERPIPE_PQA_CONCURRENCY", "2")
+
+        assert paperpipe.default_pqa_temperature() == 0.7
+        assert paperpipe.default_pqa_verbosity() == 3
+        assert paperpipe.default_pqa_answer_length() == "short"
+        assert paperpipe.default_pqa_evidence_k() == 20
+        assert paperpipe.default_pqa_max_sources() == 10
+        assert paperpipe.default_pqa_timeout() == 600.5
+        assert paperpipe.default_pqa_concurrency() == 2
+
 
 class TestNotesCommand:
     def test_notes_creates_file_and_prints(self, temp_db: Path):
@@ -1197,6 +1311,55 @@ class TestAddCommand:
     def test_parse_authors_keeps_last_first_single_author(self):
         assert paperpipe._parse_authors("Smith, John") == ["Smith, John"]
 
+    def test_parse_authors_semicolon_separated(self):
+        assert paperpipe._parse_authors("Smith, John; Doe, Jane") == ["Smith, John", "Doe, Jane"]
+
+    def test_parse_authors_multiple_comma_separated(self):
+        assert paperpipe._parse_authors("Alice, Bob, Charlie") == ["Alice", "Bob", "Charlie"]
+
+    def test_parse_authors_empty(self):
+        assert paperpipe._parse_authors("") == []
+        assert paperpipe._parse_authors(None) == []
+
+    def test_format_title_short_truncates(self):
+        long_title = "A" * 100
+        result = paperpipe._format_title_short(long_title, max_len=60)
+        assert len(result) == 63  # 60 chars + "..."
+        assert result.endswith("...")
+
+    def test_format_title_short_keeps_short(self):
+        short_title = "Short Title"
+        assert paperpipe._format_title_short(short_title) == short_title
+
+    def test_slugify_title_basic(self):
+        assert paperpipe._slugify_title("Hello World") == "hello-world"
+
+    def test_slugify_title_empty(self):
+        assert paperpipe._slugify_title("") == "paper"
+        assert paperpipe._slugify_title("   ") == "paper"
+
+    def test_slugify_title_truncates_long(self):
+        long_title = "word " * 50
+        result = paperpipe._slugify_title(long_title, max_len=30)
+        assert len(result) <= 30
+
+    def test_slugify_title_special_chars(self):
+        assert paperpipe._slugify_title("Test: A 'Paper' with \"Quotes\"") == "test-a-paper-with-quotes"
+
+    def test_looks_like_pdf_valid(self, tmp_path: Path):
+        pdf = tmp_path / "test.pdf"
+        pdf.write_bytes(b"%PDF-1.4\ntest content")
+        assert paperpipe._looks_like_pdf(pdf) is True
+
+    def test_looks_like_pdf_invalid(self, tmp_path: Path):
+        txt = tmp_path / "test.txt"
+        txt.write_text("not a pdf")
+        assert paperpipe._looks_like_pdf(txt) is False
+
+    def test_looks_like_pdf_missing_file(self, tmp_path: Path):
+        missing = tmp_path / "missing.pdf"
+        assert paperpipe._looks_like_pdf(missing) is False
+
     def test_add_rejects_unsafe_name_without_network(self, temp_db: Path, monkeypatch):
         monkeypatch.setattr(paperpipe, "fetch_arxiv_metadata", lambda _: (_ for _ in ()).throw(AssertionError()))
 
@@ -1885,7 +2048,7 @@ class TestAskCommand:
         runner = CliRunner()
         result = runner.invoke(
             paperpipe.cli,
-            ["ask", "query", "--llm", "my-llm", "--embedding", "my-embed", "--pqa-retry-failed-index"],
+            ["ask", "query", "--llm", "my-llm", "--embedding", "my-embed", "--retry-failed"],
         )
         assert result.exit_code == 0
 
@@ -2025,6 +2188,91 @@ class TestAskCommand:
         assert "--agent.index.paper_directory" in pqa_call
         assert "/custom/papers" in pqa_call
         assert str(temp_db / ".pqa_papers") not in pqa_call
+
+    def test_ask_first_class_options(self, temp_db: Path, monkeypatch):
+        """Test all first-class options are passed correctly to pqa."""
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
+
+        mock_run_calls: list[tuple[list[str], dict]] = []
+
+        def mock_run(cmd, **kwargs):
+            mock_run_calls.append((cmd, kwargs))
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="Answer")
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            paperpipe.cli,
+            [
+                "ask",
+                "test query",
+                "--llm",
+                "gpt-4o",
+                "--summary-llm",
+                "gpt-4o-mini",
+                "--embedding",
+                "text-embedding-3-small",
+                "--temperature",
+                "0.5",
+                "--verbosity",
+                "3",
+                "--answer-length",
+                "about 100 words",
+                "--evidence-k",
+                "15",
+                "--max-sources",
+                "8",
+                "--timeout",
+                "300",
+                "--concurrency",
+                "4",
+                "--rebuild-index",
+            ],
+        )
+
+        assert result.exit_code == 0
+        pqa_call, _ = next(c for c in mock_run_calls if c[0][0] == "pqa")
+
+        # Verify all first-class options are passed
+        assert "--llm" in pqa_call and "gpt-4o" in pqa_call
+        assert "--summary_llm" in pqa_call and "gpt-4o-mini" in pqa_call
+        assert "--embedding" in pqa_call and "text-embedding-3-small" in pqa_call
+        assert "--temperature" in pqa_call and "0.5" in pqa_call
+        assert "--verbosity" in pqa_call and "3" in pqa_call
+        assert "--answer.answer_length" in pqa_call and "about 100 words" in pqa_call
+        assert "--answer.evidence_k" in pqa_call and "15" in pqa_call
+        assert "--answer.answer_max_sources" in pqa_call and "8" in pqa_call
+        assert "--agent.timeout" in pqa_call and "300.0" in pqa_call
+        assert "--agent.index.concurrency" in pqa_call and "4" in pqa_call
+        assert "--agent.rebuild_index" in pqa_call and "true" in pqa_call
+
+    def test_ask_concurrency_defaults_to_one(self, temp_db: Path, monkeypatch):
+        """Concurrency should default to 1 when not specified."""
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
+        # Ensure no env override
+        monkeypatch.delenv("PAPERPIPE_PQA_CONCURRENCY", raising=False)
+        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+
+        mock_run_calls: list[tuple[list[str], dict]] = []
+
+        def mock_run(cmd, **kwargs):
+            mock_run_calls.append((cmd, kwargs))
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="Answer")
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["ask", "test"])
+
+        assert result.exit_code == 0
+        pqa_call, _ = next(c for c in mock_run_calls if c[0][0] == "pqa")
+
+        # Concurrency should be set to 1 by default
+        concurrency_idx = pqa_call.index("--agent.index.concurrency") + 1
+        assert pqa_call[concurrency_idx] == "1"
 
 
 class TestModelsCommand:

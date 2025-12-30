@@ -68,17 +68,24 @@
 |---------|-------------|
 | `papi ask "question"` | Query papers via PaperQA2 RAG |
 | `papi ask "q" --llm MODEL --embedding EMB` | Specify models |
+| `papi ask "q" --summary-llm MODEL` | Use cheaper model for summarization |
+| `papi ask "q" -v 2 --evidence-k 15` | More verbose, more evidence |
+| `papi ask "q" --rebuild-index` | Force full index rebuild |
 | `papi models` | Probe which models work with your API keys |
+
+First-class options: `--llm`, `--summary-llm`, `--embedding`, `-t/--temperature`, `-v/--verbosity`,
+`--answer-length`, `--evidence-k`, `--max-sources`, `--timeout`, `--concurrency`, `--rebuild-index`, `--retry-failed`.
+Any other `pqa` args are passed through (e.g., `--agent.search_count 10`).
 
 Notes:
 - The first `papi ask` may take a while while PaperQA2 builds its index; by default it is cached under `<paper_db>/.pqa_index/`.
-- By default, `papi ask` stages PDFs under `<paper_db>/.pqa_papers/` so PaperQA2 doesn’t index generated Markdown.
+- By default, `papi ask` stages PDFs under `<paper_db>/.pqa_papers/` so PaperQA2 doesn't index generated Markdown.
 - By default, `papi ask` syncs the PaperQA2 index with the staged PDFs (so newly added papers get indexed on the next ask).
 - Override the index directory by passing `--agent.index.index_directory ...` through to `pqa`, or with `PAPERPIPE_PQA_INDEX_DIR`.
-- Override PaperQA2’s summarization/enrichment models with `PAPERPIPE_PQA_SUMMARY_LLM` and `PAPERPIPE_PQA_ENRICHMENT_LLM`
-  (or pass `--summary_llm` / `--parsing.enrichment_llm`).
-- If PaperQA2 previously failed to index some PDFs, it records them as `ERROR` and won’t retry automatically; re-run with
-  `papi ask "..." --pqa-retry-failed-index` (or pass `--agent.rebuild_index true`).
+- Override PaperQA2's summarization/enrichment models with `PAPERPIPE_PQA_SUMMARY_LLM` and `PAPERPIPE_PQA_ENRICHMENT_LLM`
+  (or use `--summary-llm` / `--parsing.enrichment_llm`).
+- If PaperQA2 previously failed to index some PDFs, it records them as `ERROR` and won't retry automatically; re-run with
+  `papi ask "..." --retry-failed` (or `--rebuild-index`).
 
 ## Per-Paper Files
 

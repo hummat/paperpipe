@@ -271,6 +271,101 @@ def default_pqa_enrichment_llm(fallback: Optional[str]) -> Optional[str]:
     return fallback
 
 
+def default_pqa_temperature() -> Optional[float]:
+    configured = os.environ.get("PAPERPIPE_PQA_TEMPERATURE")
+    if configured and configured.strip():
+        try:
+            return float(configured.strip())
+        except ValueError:
+            pass
+    cfg = load_config()
+    raw = _config_get(cfg, ("paperqa", "temperature"))
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    return None
+
+
+def default_pqa_verbosity() -> Optional[int]:
+    configured = os.environ.get("PAPERPIPE_PQA_VERBOSITY")
+    if configured and configured.strip():
+        try:
+            return int(configured.strip())
+        except ValueError:
+            pass
+    cfg = load_config()
+    raw = _config_get(cfg, ("paperqa", "verbosity"))
+    if isinstance(raw, int):
+        return raw
+    return None
+
+
+def default_pqa_answer_length() -> Optional[str]:
+    configured = os.environ.get("PAPERPIPE_PQA_ANSWER_LENGTH")
+    if configured and configured.strip():
+        return configured.strip()
+    cfg = load_config()
+    raw = _config_get(cfg, ("paperqa", "answer_length"))
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return None
+
+
+def default_pqa_evidence_k() -> Optional[int]:
+    configured = os.environ.get("PAPERPIPE_PQA_EVIDENCE_K")
+    if configured and configured.strip():
+        try:
+            return int(configured.strip())
+        except ValueError:
+            pass
+    cfg = load_config()
+    raw = _config_get(cfg, ("paperqa", "evidence_k"))
+    if isinstance(raw, int):
+        return raw
+    return None
+
+
+def default_pqa_max_sources() -> Optional[int]:
+    configured = os.environ.get("PAPERPIPE_PQA_MAX_SOURCES")
+    if configured and configured.strip():
+        try:
+            return int(configured.strip())
+        except ValueError:
+            pass
+    cfg = load_config()
+    raw = _config_get(cfg, ("paperqa", "max_sources"))
+    if isinstance(raw, int):
+        return raw
+    return None
+
+
+def default_pqa_timeout() -> Optional[float]:
+    configured = os.environ.get("PAPERPIPE_PQA_TIMEOUT")
+    if configured and configured.strip():
+        try:
+            return float(configured.strip())
+        except ValueError:
+            pass
+    cfg = load_config()
+    raw = _config_get(cfg, ("paperqa", "timeout"))
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    return None
+
+
+def default_pqa_concurrency() -> int:
+    configured = os.environ.get("PAPERPIPE_PQA_CONCURRENCY")
+    if configured and configured.strip():
+        try:
+            return int(configured.strip())
+        except ValueError:
+            pass
+    cfg = load_config()
+    raw = _config_get(cfg, ("paperqa", "concurrency"))
+    if isinstance(raw, int):
+        return raw
+    return 1  # Default to 1 for stability
+
+
 def tag_aliases() -> dict[str, str]:
     cfg = load_config()
     raw = _config_get(cfg, ("tags", "aliases"))
@@ -1353,7 +1448,7 @@ Abstract: {abstract[:800]}"""
 
 
 @click.group()
-@click.version_option(version="0.2.1")
+@click.version_option(version="0.2.2")
 @click.option("--quiet", "-q", is_flag=True, help="Suppress progress messages.")
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug output.")
 def cli(quiet: bool = False, verbose: bool = False):
@@ -2941,26 +3036,103 @@ def export(papers: tuple[str, ...], level: str, dest: Optional[str]):
     "--llm",
     default=None,
     show_default=False,
-    help=("LLM model to use (PaperQA/LiteLLM id; e.g., gpt-5.2, claude-sonnet-4-5, gemini/gemini-2.5-flash)"),
+    help=("LLM model for answer generation (LiteLLM id; e.g., gpt-4o, claude-sonnet-4-5, gemini/gemini-2.5-flash)."),
+)
+@click.option(
+    "--summary-llm",
+    default=None,
+    show_default=False,
+    help="LLM for evidence summarization (often a cheaper/faster model than --llm).",
 )
 @click.option(
     "--embedding",
     default=None,
     show_default=False,
-    help="Embedding model to use",
+    help="Embedding model for text chunks (e.g., text-embedding-3-small, voyage-3-lite).",
 )
 @click.option(
-    "--pqa-retry-failed-index",
+    "-t",
+    "--temperature",
+    type=float,
+    default=None,
+    show_default=False,
+    help="LLM temperature (0.0-1.0). Lower = more deterministic.",
+)
+@click.option(
+    "-v",
+    "--verbosity",
+    type=int,
+    default=None,
+    show_default=False,
+    help="Logging verbosity level (0-3). 3 = log all LLM/embedding calls.",
+)
+@click.option(
+    "--answer-length",
+    default=None,
+    show_default=False,
+    help="Target answer length (e.g., 'about 200 words', 'short', '3 paragraphs').",
+)
+@click.option(
+    "--evidence-k",
+    type=int,
+    default=None,
+    show_default=False,
+    help="Number of evidence pieces to retrieve (default: 10).",
+)
+@click.option(
+    "--max-sources",
+    type=int,
+    default=None,
+    show_default=False,
+    help="Maximum number of sources to cite in the answer (default: 5).",
+)
+@click.option(
+    "--timeout",
+    type=float,
+    default=None,
+    show_default=False,
+    help="Agent timeout in seconds (default: 500).",
+)
+@click.option(
+    "--concurrency",
+    type=int,
+    default=None,
+    show_default=False,
+    help="Indexing concurrency (default: 1). Higher values speed up indexing but may cause rate limits.",
+)
+@click.option(
+    "--rebuild-index",
     is_flag=True,
-    help="Retry PaperQA2 docs previously marked failed (clears ERROR markers in the index).",
+    default=False,
+    help="Force a full rebuild of the paper index.",
+)
+@click.option(
+    "--retry-failed",
+    is_flag=True,
+    help="Retry docs previously marked failed (clears ERROR markers in the index).",
 )
 @click.pass_context
-def ask(ctx, query: str, llm: Optional[str], embedding: Optional[str], pqa_retry_failed_index: bool):
+def ask(
+    ctx,
+    query: str,
+    llm: Optional[str],
+    summary_llm: Optional[str],
+    embedding: Optional[str],
+    temperature: Optional[float],
+    verbosity: Optional[int],
+    answer_length: Optional[str],
+    evidence_k: Optional[int],
+    max_sources: Optional[int],
+    timeout: Optional[float],
+    concurrency: Optional[int],
+    rebuild_index: bool,
+    retry_failed: bool,
+):
     """
     Query papers using PaperQA2 (if installed).
 
-    Any additional arguments are passed directly to PaperQA2.
-    Example: papi ask "query" --summary_llm gpt-4o-mini --temperature 0.5
+    Common options are exposed as first-class flags. Any additional arguments
+    are passed directly to PaperQA2 (e.g., --agent.search_count 10).
     """
     if not shutil.which("pqa"):
         echo_error("PaperQA2 not installed. Install with: pip install paper-qa")
@@ -3068,16 +3240,25 @@ def ask(ctx, query: str, llm: Optional[str], embedding: Optional[str], pqa_retry
     if not has_sync_override:
         cmd.extend(["--agent.index.sync_with_paper_directory", "true"])
 
-    summary_llm_default = default_pqa_summary_llm(llm_for_pqa)
-    enrichment_llm_default = default_pqa_enrichment_llm(llm_for_pqa)
+    # --- Handle first-class options (with fallback to config/env defaults) ---
 
-    has_summary_llm_override = any(
+    # summary_llm: first-class option takes precedence, then config, then falls back to llm_for_pqa
+    summary_llm_source = ctx.get_parameter_source("summary_llm")
+    has_summary_llm_passthrough = any(
         arg in {"--summary_llm", "--summary-llm"} or arg.startswith(("--summary_llm=", "--summary-llm="))
         for arg in ctx.args
     )
-    if summary_llm_default and not has_summary_llm_override:
-        cmd.extend(["--summary_llm", summary_llm_default])
+    if summary_llm_source != click.core.ParameterSource.DEFAULT:
+        # Explicit CLI --summary-llm takes precedence
+        if summary_llm:
+            cmd.extend(["--summary_llm", summary_llm])
+    elif not has_summary_llm_passthrough:
+        summary_llm_default = default_pqa_summary_llm(llm_for_pqa)
+        if summary_llm_default:
+            cmd.extend(["--summary_llm", summary_llm_default])
 
+    # enrichment_llm: config/env default only (no first-class option)
+    enrichment_llm_default = default_pqa_enrichment_llm(llm_for_pqa)
     has_enrichment_llm_override = any(
         arg == "--parsing.enrichment_llm"
         or arg == "--parsing.enrichment-llm"
@@ -3086,6 +3267,107 @@ def ask(ctx, query: str, llm: Optional[str], embedding: Optional[str], pqa_retry
     )
     if enrichment_llm_default and not has_enrichment_llm_override:
         cmd.extend(["--parsing.enrichment_llm", enrichment_llm_default])
+
+    # temperature
+    temperature_source = ctx.get_parameter_source("temperature")
+    has_temperature_passthrough = any(arg in {"--temperature"} or arg.startswith("--temperature=") for arg in ctx.args)
+    if temperature_source != click.core.ParameterSource.DEFAULT:
+        if temperature is not None:
+            cmd.extend(["--temperature", str(temperature)])
+    elif not has_temperature_passthrough:
+        temperature_default = default_pqa_temperature()
+        if temperature_default is not None:
+            cmd.extend(["--temperature", str(temperature_default)])
+
+    # verbosity
+    verbosity_source = ctx.get_parameter_source("verbosity")
+    has_verbosity_passthrough = any(arg in {"--verbosity", "-v"} or arg.startswith("--verbosity=") for arg in ctx.args)
+    if verbosity_source != click.core.ParameterSource.DEFAULT:
+        if verbosity is not None:
+            cmd.extend(["--verbosity", str(verbosity)])
+    elif not has_verbosity_passthrough:
+        verbosity_default = default_pqa_verbosity()
+        if verbosity_default is not None:
+            cmd.extend(["--verbosity", str(verbosity_default)])
+
+    # answer_length -> --answer.answer_length
+    answer_length_source = ctx.get_parameter_source("answer_length")
+    has_answer_length_passthrough = any(
+        arg in {"--answer.answer_length", "--answer.answer-length"}
+        or arg.startswith(("--answer.answer_length=", "--answer.answer-length="))
+        for arg in ctx.args
+    )
+    if answer_length_source != click.core.ParameterSource.DEFAULT:
+        if answer_length:
+            cmd.extend(["--answer.answer_length", answer_length])
+    elif not has_answer_length_passthrough:
+        answer_length_default = default_pqa_answer_length()
+        if answer_length_default:
+            cmd.extend(["--answer.answer_length", answer_length_default])
+
+    # evidence_k -> --answer.evidence_k
+    evidence_k_source = ctx.get_parameter_source("evidence_k")
+    has_evidence_k_passthrough = any(
+        arg in {"--answer.evidence_k", "--answer.evidence-k"}
+        or arg.startswith(("--answer.evidence_k=", "--answer.evidence-k="))
+        for arg in ctx.args
+    )
+    if evidence_k_source != click.core.ParameterSource.DEFAULT:
+        if evidence_k is not None:
+            cmd.extend(["--answer.evidence_k", str(evidence_k)])
+    elif not has_evidence_k_passthrough:
+        evidence_k_default = default_pqa_evidence_k()
+        if evidence_k_default is not None:
+            cmd.extend(["--answer.evidence_k", str(evidence_k_default)])
+
+    # max_sources -> --answer.answer_max_sources
+    max_sources_source = ctx.get_parameter_source("max_sources")
+    has_max_sources_passthrough = any(
+        arg in {"--answer.answer_max_sources", "--answer.answer-max-sources"}
+        or arg.startswith(("--answer.answer_max_sources=", "--answer.answer-max-sources="))
+        for arg in ctx.args
+    )
+    if max_sources_source != click.core.ParameterSource.DEFAULT:
+        if max_sources is not None:
+            cmd.extend(["--answer.answer_max_sources", str(max_sources)])
+    elif not has_max_sources_passthrough:
+        max_sources_default = default_pqa_max_sources()
+        if max_sources_default is not None:
+            cmd.extend(["--answer.answer_max_sources", str(max_sources_default)])
+
+    # timeout -> --agent.timeout
+    timeout_source = ctx.get_parameter_source("timeout")
+    has_timeout_passthrough = any(arg in {"--agent.timeout"} or arg.startswith("--agent.timeout=") for arg in ctx.args)
+    if timeout_source != click.core.ParameterSource.DEFAULT:
+        if timeout is not None:
+            cmd.extend(["--agent.timeout", str(timeout)])
+    elif not has_timeout_passthrough:
+        timeout_default = default_pqa_timeout()
+        if timeout_default is not None:
+            cmd.extend(["--agent.timeout", str(timeout_default)])
+
+    # concurrency -> --agent.index.concurrency
+    concurrency_source = ctx.get_parameter_source("concurrency")
+    has_concurrency_passthrough = any(
+        arg in {"--agent.index.concurrency", "--agent.index.concurrency"}
+        or arg.startswith(("--agent.index.concurrency=",))
+        for arg in ctx.args
+    )
+    if concurrency_source != click.core.ParameterSource.DEFAULT:
+        if concurrency is not None:
+            cmd.extend(["--agent.index.concurrency", str(concurrency)])
+    elif not has_concurrency_passthrough:
+        concurrency_default = default_pqa_concurrency()
+        cmd.extend(["--agent.index.concurrency", str(concurrency_default)])
+
+    # rebuild_index -> --agent.rebuild_index
+    has_rebuild_passthrough = any(
+        arg in {"--agent.rebuild_index", "--agent.rebuild-index"}
+        or arg.startswith(("--agent.rebuild_index=", "--agent.rebuild-index="))
+        for arg in ctx.args
+    )
+    if rebuild_index and not has_rebuild_passthrough:
+        cmd.extend(["--agent.rebuild_index", "true"])
 
     # Add any extra arguments passed after the known options
     cmd.extend(ctx.args)
@@ -3105,13 +3387,13 @@ def ask(ctx, query: str, llm: Optional[str], embedding: Optional[str], pqa_retry
         files_path = _paperqa_index_files_path(index_directory=Path(index_dir_raw), index_name=index_name_raw)
         mapping = _paperqa_load_index_files_map(files_path) if files_path.exists() else None
         failed_count = sum(1 for v in (mapping or {}).values() if v == "ERROR")
-        if failed_count and not pqa_retry_failed_index:
+        if failed_count and not retry_failed:
             echo_warning(
                 f"PaperQA2 index '{index_name_raw}' has {failed_count} failed document(s) (marked ERROR); "
-                "PaperQA2 will not retry them automatically. Re-run with --pqa-retry-failed-index "
-                "or pass --agent.rebuild_index true to rebuild the whole index."
+                "PaperQA2 will not retry them automatically. Re-run with --retry-failed "
+                "or --rebuild-index to rebuild the whole index."
             )
-        if pqa_retry_failed_index:
+        if retry_failed:
             cleared, cleared_files = _paperqa_clear_failed_documents(
                 index_directory=Path(index_dir_raw),
                 index_name=index_name_raw,
