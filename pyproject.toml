@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "paperpipe"
-version = "0.2.2"
+version = "0.3.0"
 description = "Unified paper database for coding agents + PaperQA2"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -77,10 +77,10 @@ Documentation = "https://github.com/hummat/paperpipe#readme"
 Repository = "https://github.com/hummat/paperpipe"
 
 [tool.hatch.build.targets.wheel]
-only-include = ["paperpipe.py", "README.md", "ROADMAP.md", "LICENSE", "AGENT_INTEGRATION.md", "skill"]
+only-include = ["paperpipe.py", "README.md", "ROADMAP.md", "LICENSE", "AGENT_INTEGRATION.md", "skill", "prompts"]
 
 [tool.hatch.build.targets.sdist]
-only-include = ["paperpipe.py", "pyproject.toml", "README.md", "ROADMAP.md", "LICENSE", "AGENT_INTEGRATION.md", "skill"]
+only-include = ["paperpipe.py", "pyproject.toml", "README.md", "ROADMAP.md", "LICENSE", "AGENT_INTEGRATION.md", "skill", "prompts"]
 
 [tool.pytest.ini_options]
 addopts = "--cov=paperpipe --cov-report=term-missing --cov-fail-under=75 -m 'not integration'"

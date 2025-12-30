@@ -47,6 +47,31 @@ def temp_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     return db_path
 
 
+class MockPopenProcess:
+    """Mock Popen process object for testing."""
+
+    def __init__(self, returncode: int, stdout: str):
+        self._returncode = returncode
+        self._stdout_lines = stdout.splitlines(keepends=True) if stdout else []
+        self.stdout = iter(self._stdout_lines)
+
+    def wait(self) -> int:
+        return self._returncode
+
+
+class MockPopen:
+    """Mock subprocess.Popen for testing pqa command construction."""
+
+    def __init__(self, returncode: int = 0, stdout: str = ""):
+        self.calls: list[tuple[list[str], dict]] = []
+        self._returncode = returncode
+        self._stdout = stdout
+
+    def __call__(self, cmd, **kwargs):
+        self.calls.append((cmd, kwargs))
+        return MockPopenProcess(self._returncode, self._stdout)
+
+
 class TestEnsureDb:
     def test_creates_directories(self, temp_db: Path):
         paperpipe.ensure_db()
@@ -1712,6 +1737,50 @@ class TestInstallSkillCommand:
         assert dest.is_symlink()
 
 
+class TestInstallPromptsCommand:
+    def test_install_prompts_creates_symlinks_for_codex(self, temp_db: Path, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["install-prompts", "--codex"])
+        assert result.exit_code == 0, result.output
+
+        prompt_dir = tmp_path / ".codex" / "prompts"
+        assert prompt_dir.exists()
+
+        expected = [
+            "compare-papers.md",
+            "curate-paper-note.md",
+            "ground-with-paper.md",
+        ]
+        for filename in expected:
+            dest = prompt_dir / filename
+            assert dest.is_symlink()
+            assert dest.resolve() == (Path(__file__).parent / "prompts" / "codex" / filename).resolve()
+
+    def test_install_prompts_existing_dest_requires_force(self, temp_db: Path, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        dest = tmp_path / ".codex" / "prompts" / "ground-with-paper.md"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text("not a symlink")
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["install-prompts", "--codex"])
+        assert result.exit_code == 0
+        assert "use --force" in result.output.lower()
+
+    def test_install_prompts_copy_mode_copies_files(self, temp_db: Path, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["install-prompts", "--codex", "--copy"])
+        assert result.exit_code == 0, result.output
+
+        dest = tmp_path / ".codex" / "prompts" / "curate-paper-note.md"
+        assert dest.exists()
+        assert not dest.is_symlink()
+
+
 class TestRemoveMultiplePapers:
     """Tests for removing multiple papers at once."""
 
@@ -1959,14 +2028,9 @@ class TestAskCommand:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
         monkeypatch.setattr(paperpipe, "_pillow_available", lambda: False)
 
-        # Mock subprocess.run
-        mock_run_calls: list[tuple[list[str], dict]] = []
-
-        def mock_run(cmd, **kwargs):
-            mock_run_calls.append((cmd, kwargs))
-            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="Answer")
-
-        monkeypatch.setattr(subprocess, "run", mock_run)
+        # Mock subprocess.Popen (used for pqa with streaming output)
+        mock_popen = MockPopen(returncode=0, stdout="Answer\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
 
         # Add a dummy paper PDF so PaperQA has something to index.
         (temp_db / "papers" / "test-paper").mkdir(parents=True)
@@ -1992,7 +2056,7 @@ class TestAskCommand:
         assert result.exit_code == 0
 
         # Verify pqa was called with correct args
-        pqa_call, pqa_kwargs = next(c for c in mock_run_calls if c[0][0] == "pqa")
+        pqa_call, pqa_kwargs = next(c for c in mock_popen.calls if c[0][0] == "pqa")
         assert "pqa" in pqa_call
         assert "--settings" in pqa_call
         assert "default" in pqa_call
@@ -2026,23 +2090,25 @@ class TestAskCommand:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
         monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
 
-        mock_run_calls: list[tuple[list[str], dict]] = []
-
-        def mock_run(cmd, **kwargs):
-            mock_run_calls.append((cmd, kwargs))
-            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="Answer")
-
-        monkeypatch.setattr(subprocess, "run", mock_run)
+        mock_popen = MockPopen(returncode=0, stdout="Answer\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
 
         (temp_db / "papers" / "test-paper").mkdir(parents=True)
         (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
 
         # Pretend PaperQA2 previously marked this staged file as ERROR.
+        # Also create the staged file so the clear logic can match it.
+        staging_dir = temp_db / ".pqa_papers"
+        staging_dir.mkdir(parents=True)
+        (staging_dir / "test-paper.pdf").touch()
         index_dir = temp_db / ".pqa_index" / "paperpipe_my-embed"
         index_dir.mkdir(parents=True)
         files_zip = index_dir / "files.zip"
+        # pickle is required for PaperQA2 index format compatibility
         files_zip.write_bytes(
-            zlib.compress(pickle.dumps({"test-paper.pdf": "ERROR"}, protocol=pickle.HIGHEST_PROTOCOL))
+            zlib.compress(
+                pickle.dumps({str(staging_dir / "test-paper.pdf"): "ERROR"}, protocol=pickle.HIGHEST_PROTOCOL)
+            )
         )
 
         runner = CliRunner()
@@ -2059,13 +2125,8 @@ class TestAskCommand:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
         monkeypatch.setattr(paperpipe, "_pillow_available", lambda: False)
 
-        mock_run_calls: list[tuple[list[str], dict]] = []
-
-        def mock_run(cmd, **kwargs):
-            mock_run_calls.append((cmd, kwargs))
-            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="Answer")
-
-        monkeypatch.setattr(subprocess, "run", mock_run)
+        mock_popen = MockPopen(returncode=0, stdout="Answer\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
 
         (temp_db / "papers" / "test-paper").mkdir(parents=True)
         (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
@@ -2075,7 +2136,7 @@ class TestAskCommand:
 
         assert result.exit_code == 0
 
-        pqa_call, _pqa_kwargs = next(c for c in mock_run_calls if c[0][0] == "pqa")
+        pqa_call, _pqa_kwargs = next(c for c in mock_popen.calls if c[0][0] == "pqa")
         assert "--settings" not in pqa_call
         assert "default" not in pqa_call
         assert "-s" in pqa_call
@@ -2085,13 +2146,8 @@ class TestAskCommand:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
         monkeypatch.setattr(paperpipe, "_pillow_available", lambda: False)
 
-        mock_run_calls: list[tuple[list[str], dict]] = []
-
-        def mock_run(cmd, **kwargs):
-            mock_run_calls.append((cmd, kwargs))
-            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="Answer")
-
-        monkeypatch.setattr(subprocess, "run", mock_run)
+        mock_popen = MockPopen(returncode=0, stdout="Answer\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
 
         (temp_db / "papers" / "test-paper").mkdir(parents=True)
         (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
@@ -2104,7 +2160,7 @@ class TestAskCommand:
 
         assert result.exit_code == 0
 
-        pqa_call, _pqa_kwargs = next(c for c in mock_run_calls if c[0][0] == "pqa")
+        pqa_call, _pqa_kwargs = next(c for c in mock_popen.calls if c[0][0] == "pqa")
         assert "--parsing.multimodal" in pqa_call
         assert "ON_WITHOUT_ENRICHMENT" in pqa_call
         assert "OFF" not in pqa_call
@@ -2113,13 +2169,8 @@ class TestAskCommand:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
         monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
 
-        mock_run_calls: list[tuple[list[str], dict]] = []
-
-        def mock_run(cmd, **kwargs):
-            mock_run_calls.append((cmd, kwargs))
-            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="Answer")
-
-        monkeypatch.setattr(subprocess, "run", mock_run)
+        mock_popen = MockPopen(returncode=0, stdout="Answer\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
 
         (temp_db / "papers" / "test-paper").mkdir(parents=True)
         (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
@@ -2129,20 +2180,15 @@ class TestAskCommand:
 
         assert result.exit_code == 0
 
-        pqa_call, _pqa_kwargs = next(c for c in mock_run_calls if c[0][0] == "pqa")
+        pqa_call, _pqa_kwargs = next(c for c in mock_popen.calls if c[0][0] == "pqa")
         assert "--parsing.multimodal" not in pqa_call
 
     def test_ask_does_not_override_user_index_directory(self, temp_db: Path, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
         monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
 
-        mock_run_calls: list[tuple[list[str], dict]] = []
-
-        def mock_run(cmd, **kwargs):
-            mock_run_calls.append((cmd, kwargs))
-            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="Answer")
-
-        monkeypatch.setattr(subprocess, "run", mock_run)
+        mock_popen = MockPopen(returncode=0, stdout="Answer\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
 
         (temp_db / "papers" / "test-paper").mkdir(parents=True)
         (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
@@ -2155,7 +2201,7 @@ class TestAskCommand:
 
         assert result.exit_code == 0
 
-        pqa_call, _pqa_kwargs = next(c for c in mock_run_calls if c[0][0] == "pqa")
+        pqa_call, _pqa_kwargs = next(c for c in mock_popen.calls if c[0][0] == "pqa")
         assert "--agent.index.index_directory" in pqa_call
         # User-provided value should be preserved; paperpipe should not append its default.
         assert "/custom/index" in pqa_call
@@ -2165,13 +2211,8 @@ class TestAskCommand:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
         monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
 
-        mock_run_calls: list[tuple[list[str], dict]] = []
-
-        def mock_run(cmd, **kwargs):
-            mock_run_calls.append((cmd, kwargs))
-            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="Answer")
-
-        monkeypatch.setattr(subprocess, "run", mock_run)
+        mock_popen = MockPopen(returncode=0, stdout="Answer\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
 
         (temp_db / "papers" / "test-paper").mkdir(parents=True)
         (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
@@ -2184,23 +2225,47 @@ class TestAskCommand:
 
         assert result.exit_code == 0
 
-        pqa_call, _pqa_kwargs = next(c for c in mock_run_calls if c[0][0] == "pqa")
+        pqa_call, _pqa_kwargs = next(c for c in mock_popen.calls if c[0][0] == "pqa")
         assert "--agent.index.paper_directory" in pqa_call
         assert "/custom/papers" in pqa_call
         assert str(temp_db / ".pqa_papers") not in pqa_call
+
+    def test_ask_marks_crashing_doc_error_when_custom_paper_directory_used(self, temp_db: Path, monkeypatch):
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: False)
+
+        custom_papers = temp_db / "custom_papers"
+        custom_papers.mkdir(parents=True)
+        crashing_pdf = custom_papers / "crashy.pdf"
+        crashing_pdf.write_bytes(b"%PDF-1.4\n% fake\n")
+
+        mock_popen = MockPopen(
+            returncode=1,
+            stdout="New file to index: crashy.pdf...\nTraceback (most recent call last):\nBoom\n",
+        )
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            paperpipe.cli,
+            ["ask", "query", "--embedding", "my-embed", "--agent.index.paper_directory", str(custom_papers)],
+        )
+
+        assert result.exit_code == 1
+        assert crashing_pdf.exists()
+
+        files_zip = temp_db / ".pqa_index" / "paperpipe_my-embed" / "files.zip"
+        raw = zlib.decompress(files_zip.read_bytes())
+        mapping = pickle.loads(raw)
+        assert mapping[str(crashing_pdf)] == "ERROR"
 
     def test_ask_first_class_options(self, temp_db: Path, monkeypatch):
         """Test all first-class options are passed correctly to pqa."""
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
         monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
 
-        mock_run_calls: list[tuple[list[str], dict]] = []
-
-        def mock_run(cmd, **kwargs):
-            mock_run_calls.append((cmd, kwargs))
-            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="Answer")
-
-        monkeypatch.setattr(subprocess, "run", mock_run)
+        mock_popen = MockPopen(returncode=0, stdout="Answer\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
 
         runner = CliRunner()
         result = runner.invoke(
@@ -2233,7 +2298,7 @@ class TestAskCommand:
         )
 
         assert result.exit_code == 0
-        pqa_call, _ = next(c for c in mock_run_calls if c[0][0] == "pqa")
+        pqa_call, _ = next(c for c in mock_popen.calls if c[0][0] == "pqa")
 
         # Verify all first-class options are passed
         assert "--llm" in pqa_call and "gpt-4o" in pqa_call
@@ -2256,19 +2321,14 @@ class TestAskCommand:
         monkeypatch.delenv("PAPERPIPE_PQA_CONCURRENCY", raising=False)
         monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
 
-        mock_run_calls: list[tuple[list[str], dict]] = []
-
-        def mock_run(cmd, **kwargs):
-            mock_run_calls.append((cmd, kwargs))
-            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="Answer")
-
-        monkeypatch.setattr(subprocess, "run", mock_run)
+        mock_popen = MockPopen(returncode=0, stdout="Answer\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
 
         runner = CliRunner()
         result = runner.invoke(paperpipe.cli, ["ask", "test"])
 
         assert result.exit_code == 0
-        pqa_call, _ = next(c for c in mock_run_calls if c[0][0] == "pqa")
+        pqa_call, _ = next(c for c in mock_popen.calls if c[0][0] == "pqa")
 
         # Concurrency should be set to 1 by default
         concurrency_idx = pqa_call.index("--agent.index.concurrency") + 1
@@ -2867,3 +2927,93 @@ class TestPaperQAIntegration:
 
         # Should get some response (not just the fallback)
         assert result.exit_code == 0
+
+
+class TestAskErrorHandling:
+    def test_ask_excludes_failed_files_from_staging(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
+
+        mock_popen = MockPopen(returncode=0, stdout="Answer\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+
+        # Create a test paper that exists in the DB
+        (temp_db / "papers" / "test-paper").mkdir(parents=True)
+        (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
+
+        # Create a fake PaperQA2 index where this paper is marked as ERROR
+        embedding_model = "my-embed"
+        index_name = f"paperpipe_{embedding_model}"
+
+        index_dir = temp_db / ".pqa_index"
+        index_path = index_dir / index_name
+        index_path.mkdir(parents=True)
+        files_zip = index_path / "files.zip"
+
+        # The key in the index map is typically the full path to the staged file.
+        staged_path_str = str(temp_db / ".pqa_papers" / "test-paper.pdf")
+
+        # Write the index file with ERROR status
+        files_zip.write_bytes(zlib.compress(pickle.dumps({staged_path_str: "ERROR"}, protocol=pickle.HIGHEST_PROTOCOL)))
+
+        runner = CliRunner()
+        # Run ask WITHOUT --retry-failed
+        result = runner.invoke(
+            paperpipe.cli,
+            ["ask", "query", "--embedding", embedding_model, "--agent.index.index_directory", str(index_dir)],
+        )
+
+        assert result.exit_code == 0
+
+        # Verify that test-paper.pdf is NOT in the staging directory
+        staging_dir = temp_db / ".pqa_papers"
+        assert staging_dir.exists()
+        assert not (staging_dir / "test-paper.pdf").exists(), "Failed file should not be staged"
+
+        # Verify pqa was still called
+        assert len(mock_popen.calls) > 0
+
+    def test_ask_stages_failed_files_with_retry_failed(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
+
+        mock_popen = MockPopen(returncode=0, stdout="Answer\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+
+        (temp_db / "papers" / "test-paper").mkdir(parents=True)
+        (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
+
+        embedding_model = "my-embed"
+        index_name = f"paperpipe_{embedding_model}"
+        index_dir = temp_db / ".pqa_index"
+        index_path = index_dir / index_name
+        index_path.mkdir(parents=True)
+        files_zip = index_path / "files.zip"
+
+        staged_path_str = str(temp_db / ".pqa_papers" / "test-paper.pdf")
+        files_zip.write_bytes(zlib.compress(pickle.dumps({staged_path_str: "ERROR"}, protocol=pickle.HIGHEST_PROTOCOL)))
+
+        runner = CliRunner()
+        # Run ask WITH --retry-failed
+        result = runner.invoke(
+            paperpipe.cli,
+            [
+                "ask",
+                "query",
+                "--embedding",
+                embedding_model,
+                "--agent.index.index_directory",
+                str(index_dir),
+                "--retry-failed",
+            ],
+        )
+
+        assert result.exit_code == 0
+
+        # Verify that test-paper.pdf IS in the staging directory (re-staged)
+        staging_dir = temp_db / ".pqa_papers"
+        assert (staging_dir / "test-paper.pdf").exists(), "Failed file should be staged when retrying"
+
+        # Also verify that the ERROR marker was cleared from the index file
+        mapping = paperpipe._paperqa_load_index_files_map(files_zip)
+        assert mapping == {}, "ERROR markers should be cleared"

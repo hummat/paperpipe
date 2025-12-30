@@ -90,3 +90,15 @@ Without LLM, paperpipe falls back to metadata + section headings + regex equatio
 2. Read `{paper}/equations.md` and compare symbol-by-symbol with the implementation
 3. If ambiguous, confirm definitions/assumptions in `{paper}/source.tex`
 4. If the question is broad or spans multiple papers, run `papi ask "..."` (requires PaperQA2)
+
+### Optional: Shared Prompts / Commands
+
+paperpipe ships prompt templates you can install into your agent CLI:
+
+```bash
+papi install-prompts
+```
+
+Usage:
+- Claude Code: `/ground-with-paper`, `/compare-papers`, `/curate-paper-note`
+- Codex CLI: `/prompts:ground-with-paper`, `/prompts:compare-papers`, `/prompts:curate-paper-note`

@@ -11,6 +11,7 @@
 | `papi search "query"` | Search by title, tag, or content |
 | `papi show <papers...>` | Show paper details or print stored content |
 | `papi notes <paper>` | Open or print per-paper implementation notes |
+| `papi install-prompts` | Install shared prompts (Claude commands + Codex prompts) |
 
 ## Paper Management
 

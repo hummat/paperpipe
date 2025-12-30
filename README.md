@@ -135,6 +135,26 @@ papi install-skill --codex
 
 Restart your CLI after installing the skill.
 
+### Optional: Shared Prompts / Commands
+
+paperpipe also ships lightweight prompt templates you can invoke as:
+- Claude Code: slash commands (from `~/.claude/commands/`)
+- Codex CLI: prompts (from `~/.codex/prompts/`)
+
+Install them with:
+
+```bash
+papi install-prompts
+papi install-prompts --claude
+papi install-prompts --codex
+```
+
+Usage:
+- Claude Code: `/ground-with-paper`, `/compare-papers`, `/curate-paper-note`
+- Codex CLI: `/prompts:ground-with-paper`, `/prompts:compare-papers`, `/prompts:curate-paper-note`
+
+For Codex CLI prompts, attach exported context with `@...` (or paste output from `papi show ... --level ...`).
+
 Most coding-agent CLIs can read local files directly. The best workflow is:
 
 1. Use `papi` to build/manage your paper collection.
@@ -190,6 +210,7 @@ papi show neuralangelo neus --level eq
 | `papi tags` | List all tags with counts |
 | `papi path` | Print database location |
 | `papi install-skill` | Install the papi skill for Claude Code / Codex CLI |
+| `papi install-prompts` | Install shared prompts (Claude commands + Codex prompts) |
 | `--quiet/-q` | Suppress progress messages |
 | `--verbose/-v` | Enable debug output |
 
@@ -315,6 +336,7 @@ chosen provider (PaperQA2 uses LiteLLM identifiers for `--llm` and `--embedding`
 | **Anthropic** | `ANTHROPIC_API_KEY` | Claude models |
 | **Voyage AI** | `VOYAGE_API_KEY` | Embeddings (recommended when using Claude) |
 | **OpenAI** | `OPENAI_API_KEY` | GPT models & embeddings |
+| **OpenRouter** | `OPENROUTER_API_KEY` | Access to 200+ models via unified API |
 
 ## LLM Support
 
@@ -330,6 +352,7 @@ This installs LiteLLM, which supports many providers. Set the appropriate API ke
 export GEMINI_API_KEY=...      # For Gemini (default)
 export OPENAI_API_KEY=...      # For OpenAI/GPT
 export ANTHROPIC_API_KEY=...   # For Claude
+export OPENROUTER_API_KEY=...  # For OpenRouter (200+ models)
 ```
 
 paperpipe defaults to `gemini/gemini-3-flash-preview`. Override via:
@@ -403,6 +426,9 @@ papi ask "Compare the loss functions" --llm "claude-sonnet-4-5" --embedding "voy
 
 # GPT-5.2 + OpenAI Embeddings
 papi ask "How to implement eq 4?" --llm "gpt-5.2" --embedding "text-embedding-3-large"
+
+# OpenRouter (access 200+ models via unified API)
+papi ask "Explain the method" --llm "openrouter/anthropic/claude-sonnet-4" --embedding "openrouter/openai/text-embedding-3-large"
 ```
 
 By default, `papi ask` uses `pqa --settings default` to avoid failures caused by stale user

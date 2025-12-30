@@ -765,7 +765,7 @@ def _pillow_available() -> bool:
     return importlib.util.find_spec("PIL") is not None
 
 
-def _refresh_pqa_pdf_staging_dir(*, staging_dir: Path) -> int:
+def _refresh_pqa_pdf_staging_dir(*, staging_dir: Path, exclude_names: Optional[set[str]] = None) -> int:
     """
     Create/update a flat directory containing only PDFs (one per paper) for PaperQA2 indexing.
 
@@ -780,6 +780,7 @@ def _refresh_pqa_pdf_staging_dir(*, staging_dir: Path) -> int:
     recreating symlinks would cause unnecessary re-indexing.
     """
     staging_dir.mkdir(parents=True, exist_ok=True)
+    exclude_names = exclude_names or set()
 
     # Build set of expected symlink names based on current papers.
     expected_names: set[str] = set()
@@ -793,10 +794,12 @@ def _refresh_pqa_pdf_staging_dir(*, staging_dir: Path) -> int:
             if not pdf_src.exists():
                 continue
             name = f"{paper_dir.name}.pdf"
+            if name in exclude_names:
+                continue
             expected_names.add(name)
             paper_sources[name] = pdf_src
 
-    # Remove stale entries (papers that were removed) - best-effort cleanup.
+    # Remove stale entries (papers that were removed or are now excluded) - best-effort cleanup.
     try:
         for child in staging_dir.iterdir():
             if child.name not in expected_names:
@@ -861,6 +864,58 @@ def _extract_flag_value(args: list[str], *, names: set[str]) -> Optional[str]:
     return None
 
 
+def _paperqa_effective_paper_directory(args: list[str], *, base_dir: Path) -> Optional[Path]:
+    raw = _extract_flag_value(args, names={"--agent.index.paper_directory", "--agent.index.paper-directory"})
+    if not raw:
+        return None
+    p = Path(raw).expanduser()
+    if not p.is_absolute():
+        p = (base_dir / p).resolve()
+    return p
+
+
+def _paperqa_find_crashing_file(*, paper_directory: Path, crashing_doc: str) -> Optional[Path]:
+    doc = (crashing_doc or "").strip().strip("\"'")
+    doc = doc.rstrip(".…,:;")
+    if not doc:
+        return None
+
+    doc_path = Path(doc)
+    if doc_path.is_absolute():
+        return doc_path if doc_path.exists() else None
+
+    if ".." in doc_path.parts:
+        doc_path = Path(doc_path.name)
+
+    # Try the path as-is (relative to the paper directory).
+    candidate = paper_directory / doc_path
+    if candidate.exists():
+        return candidate
+
+    # Try matching by file name/stem (common when pqa prints just "foo.pdf" or "foo").
+    name = doc_path.name
+    expected_stem = Path(name).stem
+    if expected_stem.lower().endswith(".pdf"):
+        expected_stem = Path(expected_stem).stem
+
+    try:
+        for f in paper_directory.iterdir():
+            if f.name == name or f.stem == expected_stem:
+                return f
+    except OSError:
+        pass
+
+    # As a last resort, search recursively by filename.
+    try:
+        for f in paper_directory.rglob(name):
+            if f.name == name:
+                return f
+    except OSError:
+        pass
+
+    return None
+
+
 def _paperqa_index_files_path(*, index_directory: Path, index_name: str) -> Path:
     return Path(index_directory) / index_name / "files.zip"
 
@@ -878,6 +933,20 @@ def _paperqa_load_index_files_map(path: Path) -> Optional[dict[str, str]]:
         if isinstance(k, str) and isinstance(v, str):
             out[k] = v
     return out
+
+
+def _paperqa_save_index_files_map(path: Path, mapping: dict[str, str]) -> bool:
+    """Save the PaperQA2 index files map back to disk.
+
+    Note: Uses pickle for compatibility with PaperQA2's existing index format.
+    """
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = zlib.compress(pickle.dumps(mapping, protocol=pickle.HIGHEST_PROTOCOL))  # PaperQA2 format
+        path.write_bytes(payload)
+        return True
+    except Exception:
+        return False
 
 
 def _paperqa_clear_failed_documents(*, index_directory: Path, index_name: str) -> tuple[int, list[str]]:
@@ -903,9 +972,39 @@ def _paperqa_clear_failed_documents(*, index_directory: Path, index_name: str) -
     for k in failed:
         mapping.pop(k, None)
 
-    payload = zlib.compress(pickle.dumps(mapping, protocol=pickle.HIGHEST_PROTOCOL))
-    files_path.write_bytes(payload)
+    _paperqa_save_index_files_map(files_path, mapping)
     return len(failed), failed
+
+
+def _paperqa_mark_failed_documents(
+    *, index_directory: Path, index_name: str, staged_files: set[str]
+) -> tuple[int, list[str]]:
+    """
+    Mark unprocessed staged files as ERROR in the PaperQA2 index.
+
+    When pqa crashes with an unhandled exception, it doesn't mark the crashing document
+    as ERROR. This function detects which staged files weren't processed and marks them
+    as ERROR so pqa won't crash on them again (unless --retry-failed is used).
+
+    Returns (count, list of newly marked files).
+    """
+    files_path = _paperqa_index_files_path(index_directory=index_directory, index_name=index_name)
+
+    mapping = _paperqa_load_index_files_map(files_path) if files_path.exists() else {}
+    if mapping is None:
+        mapping = {}
+
+    # Find staged files that have no status in the index (not processed)
+    unprocessed = sorted([f for f in staged_files if f not in mapping])
+    if not unprocessed:
+        return 0, []
+
+    for f in unprocessed:
+        mapping[f] = "ERROR"
+
+    if _paperqa_save_index_files_map(files_path, mapping):
+        return len(unprocessed), unprocessed
+    return 0, []
 
 
 @dataclass(frozen=True)
@@ -1448,7 +1547,7 @@ Abstract: {abstract[:800]}"""
 
 
 @click.group()
-@click.version_option(version="0.2.2")
+@click.version_option(version="0.3.0")
 @click.option("--quiet", "-q", is_flag=True, help="Suppress progress messages.")
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug output.")
 def cli(quiet: bool = False, verbose: bool = False):
@@ -3211,6 +3310,23 @@ def ask(
         safe_name = embedding_for_pqa.replace("/", "_").replace(":", "_")
         cmd.extend(["--agent.index.name", f"paperpipe_{safe_name}"])
 
+    # Determine effective index params to check for exclusions (files marked ERROR)
+    # We need to look at both what we've built so far and what the user passed
+    effective_args = cmd + ctx.args
+    idx_dir_val = _extract_flag_value(
+        effective_args, names={"--agent.index.index_directory", "--agent.index.index-directory"}
+    )
+    idx_name_val = _extract_flag_value(effective_args, names={"--index", "-i", "--agent.index.name"})
+
+    excluded_files: set[str] = set()
+    if idx_dir_val and idx_name_val and not retry_failed:
+        # Load index and find errors
+        fp = _paperqa_index_files_path(index_directory=Path(idx_dir_val), index_name=idx_name_val)
+        if fp.exists():
+            m = _paperqa_load_index_files_map(fp)
+            if m:
+                excluded_files = {Path(k).name for k, v in m.items() if v == "ERROR"}
+
     # PaperQA2 currently indexes Markdown by default; avoid indexing paperpipe's generated `summary.md`
     # / `equations.md` by staging only PDFs in a separate directory.
     has_paper_dir_override = any(
@@ -3221,7 +3337,7 @@ def ask(
     )
     if not has_paper_dir_override:
         staging_dir = (PAPER_DB / ".pqa_papers").expanduser()
-        _refresh_pqa_pdf_staging_dir(staging_dir=staging_dir)
+        _refresh_pqa_pdf_staging_dir(staging_dir=staging_dir, exclude_names=excluded_files)
         cmd.extend(["--agent.index.paper_directory", str(staging_dir)])
 
     # Default to syncing the index with the paper directory so newly-added PDFs are indexed
@@ -3404,7 +3520,74 @@ def ask(
 
     cmd.extend(["ask", query])
 
-    subprocess.run(cmd, cwd=PAPERS_DIR)
+    # Run pqa with real-time output streaming while capturing for crash detection
+    # We merge stderr into stdout so we can stream everything in order
+    proc = subprocess.Popen(cmd, cwd=PAPERS_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    captured_output: list[str] = []
+    assert proc.stdout is not None  # for type checker
+    for line in proc.stdout:
+        click.echo(line, nl=False)
+        captured_output.append(line)
+    returncode = proc.wait()
+
+    # Handle pqa failures gracefully
+    if returncode != 0:
+        # Try to identify the crashing document from pqa's output
+        # pqa prints "New file to index: <filename>..." before processing each file
+        crashing_doc: Optional[str] = None
+        for line in captured_output:
+            if "New file to index:" in line:
+                # Extract filename: "New file to index: nmr.pdf..."
+                match = re.search(r"New file to index:\s*(\S+)", line)
+                if match:
+                    crashing_doc = match.group(1).rstrip(".")
+
+        # If we identified the crashing document, mark only that one as ERROR
+        if crashing_doc and index_dir_raw and index_name_raw:
+            paper_dir = (
+                _paperqa_effective_paper_directory(cmd, base_dir=PAPERS_DIR) or (PAPER_DB / ".pqa_papers").expanduser()
+            )
+            if paper_dir.exists():
+                f = _paperqa_find_crashing_file(paper_directory=paper_dir, crashing_doc=crashing_doc)
+                if f is not None:
+                    count, _ = _paperqa_mark_failed_documents(
+                        index_directory=Path(index_dir_raw),
+                        index_name=index_name_raw,
+                        staged_files={str(f)},
+                    )
+                    if count:
+                        # Only remove files from paperpipe's managed staging directory.
+                        # Never delete from a user-provided paper directory.
+                        managed_staging_dir = (PAPER_DB / ".pqa_papers").expanduser()
+                        if paper_dir.resolve() == managed_staging_dir.resolve():
+                            try:
+                                f.unlink()
+                                echo_warning(f"Removed '{crashing_doc}' from PaperQA2 staging to prevent re-indexing.")
+                            except OSError:
+                                echo_warning(f"Marked '{crashing_doc}' as ERROR to skip on retry.")
+                        else:
+                            echo_warning(f"Marked '{crashing_doc}' as ERROR to skip on retry.")
+
+        # Show helpful error message
+        if index_dir_raw and index_name_raw:
+            mapping = _paperqa_load_index_files_map(
+                _paperqa_index_files_path(index_directory=Path(index_dir_raw), index_name=index_name_raw)
+            )
+            failed_docs = sorted([k for k, v in (mapping or {}).items() if v == "ERROR"])
+            if failed_docs:
+                echo_warning(f"PaperQA2 failed. {len(failed_docs)} document(s) excluded from indexing.")
+                echo_warning("This can happen with PDFs that have text extraction issues (e.g., surrogate characters).")
+                echo_warning("Options:")
+                echo_warning("  1. Remove problematic paper(s) entirely: papi remove <name>")
+                echo_warning("  2. Re-run query (excluded docs will stay excluded): papi ask '...'")
+                echo_warning("  3. Re-stage excluded docs for retry: papi ask '...' --retry-failed")
+                echo_warning("  4. Rebuild index from scratch: papi ask '...' --rebuild-index")
+                if len(failed_docs) <= 5:
+                    echo_warning(f"Failed documents: {', '.join(Path(f).stem for f in failed_docs)}")
+                raise SystemExit(1)
+        # Generic failure message if we can't determine the cause
+        echo_error("PaperQA2 failed. Check the output above for details.")
+        raise SystemExit(returncode)
 
 
 @cli.command()
@@ -3491,6 +3674,8 @@ def models(
             return bool(os.environ.get("ANTHROPIC_API_KEY"))
         if provider == "voyage":
             return bool(os.environ.get("VOYAGE_API_KEY"))
+        if provider == "openrouter":
+            return bool(os.environ.get("OPENROUTER_API_KEY"))
         return False
 
     def infer_provider(model: str) -> Optional[str]:
@@ -3498,13 +3683,15 @@ def models(
             return "gemini"
         if model.startswith("voyage/"):
             return "voyage"
+        if model.startswith("openrouter/"):
+            return "openrouter"
         if model.startswith("claude"):
             return "anthropic"
         if model.startswith("gpt-") or model.startswith("text-embedding-"):
             return "openai"
         return None
 
-    enabled_providers = {p for p in ("openai", "gemini", "anthropic", "voyage") if provider_has_key(p)}
+    enabled_providers = {p for p in ("openai", "gemini", "anthropic", "voyage", "openrouter") if provider_has_key(p)}
 
     def probe_one(kind_name: str, model: str):
         if kind_name == "completion":
@@ -4082,6 +4269,108 @@ def install_skill(targets: tuple[str, ...], force: bool):
     if installed:
         echo()
         echo("Restart your CLI to activate the skill.")
+
+
+@cli.command("install-prompts")
+@click.option(
+    "--claude",
+    "targets",
+    flag_value="claude",
+    multiple=True,
+    help="Install for Claude Code (~/.claude/commands)",
+)
+@click.option(
+    "--codex",
+    "targets",
+    flag_value="codex",
+    multiple=True,
+    help="Install for Codex CLI (~/.codex/prompts)",
+)
+@click.option("--force", is_flag=True, help="Overwrite existing prompt installation")
+@click.option("--copy", is_flag=True, help="Copy files instead of symlinking (useful if symlinks are unavailable).")
+def install_prompts(targets: tuple[str, ...], force: bool, copy: bool):
+    """Install shared paperpipe prompts for Claude Code and/or Codex CLI.
+
+    These are lightweight "prompt templates" (not the papi skill). By default, this command creates symlinks
+    from the packaged `prompts/` directory into the target prompt directories.
+
+    \b
+    Examples:
+        papi install-prompts             # Install for both Claude Code and Codex CLI
+        papi install-prompts --claude    # Install for Claude Code only
+        papi install-prompts --codex     # Install for Codex CLI only
+        papi install-prompts --force     # Overwrite existing installation
+        papi install-prompts --copy      # Copy files (no symlinks)
+    """
+    module_dir = Path(__file__).parent
+
+    prompt_root = module_dir / "prompts"
+    if not prompt_root.exists():
+        echo_error(f"Prompts directory not found at {prompt_root}")
+        echo_error("This may happen if paperpipe was installed without the prompt files.")
+        raise SystemExit(1)
+
+    install_targets = set(targets) if targets else {"claude", "codex"}
+
+    target_dirs = {
+        "claude": Path.home() / ".claude" / "commands",
+        "codex": Path.home() / ".codex" / "prompts",
+    }
+
+    source_dirs = {
+        "claude": prompt_root / "claude",
+        "codex": prompt_root / "codex",
+    }
+
+    installed: list[tuple[str, Path]] = []
+    for target in sorted(install_targets):
+        prompt_source = source_dirs.get(target, prompt_root)
+        if not prompt_source.exists():
+            echo_error(f"{target}: prompts directory not found at {prompt_source}")
+            raise SystemExit(1)
+
+        prompt_files = sorted([p for p in prompt_source.glob("*.md") if p.is_file()])
+        if not prompt_files:
+            echo_error(f"{target}: no prompts found in {prompt_source}")
+            raise SystemExit(1)
+
+        dest_dir = target_dirs[target]
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        for src in prompt_files:
+            dest = dest_dir / src.name
+
+            if dest.exists() or dest.is_symlink():
+                if not force:
+                    if dest.is_symlink() and dest.resolve() == src.resolve():
+                        echo(f"{target}: already installed: {dest.name}")
+                        continue
+                    echo_warning(f"{target}: {dest} already exists (use --force to overwrite)")
+                    continue
+                if dest.is_symlink() or dest.is_file():
+                    dest.unlink()
+                elif dest.is_dir():
+                    shutil.rmtree(dest)
+
+            try:
+                if copy:
+                    shutil.copy2(src, dest)
+                else:
+                    dest.symlink_to(src)
+            except OSError as e:
+                echo_error(f"{target}: failed to install {src.name}: {e}")
+                if not copy:
+                    echo_error("If your filesystem does not support symlinks, re-run with --copy.")
+                raise SystemExit(1)
+
+            installed.append((target, dest))
+
+        mode = "copied" if copy else "linked"
+        echo_success(f"{target}: {mode} {len(prompt_files)} prompt(s) into {dest_dir}")
+
+    if installed:
+        echo()
+        echo("Restart your CLI to pick up new prompts/commands.")
 
 
 if __name__ == "__main__":

@@ -65,6 +65,7 @@ Runtime data is stored outside the repo in `~/.paperpipe/` (PDFs, LaTeX, summari
   - Anthropic: `ANTHROPIC_API_KEY`
   - OpenAI: `OPENAI_API_KEY` (or `AZURE_OPENAI_API_KEY`)
   - Voyage: `VOYAGE_API_KEY` (for Voyage embeddings)
+  - OpenRouter: `OPENROUTER_API_KEY` (access 200+ models via unified API)
 
 ## Testing Guidelines
 
@@ -87,7 +88,10 @@ Runtime data is stored outside the repo in `~/.paperpipe/` (PDFs, LaTeX, summari
 
 - When Python code or tooling (`pyproject.toml`, CI) is touched, run `uv run ruff format .` (first),
   then `uv run ruff check .`, `uv run pyright`, and `uv run pytest -m "not integration"` (or note what you skipped).
-- Prefer running `ruff`, `pyright`, and `pytest` directly (not via `uv`) when they’re available in the currently active
-  pyenv/venv; fall back to `uv run ...` when they aren’t.
+- Always use `uv run` for running dev tools (`ruff`, `pyright`, `pytest`) to ensure consistent environments.
+- In sandboxed/offline environments, `uv run` may fail (e.g., it needs to fetch build requirements like `hatchling`,
+  or cannot use the default `~/.cache/uv`); in that case either re-run with network/permissions or fall back to
+  a pre-provisioned venv (`.venv/bin/ruff`, `.venv/bin/pyright`, `.venv/bin/pytest`). If needed, set
+  `UV_CACHE_DIR=$PWD/.uv-cache` and `UV_LINK_MODE=copy` to avoid cache/FS issues.
 - When changing CLI surface area (commands/options/output) or user-facing behavior (env vars, database layout),
   update `README.md`, `AGENT_INTEGRATION.md`, `skill/SKILL.md`, and `skill/commands.md` as needed.
