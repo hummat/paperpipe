@@ -13,7 +13,15 @@
 | `papi notes <paper>` | Open or print per-paper implementation notes |
 | `papi install-skill` | Install the papi skill (Claude Code + Codex CLI + Gemini CLI) |
 | `papi install-prompts` | Install shared prompts (Claude + Codex + Gemini) |
-| `papi install-mcp` | Install MCP server config (Claude + Codex + Gemini) |
+| `papi install-mcp` | Install available MCP server config(s) (PaperQA2 and/or LEANN) for Claude + Codex + Gemini |
+| `papi index` | Build/update retrieval index (`--backend pqa|leann`) |
+
+### `papi install-mcp` Options
+
+- Targets: `--claude`, `--codex`, `--gemini`, `--repo` (default: install for Claude + Codex + Gemini).
+- Names: `--name <paperqa>` and `--leann-name <leann>` (server keys in MCP config).
+- PaperQA2 embedding: `--embedding <model-id>` (sets `PAPERQA_EMBEDDING` for the PaperQA2 MCP server).
+- `--force` overwrites existing entries.
 
 Gemini CLI note: skills are currently experimental; enable them in `~/.gemini/settings.json`:
 `{"experimental": {"skills": true}}`.
@@ -72,15 +80,16 @@ Gemini CLI note: skills are currently experimental; enable them in `~/.gemini/se
 
 | Command | Description |
 |---------|-------------|
-| `papi ask "question"` | Query papers via PaperQA2 RAG |
-| `papi ask "q" --llm MODEL --embedding EMB` | Specify models |
-| `papi ask "q" --summary-llm MODEL` | Use cheaper model for summarization |
-| `papi ask "q" -v 2 --evidence-k 15` | More verbose, more evidence |
-| `papi ask "q" --rebuild-index` | Force full index rebuild |
+| `papi ask "question"` | Query papers via PaperQA2 RAG (default backend: `pqa`) |
+| `papi ask "q" --pqa-llm MODEL --pqa-embedding EMB` | Specify PaperQA2 models |
+| `papi ask "q" --pqa-summary-llm MODEL` | Use cheaper model for summarization |
+| `papi ask "q" --pqa-verbosity 2 --pqa-evidence-k 15` | More verbose, more evidence |
+| `papi ask "q" --pqa-rebuild-index` | Force full index rebuild |
 | `papi models` | Probe which models work with your API keys |
 
-First-class options: `--llm`, `--summary-llm`, `--embedding`, `-t/--temperature`, `-v/--verbosity`,
-`--answer-length`, `--evidence-k`, `--max-sources`, `--timeout`, `--concurrency`, `--rebuild-index`, `--retry-failed`.
+First-class options: `--pqa-llm`, `--pqa-summary-llm`, `--pqa-embedding`, `--pqa-temperature`, `--pqa-verbosity`,
+`--pqa-answer-length`, `--pqa-evidence-k`, `--pqa-max-sources`, `--pqa-timeout`, `--pqa-concurrency`,
+`--pqa-rebuild-index`, `--pqa-retry-failed`.
 Any other `pqa` args are passed through (e.g., `--agent.search_count 10`).
 
 Notes:
@@ -89,9 +98,46 @@ Notes:
 - By default, `papi ask` syncs the PaperQA2 index with the staged PDFs (so newly added papers get indexed on the next ask).
 - Override the index directory by passing `--agent.index.index_directory ...` through to `pqa`, or with `PAPERPIPE_PQA_INDEX_DIR`.
 - Override PaperQA2's summarization/enrichment models with `PAPERPIPE_PQA_SUMMARY_LLM` and `PAPERPIPE_PQA_ENRICHMENT_LLM`
-  (or use `--summary-llm` / `--parsing.enrichment_llm`).
+  (or use `--pqa-summary-llm` / `--parsing.enrichment_llm`).
 - If PaperQA2 previously failed to index some PDFs, it records them as `ERROR` and won't retry automatically; re-run with
-  `papi ask "..." --retry-failed` (or `--rebuild-index`).
+  `papi ask "..." --pqa-retry-failed` (or `--pqa-rebuild-index`).
+
+### Index Build (No Question)
+
+- `papi index` builds/updates the default retrieval index (PaperQA2 by default; same `--pqa-*` flags as `papi ask`).
+- `papi index --backend leann` builds/updates the LEANN index (PDF-only) and passes extra args to `leann build` (except
+  `--docs` / `--file-types`, which paperpipe controls).
+
+## LEANN Integration (Local)
+
+| Command | Description |
+|---------|-------------|
+| `papi leann-index` | Build/update LEANN index over staged PDFs (`<paper_db>/.pqa_papers/*.pdf`, PDF-only) |
+| `papi index --backend leann` | Same as `papi leann-index` (plus `leann build` passthrough) |
+| `papi ask "q" --backend leann` | Ask using LEANN RAG |
+| `papi ask "q" --backend leann --leann-provider ollama --leann-model qwen3:8b` | Use local Ollama model |
+
+Defaults:
+- Indexing uses `--embedding-model nomic-embed-text --embedding-mode ollama` unless you override.
+- Asking defaults to `--leann-provider ollama --leann-model olmo-3:7b` unless you override.
+- You can also override LEANN defaults via `config.toml`:
+  ```toml
+  [leann]
+  llm_provider = "ollama"
+  llm_model = "qwen3:8b"
+  embedding_model = "nomic-embed-text"
+  embedding_mode = "ollama"
+  ```
+- Env vars (override `config.toml`): `PAPERPIPE_LEANN_LLM_PROVIDER`, `PAPERPIPE_LEANN_LLM_MODEL`,
+  `PAPERPIPE_LEANN_EMBEDDING_MODEL`, `PAPERPIPE_LEANN_EMBEDDING_MODE`
+
+Common LEANN ask flags (no passthrough args are supported when `--backend leann`):
+- `--leann-index`, `--leann-provider`, `--leann-model`
+- `--leann-host` (Ollama), `--leann-api-base`/`--leann-api-key` (OpenAI-compatible)
+- Retrieval tuning: `--leann-top-k`, `--leann-complexity`, `--leann-beam-width`, `--leann-prune-ratio`,
+  `--leann-recompute/--leann-no-recompute`, `--leann-pruning-strategy`, `--leann-thinking-budget`,
+  `--leann-interactive`
+- Indexing behavior: `--leann-auto-index/--leann-no-auto-index` (default: auto-build index if missing)
 
 ## Per-Paper Files
 

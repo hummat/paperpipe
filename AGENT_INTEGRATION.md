@@ -37,7 +37,7 @@ Per-paper files live at: `<paper_db>/papers/{paper}/`
 | “Does my code match the paper?” | Read `{paper}/equations.md` (and/or `{paper}/source.tex`) |
 | “What’s the high-level approach?” | Read `{paper}/summary.md` |
 | “Find the exact formulation / definitions” | Read `{paper}/source.tex` |
-| “Which papers discuss X?” | Run `papi search "X"` (fast) or `papi ask "X"` (PaperQA2) |
+| “Which papers discuss X?” | Run `papi search "X"` (fast) or `papi ask "X"` (default backend: PaperQA2; optional: `--backend leann`) |
 | “Compare methods across papers” | Load multiple `{paper}/equations.md` files |
 | “Do the generated summaries/equations look sane?” | Run `papi audit` (and optionally regenerate flagged papers) |
 
@@ -89,7 +89,7 @@ Without LLM, paperpipe falls back to metadata + section headings + regex equatio
 1. Identify the referenced paper(s) (comments, function names, README, etc.)
 2. Read `{paper}/equations.md` and compare symbol-by-symbol with the implementation
 3. If ambiguous, confirm definitions/assumptions in `{paper}/source.tex`
-4. If the question is broad or spans multiple papers, run `papi ask "..."` (requires PaperQA2)
+4. If the question is broad or spans multiple papers, run `papi ask "..."` (default backend: PaperQA2; optional: `--backend leann`)
 
 ### Optional: Shared Prompts / Commands
 
@@ -120,9 +120,24 @@ Notes:
 
 ### Optional: MCP Server (Retrieval-Only)
 
-paperpipe also ships an MCP server (`papi-mcp`) that returns raw retrieved chunks (no LLM answering).
+paperpipe can install MCP servers for retrieval-only workflows:
+- `papi-mcp` (PaperQA2 retrieval: raw chunks + citations)
+- `papi-leann-mcp` (LEANN search: wraps `leann_mcp` from the paper DB directory)
 
 ```bash
 papi install-mcp          # Claude (via `claude mcp add`) + Codex (via `codex mcp add`) + Gemini (via `gemini mcp add`)
 papi install-mcp --repo   # Repo-local .mcp.json (Claude) + .gemini/settings.json (Gemini)
+```
+
+Useful flags:
+- Targets: `--claude`, `--codex`, `--gemini`, `--repo`
+- Names: `--name <paperqa>` and `--leann-name <leann>`
+- PaperQA2 embedding: `--embedding <model-id>` (sets `PAPERQA_EMBEDDING`)
+- `--force` overwrites existing entries
+
+Build indexes outside MCP:
+
+```bash
+papi index                 # PaperQA2 index
+papi index --backend leann  # LEANN index
 ```

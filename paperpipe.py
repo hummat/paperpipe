@@ -110,6 +110,31 @@ DEFAULT_LLM_MODEL_FALLBACK = "gemini/gemini-3-flash-preview"
 DEFAULT_EMBEDDING_MODEL_FALLBACK = "gemini/gemini-embedding-001"
 DEFAULT_LLM_TEMPERATURE_FALLBACK = 0.3
 
+DEFAULT_LEANN_EMBEDDING_MODEL = "nomic-embed-text"
+DEFAULT_LEANN_EMBEDDING_MODE = "ollama"
+DEFAULT_LEANN_LLM_PROVIDER = "ollama"
+DEFAULT_LEANN_LLM_MODEL = "olmo-3:7b"
+
+
+def leann_mcp_entry() -> None:
+    """Exec LEANN's MCP server (`leann_mcp`) from the paper DB directory.
+
+    LEANN's MCP server shells out to `leann` and uses project-local `.leann/` indexes
+    under the current working directory. Running it from `PAPER_DB` makes it easy to
+    keep the LEANN index alongside the paper database.
+    """
+    PAPER_DB.mkdir(parents=True, exist_ok=True)
+    if not shutil.which("leann_mcp"):
+        print(
+            "Error: `leann_mcp` not found on PATH. Install LEANN (e.g. `pip install 'paperpipe[leann]'`) first.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    os.chdir(PAPER_DB)
+    os.execvp("leann_mcp", ["leann_mcp"])
+
+
 _CONFIG_CACHE: Optional[tuple[Path, Optional[float], dict[str, Any]]] = None
 
 
@@ -374,6 +399,38 @@ def default_pqa_concurrency() -> int:
     if isinstance(raw, int):
         return raw
     return 1  # Default to 1 for stability
+
+
+def default_leann_embedding_model() -> str:
+    return _setting_str(
+        env="PAPERPIPE_LEANN_EMBEDDING_MODEL",
+        keys=("leann", "embedding_model"),
+        default=DEFAULT_LEANN_EMBEDDING_MODEL,
+    )
+
+
+def default_leann_embedding_mode() -> str:
+    return _setting_str(
+        env="PAPERPIPE_LEANN_EMBEDDING_MODE",
+        keys=("leann", "embedding_mode"),
+        default=DEFAULT_LEANN_EMBEDDING_MODE,
+    )
+
+
+def default_leann_llm_provider() -> str:
+    return _setting_str(
+        env="PAPERPIPE_LEANN_LLM_PROVIDER",
+        keys=("leann", "llm_provider"),
+        default=DEFAULT_LEANN_LLM_PROVIDER,
+    )
+
+
+def default_leann_llm_model() -> str:
+    return _setting_str(
+        env="PAPERPIPE_LEANN_LLM_MODEL",
+        keys=("leann", "llm_model"),
+        default=DEFAULT_LEANN_LLM_MODEL,
+    )
 
 
 def tag_aliases() -> dict[str, str]:
@@ -948,7 +1005,7 @@ def _paperqa_load_index_files_map(path: Path) -> Optional[dict[str, str]]:
 def _paperqa_save_index_files_map(path: Path, mapping: dict[str, str]) -> bool:
     """Save the PaperQA2 index files map back to disk.
 
-    Note: Uses pickle for compatibility with PaperQA2's existing index format.
+    Note: Uses pickle to match PaperQA2's on-disk index format.
     """
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -994,7 +1051,7 @@ def _paperqa_mark_failed_documents(
 
     When pqa crashes with an unhandled exception, it doesn't mark the crashing document
     as ERROR. This function detects which staged files weren't processed and marks them
-    as ERROR so pqa won't crash on them again (unless --retry-failed is used).
+    as ERROR so pqa won't crash on them again (unless --pqa-retry-failed is used).
 
     Returns (count, list of newly marked files).
     """
@@ -1557,7 +1614,7 @@ Abstract: {abstract[:800]}"""
 
 
 @click.group()
-@click.version_option(version="0.4.0")
+@click.version_option(version="0.5.0")
 @click.option("--quiet", "-q", is_flag=True, help="Suppress progress messages.")
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug output.")
 def cli(quiet: bool = False, verbose: bool = False):
@@ -3141,86 +3198,552 @@ def export(papers: tuple[str, ...], level: str, dest: Optional[str]):
     raise SystemExit(1)
 
 
+def _leann_index_meta_path(index_name: str) -> Path:
+    return PAPER_DB / ".leann" / "indexes" / index_name / "documents.leann.meta.json"
+
+
+def _leann_build_index(*, index_name: str, docs_dir: Path, force: bool, extra_args: list[str]) -> None:
+    if not shutil.which("leann"):
+        echo_error("LEANN not installed. Install with: pip install 'paperpipe[leann]'")
+        raise SystemExit(1)
+
+    index_name = (index_name or "").strip()
+    if not index_name:
+        raise click.UsageError("index name must be non-empty")
+
+    if any(arg == "--file-types" or arg.startswith("--file-types=") for arg in extra_args):
+        raise click.UsageError("LEANN indexing in paperpipe is PDF-only; do not pass --file-types.")
+
+    has_embedding_model_override = any(
+        arg == "--embedding-model" or arg.startswith("--embedding-model=") for arg in extra_args
+    )
+    has_embedding_mode_override = any(
+        arg == "--embedding-mode" or arg.startswith("--embedding-mode=") for arg in extra_args
+    )
+
+    cmd = ["leann", "build", index_name, "--docs", str(docs_dir), "--file-types", ".pdf"]
+    if force:
+        cmd.append("--force")
+
+    if not has_embedding_model_override:
+        cmd.extend(["--embedding-model", default_leann_embedding_model()])
+    if not has_embedding_mode_override:
+        cmd.extend(["--embedding-mode", default_leann_embedding_mode()])
+
+    cmd.extend(extra_args)
+    proc = subprocess.run(cmd, cwd=PAPER_DB)
+    if proc.returncode != 0:
+        raise SystemExit(proc.returncode)
+
+
+def _ask_leann(
+    *,
+    query: str,
+    index_name: str,
+    provider: Optional[str],
+    model: Optional[str],
+    host: Optional[str],
+    api_base: Optional[str],
+    api_key: Optional[str],
+    top_k: Optional[int],
+    complexity: Optional[int],
+    beam_width: Optional[int],
+    prune_ratio: Optional[float],
+    recompute_embeddings: bool,
+    pruning_strategy: Optional[str],
+    thinking_budget: Optional[str],
+    interactive: bool,
+    extra_args: list[str],
+) -> None:
+    if not shutil.which("leann"):
+        echo_error("LEANN not installed. Install with: pip install 'paperpipe[leann]'")
+        raise SystemExit(1)
+
+    provider = (provider or "").strip() or default_leann_llm_provider()
+    model = (model or "").strip() or default_leann_llm_model()
+
+    index_name = (index_name or "").strip() or "papers"
+    meta_path = _leann_index_meta_path(index_name)
+    if not meta_path.exists():
+        echo_error(f"LEANN index {index_name!r} not found at {meta_path}")
+        echo_error("Build it first: papi leann-index (or: papi index --backend leann)")
+        raise SystemExit(1)
+
+    cmd: list[str] = ["leann", "ask", index_name, query]
+    cmd.extend(["--llm", provider])
+    cmd.extend(["--model", model])
+    if host:
+        cmd.extend(["--host", host])
+    if api_base:
+        cmd.extend(["--api-base", api_base])
+    if api_key:
+        cmd.extend(["--api-key", api_key])
+    if interactive:
+        cmd.append("--interactive")
+    if top_k is not None:
+        cmd.extend(["--top-k", str(top_k)])
+    if complexity is not None:
+        cmd.extend(["--complexity", str(complexity)])
+    if beam_width is not None:
+        cmd.extend(["--beam-width", str(beam_width)])
+    if prune_ratio is not None:
+        cmd.extend(["--prune-ratio", str(prune_ratio)])
+    if not recompute_embeddings:
+        cmd.append("--no-recompute")
+    if pruning_strategy:
+        cmd.extend(["--pruning-strategy", pruning_strategy])
+    if thinking_budget:
+        cmd.extend(["--thinking-budget", thinking_budget])
+
+    cmd.extend(extra_args)
+
+    if interactive:
+        proc = subprocess.run(cmd, cwd=PAPER_DB)
+        if proc.returncode != 0:
+            raise SystemExit(proc.returncode)
+        return
+
+    proc = subprocess.Popen(cmd, cwd=PAPER_DB, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        click.echo(line, nl=False)
+    returncode = proc.wait()
+    if returncode != 0:
+        raise SystemExit(returncode)
+
+
+@cli.command("leann-index", context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))
+@click.option("--index", "index_name", default="papers", show_default=True, help="LEANN index name.")
+@click.option("--force", is_flag=True, help="Force rebuild existing LEANN index.")
+@click.pass_context
+def leann_index(ctx: click.Context, index_name: str, force: bool) -> None:
+    """Build/update a LEANN index over your paper PDFs (PDF-only)."""
+    index_name = (index_name or "").strip()
+    if not index_name:
+        raise click.UsageError("--index must be non-empty")
+
+    PAPER_DB.mkdir(parents=True, exist_ok=True)
+    PAPERS_DIR.mkdir(parents=True, exist_ok=True)
+
+    staging_dir = (PAPER_DB / ".pqa_papers").expanduser()
+    _refresh_pqa_pdf_staging_dir(staging_dir=staging_dir)
+    _leann_build_index(index_name=index_name, docs_dir=staging_dir, force=force, extra_args=list(ctx.args))
+
+    echo_success(f"Built LEANN index {index_name!r} under {PAPER_DB / '.leann' / 'indexes' / index_name}")
+
+
+@cli.command("index", context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))
+@click.option(
+    "--backend",
+    type=click.Choice(["pqa", "leann"], case_sensitive=False),
+    default="pqa",
+    show_default=True,
+    help="Which backend to index for: PaperQA2 (`pqa`) or LEANN (`leann`).",
+)
+@click.option(
+    "--pqa-llm",
+    default=None,
+    show_default=False,
+    help="PaperQA2 LLM model (LiteLLM id).",
+)
+@click.option(
+    "--pqa-summary-llm",
+    default=None,
+    show_default=False,
+    help="PaperQA2 summary LLM model (LiteLLM id).",
+)
+@click.option(
+    "--pqa-embedding",
+    default=None,
+    show_default=False,
+    help="PaperQA2 embedding model (LiteLLM id).",
+)
+@click.option("--pqa-temperature", type=float, default=None, show_default=False, help="PaperQA2 temperature.")
+@click.option("--pqa-verbosity", type=int, default=None, show_default=False, help="PaperQA2 verbosity (0-3).")
+@click.option("--pqa-concurrency", type=int, default=None, show_default=False, help="PaperQA2 indexing concurrency.")
+@click.option("--pqa-rebuild-index", is_flag=True, help="Force PaperQA2 rebuild (equivalent to --agent.rebuild_index).")
+@click.option("--pqa-retry-failed", is_flag=True, help="Clear PaperQA2 ERROR markers so failed PDFs retry.")
+@click.option("--leann-index", default="papers", show_default=True, help="LEANN index name to build.")
+@click.option("--leann-force", is_flag=True, help="Force LEANN rebuild (passes --force to `leann build`).")
+@click.pass_context
+def index_cmd(
+    ctx: click.Context,
+    backend: str,
+    pqa_llm: Optional[str],
+    pqa_summary_llm: Optional[str],
+    pqa_embedding: Optional[str],
+    pqa_temperature: Optional[float],
+    pqa_verbosity: Optional[int],
+    pqa_concurrency: Optional[int],
+    pqa_rebuild_index: bool,
+    pqa_retry_failed: bool,
+    leann_index: str,
+    leann_force: bool,
+) -> None:
+    """Build/update the retrieval index for PaperQA2 (default) or LEANN."""
+    backend_norm = (backend or "pqa").strip().lower()
+    if backend_norm == "leann":
+        PAPER_DB.mkdir(parents=True, exist_ok=True)
+        PAPERS_DIR.mkdir(parents=True, exist_ok=True)
+
+        if any(arg == "--docs" or arg.startswith("--docs=") for arg in ctx.args):
+            raise click.UsageError("paperpipe controls LEANN --docs; do not pass --docs.")
+        if any(arg.startswith(("--agent.", "--answer.", "--parsing.")) for arg in ctx.args):
+            raise click.UsageError("PaperQA2 passthrough args are not supported with --backend leann.")
+
+        staging_dir = (PAPER_DB / ".pqa_papers").expanduser()
+        _refresh_pqa_pdf_staging_dir(staging_dir=staging_dir)
+        _leann_build_index(index_name=leann_index, docs_dir=staging_dir, force=leann_force, extra_args=list(ctx.args))
+        echo_success(f"Built LEANN index {leann_index!r} under {PAPER_DB / '.leann' / 'indexes' / leann_index}")
+        return
+
+    if backend_norm != "pqa":
+        raise click.UsageError(f"Unknown --backend: {backend}")
+
+    if not shutil.which("pqa"):
+        echo_error("PaperQA2 not installed. Install with: pip install 'paperpipe[paperqa]' (Python 3.11+).")
+        raise SystemExit(1)
+
+    cmd = ["pqa"]
+
+    has_settings_flag = any(arg in {"--settings", "-s"} or arg.startswith("--settings=") for arg in ctx.args)
+    if not has_settings_flag:
+        cmd.extend(["--settings", default_pqa_settings_name()])
+
+    has_parsing_override = any(
+        arg == "--parsing" or arg.startswith("--parsing.") or arg.startswith("--parsing=") for arg in ctx.args
+    )
+    if not has_parsing_override and not _pillow_available():
+        cmd.extend(["--parsing.multimodal", "OFF"])
+
+    pqa_llm_source = ctx.get_parameter_source("pqa_llm")
+    pqa_embedding_source = ctx.get_parameter_source("pqa_embedding")
+    pqa_summary_llm_source = ctx.get_parameter_source("pqa_summary_llm")
+    pqa_temperature_source = ctx.get_parameter_source("pqa_temperature")
+    pqa_verbosity_source = ctx.get_parameter_source("pqa_verbosity")
+
+    llm_for_pqa: Optional[str] = None
+    embedding_for_pqa: Optional[str] = None
+
+    if pqa_llm_source != click.core.ParameterSource.DEFAULT:
+        llm_for_pqa = pqa_llm
+    elif not has_settings_flag:
+        llm_for_pqa = default_pqa_llm_model()
+
+    if pqa_embedding_source != click.core.ParameterSource.DEFAULT:
+        embedding_for_pqa = pqa_embedding
+    elif not has_settings_flag:
+        embedding_for_pqa = default_pqa_embedding_model()
+
+    if llm_for_pqa:
+        cmd.extend(["--llm", llm_for_pqa])
+    if embedding_for_pqa:
+        cmd.extend(["--embedding", embedding_for_pqa])
+
+    # Persist index under paper DB unless overridden
+    has_index_dir_override = any(
+        arg == "--agent.index.index_directory"
+        or arg == "--agent.index.index-directory"
+        or arg.startswith(("--agent.index.index_directory=", "--agent.index.index-directory="))
+        for arg in ctx.args
+    )
+    if not has_index_dir_override:
+        index_dir = default_pqa_index_dir()
+        index_dir.mkdir(parents=True, exist_ok=True)
+        cmd.extend(["--agent.index.index_directory", str(index_dir)])
+
+    # Stable index name based on embedding (unless overridden)
+    embedding_for_name = embedding_for_pqa or (default_pqa_embedding_model() if not has_settings_flag else None)
+    has_index_name_override = any(
+        arg in {"--index", "-i", "--agent.index.name"} or arg.startswith(("--index=", "--agent.index.name="))
+        for arg in ctx.args
+    )
+    if not has_index_name_override and embedding_for_name:
+        # For the `pqa index` subcommand, the index name is controlled by the global `--index/-i` flag
+        # (PaperQA2's `build_index()` overrides `agent.index.name` when --index is "default").
+        cmd.extend(["--index", pqa_index_name_for_embedding(embedding_for_name)])
+
+    # Determine effective index params to exclude ERROR-marked PDFs when staging.
+    effective_args = cmd + list(ctx.args)
+    idx_dir_val = _extract_flag_value(
+        effective_args, names={"--agent.index.index_directory", "--agent.index.index-directory"}
+    )
+    idx_name_val = _extract_flag_value(effective_args, names={"--index", "-i", "--agent.index.name"})
+    excluded_files: set[str] = set()
+    if idx_dir_val and idx_name_val and not pqa_retry_failed:
+        fp = _paperqa_index_files_path(index_directory=Path(idx_dir_val), index_name=idx_name_val)
+        if fp.exists():
+            m = _paperqa_load_index_files_map(fp)
+            if m:
+                excluded_files = {Path(k).name for k, v in m.items() if v == "ERROR"}
+
+    # Paper directory (defaults to managed staging dir)
+    paper_dir_override = _extract_flag_value(
+        list(ctx.args),
+        names={"--agent.index.paper_directory", "--agent.index.paper-directory"},
+    )
+    if paper_dir_override:
+        paper_dir = Path(paper_dir_override).expanduser()
+    else:
+        paper_dir = (PAPER_DB / ".pqa_papers").expanduser()
+        _refresh_pqa_pdf_staging_dir(staging_dir=paper_dir, exclude_names=excluded_files)
+        cmd.extend(["--agent.index.paper_directory", str(paper_dir)])
+
+    has_sync_override = any(
+        arg == "--agent.index.sync_with_paper_directory"
+        or arg == "--agent.index.sync-with-paper-directory"
+        or arg.startswith(
+            (
+                "--agent.index.sync_with_paper_directory=",
+                "--agent.index.sync-with-paper-directory=",
+            )
+        )
+        for arg in ctx.args
+    )
+    if not has_sync_override:
+        cmd.extend(["--agent.index.sync_with_paper_directory", "true"])
+
+    # summary_llm
+    llm_effective = llm_for_pqa
+    if pqa_summary_llm_source != click.core.ParameterSource.DEFAULT:
+        if pqa_summary_llm:
+            cmd.extend(["--summary_llm", pqa_summary_llm])
+    else:
+        summary_llm_default = default_pqa_summary_llm(llm_effective)
+        if summary_llm_default:
+            cmd.extend(["--summary_llm", summary_llm_default])
+
+    # enrichment_llm: config/env default only (no first-class option)
+    enrichment_llm_default = default_pqa_enrichment_llm(llm_effective)
+    has_enrichment_llm_override = any(
+        arg == "--parsing.enrichment_llm"
+        or arg == "--parsing.enrichment-llm"
+        or arg.startswith(("--parsing.enrichment_llm=", "--parsing.enrichment-llm="))
+        for arg in ctx.args
+    )
+    if enrichment_llm_default and not has_enrichment_llm_override:
+        cmd.extend(["--parsing.enrichment_llm", enrichment_llm_default])
+
+    # temperature
+    if pqa_temperature_source != click.core.ParameterSource.DEFAULT:
+        if pqa_temperature is not None:
+            cmd.extend(["--temperature", str(pqa_temperature)])
+    else:
+        temperature_default = default_pqa_temperature()
+        if temperature_default is not None:
+            cmd.extend(["--temperature", str(temperature_default)])
+
+    # verbosity
+    if pqa_verbosity_source != click.core.ParameterSource.DEFAULT:
+        if pqa_verbosity is not None:
+            cmd.extend(["--verbosity", str(pqa_verbosity)])
+    else:
+        verbosity_default = default_pqa_verbosity()
+        if verbosity_default is not None:
+            cmd.extend(["--verbosity", str(verbosity_default)])
+
+    if pqa_concurrency is not None:
+        cmd.extend(["--agent.index.concurrency", str(pqa_concurrency)])
+    else:
+        has_concurrency_passthrough = any(
+            arg in {"--agent.index.concurrency"} or arg.startswith("--agent.index.concurrency=") for arg in ctx.args
+        )
+        if not has_concurrency_passthrough:
+            cmd.extend(["--agent.index.concurrency", str(default_pqa_concurrency())])
+
+    if pqa_rebuild_index and not any(
+        arg in {"--agent.rebuild_index", "--agent.rebuild-index"}
+        or arg.startswith(("--agent.rebuild_index=", "--agent.rebuild-index="))
+        for arg in ctx.args
+    ):
+        cmd.extend(["--agent.rebuild_index", "true"])
+
+    cmd.extend(ctx.args)
+
+    # Clear ERROR markers if requested (PaperQA2 won't retry failed docs otherwise)
+    index_dir_raw = _extract_flag_value(
+        cmd,
+        names={"--agent.index.index_directory", "--agent.index.index-directory"},
+    )
+    index_name_raw = _extract_flag_value(cmd, names={"--agent.index.name"}) or _extract_flag_value(
+        cmd, names={"--index", "-i"}
+    )
+    if pqa_retry_failed and index_dir_raw and index_name_raw:
+        cleared, _ = _paperqa_clear_failed_documents(index_directory=Path(index_dir_raw), index_name=index_name_raw)
+        if cleared:
+            echo_progress(f"Cleared {cleared} failed PaperQA2 document(s) for retry.")
+
+    cmd.extend(["index", str(paper_dir)])
+
+    proc = subprocess.Popen(cmd, cwd=PAPERS_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        click.echo(line, nl=False)
+    returncode = proc.wait()
+    if returncode != 0:
+        raise SystemExit(returncode)
+
+
 @cli.command(context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))
 @click.argument("query")
 @click.option(
-    "--llm",
+    "--pqa-llm",
+    "llm",
     default=None,
     show_default=False,
     help=("LLM model for answer generation (LiteLLM id; e.g., gpt-4o, claude-sonnet-4-5, gemini/gemini-2.5-flash)."),
 )
 @click.option(
-    "--summary-llm",
+    "--pqa-summary-llm",
+    "summary_llm",
     default=None,
     show_default=False,
-    help="LLM for evidence summarization (often a cheaper/faster model than --llm).",
+    help="LLM for evidence summarization (often a cheaper/faster model than --pqa-llm).",
 )
 @click.option(
-    "--embedding",
+    "--pqa-embedding",
+    "embedding",
     default=None,
     show_default=False,
     help="Embedding model for text chunks (e.g., text-embedding-3-small, voyage-3-lite).",
 )
 @click.option(
-    "-t",
-    "--temperature",
+    "--pqa-temperature",
+    "temperature",
     type=float,
     default=None,
     show_default=False,
     help="LLM temperature (0.0-1.0). Lower = more deterministic.",
 )
 @click.option(
-    "-v",
-    "--verbosity",
+    "--pqa-verbosity",
+    "verbosity",
     type=int,
     default=None,
     show_default=False,
     help="Logging verbosity level (0-3). 3 = log all LLM/embedding calls.",
 )
 @click.option(
-    "--answer-length",
+    "--pqa-answer-length",
+    "answer_length",
     default=None,
     show_default=False,
     help="Target answer length (e.g., 'about 200 words', 'short', '3 paragraphs').",
 )
 @click.option(
-    "--evidence-k",
+    "--pqa-evidence-k",
+    "evidence_k",
     type=int,
     default=None,
     show_default=False,
     help="Number of evidence pieces to retrieve (default: 10).",
 )
 @click.option(
-    "--max-sources",
+    "--pqa-max-sources",
+    "max_sources",
     type=int,
     default=None,
     show_default=False,
     help="Maximum number of sources to cite in the answer (default: 5).",
 )
 @click.option(
-    "--timeout",
+    "--pqa-timeout",
+    "timeout",
     type=float,
     default=None,
     show_default=False,
     help="Agent timeout in seconds (default: 500).",
 )
 @click.option(
-    "--concurrency",
+    "--pqa-concurrency",
+    "concurrency",
     type=int,
     default=None,
     show_default=False,
     help="Indexing concurrency (default: 1). Higher values speed up indexing but may cause rate limits.",
 )
 @click.option(
-    "--rebuild-index",
+    "--pqa-rebuild-index",
+    "rebuild_index",
     is_flag=True,
     default=False,
     help="Force a full rebuild of the paper index.",
 )
 @click.option(
-    "--retry-failed",
+    "--pqa-retry-failed",
+    "retry_failed",
     is_flag=True,
     help="Retry docs previously marked failed (clears ERROR markers in the index).",
+)
+@click.option(
+    "--backend",
+    type=click.Choice(["pqa", "leann"], case_sensitive=False),
+    default="pqa",
+    show_default=True,
+    help="Backend to use: PaperQA2 via `pqa` (default) or LEANN via `leann`.",
+)
+@click.option(
+    "--leann-index",
+    default="papers",
+    show_default=True,
+    help="LEANN index name (stored under <paper_db>/.leann/indexes).",
+)
+@click.option(
+    "--leann-provider",
+    type=click.Choice(["simulated", "ollama", "hf", "openai", "anthropic"], case_sensitive=False),
+    default=None,
+    show_default=False,
+    help="LEANN LLM provider (maps to `leann ask --llm ...`).",
+)
+@click.option("--leann-model", default=None, show_default=False, help="LEANN model name (maps to `leann ask --model`).")
+@click.option(
+    "--leann-host",
+    default=None,
+    show_default=False,
+    help="Override Ollama-compatible host (maps to `leann ask --host`).",
+)
+@click.option(
+    "--leann-api-base",
+    default=None,
+    show_default=False,
+    help="Base URL for OpenAI-compatible APIs (maps to `leann ask --api-base`).",
+)
+@click.option(
+    "--leann-api-key",
+    default=None,
+    show_default=False,
+    help="API key for cloud LLM providers (maps to `leann ask --api-key`).",
+)
+@click.option("--leann-top-k", type=int, default=None, show_default=False, help="LEANN retrieval count.")
+@click.option("--leann-complexity", type=int, default=None, show_default=False, help="LEANN search complexity.")
+@click.option("--leann-beam-width", type=int, default=None, show_default=False, help="LEANN search beam width.")
+@click.option("--leann-prune-ratio", type=float, default=None, show_default=False, help="LEANN search prune ratio.")
+@click.option(
+    "--leann-recompute/--leann-no-recompute",
+    default=True,
+    show_default=True,
+    help="Enable/disable embedding recomputation during LEANN ask.",
+)
+@click.option(
+    "--leann-pruning-strategy",
+    type=click.Choice(["global", "local", "proportional"], case_sensitive=False),
+    default=None,
+    show_default=False,
+    help="LEANN pruning strategy.",
+)
+@click.option(
+    "--leann-thinking-budget",
+    type=click.Choice(["low", "medium", "high"], case_sensitive=False),
+    default=None,
+    show_default=False,
+    help="LEANN thinking budget for supported models.",
+)
+@click.option("--leann-interactive", is_flag=True, help="Run `leann ask --interactive` (terminal UI).")
+@click.option(
+    "--leann-auto-index/--leann-no-auto-index",
+    default=True,
+    show_default=True,
+    help="Auto-build the LEANN index if missing when running `papi ask --backend leann`.",
 )
 @click.pass_context
 def ask(
@@ -3238,13 +3761,65 @@ def ask(
     concurrency: Optional[int],
     rebuild_index: bool,
     retry_failed: bool,
+    backend: str,
+    leann_index: str,
+    leann_provider: Optional[str],
+    leann_model: Optional[str],
+    leann_host: Optional[str],
+    leann_api_base: Optional[str],
+    leann_api_key: Optional[str],
+    leann_top_k: Optional[int],
+    leann_complexity: Optional[int],
+    leann_beam_width: Optional[int],
+    leann_prune_ratio: Optional[float],
+    leann_recompute: bool,
+    leann_pruning_strategy: Optional[str],
+    leann_thinking_budget: Optional[str],
+    leann_interactive: bool,
+    leann_auto_index: bool,
 ):
     """
-    Query papers using PaperQA2 (if installed).
+    Query papers using PaperQA2 (default) or LEANN.
 
     Common options are exposed as first-class flags. Any additional arguments
     are passed directly to PaperQA2 (e.g., --agent.search_count 10).
     """
+    backend_norm = (backend or "pqa").strip().lower()
+    if backend_norm == "leann":
+        if ctx.args:
+            raise click.UsageError(
+                "Extra passthrough args are only supported for PaperQA2. For LEANN, use the supported --leann-* flags."
+            )
+        PAPER_DB.mkdir(parents=True, exist_ok=True)
+        PAPERS_DIR.mkdir(parents=True, exist_ok=True)
+        if leann_auto_index:
+            index_name = (leann_index or "").strip() or "papers"
+            meta_path = _leann_index_meta_path(index_name)
+            if not meta_path.exists():
+                echo_progress(f"LEANN index {index_name!r} not found; building it now...")
+                staging_dir = (PAPER_DB / ".pqa_papers").expanduser()
+                _refresh_pqa_pdf_staging_dir(staging_dir=staging_dir)
+                _leann_build_index(index_name=index_name, docs_dir=staging_dir, force=False, extra_args=[])
+        _ask_leann(
+            query=query,
+            index_name=leann_index,
+            provider=leann_provider,
+            model=leann_model,
+            host=leann_host,
+            api_base=leann_api_base,
+            api_key=leann_api_key,
+            top_k=leann_top_k,
+            complexity=leann_complexity,
+            beam_width=leann_beam_width,
+            prune_ratio=leann_prune_ratio,
+            recompute_embeddings=leann_recompute,
+            pruning_strategy=leann_pruning_strategy,
+            thinking_budget=leann_thinking_budget,
+            interactive=leann_interactive,
+            extra_args=list(ctx.args),
+        )
+        return
+
     if not shutil.which("pqa"):
         echo_error("PaperQA2 not installed. Install with: pip install paper-qa")
         click.echo("\nFalling back to local search...")
@@ -3369,15 +3944,11 @@ def ask(
 
     # summary_llm: first-class option takes precedence, then config, then falls back to llm_for_pqa
     summary_llm_source = ctx.get_parameter_source("summary_llm")
-    has_summary_llm_passthrough = any(
-        arg in {"--summary_llm", "--summary-llm"} or arg.startswith(("--summary_llm=", "--summary-llm="))
-        for arg in ctx.args
-    )
     if summary_llm_source != click.core.ParameterSource.DEFAULT:
-        # Explicit CLI --summary-llm takes precedence
+        # Explicit CLI --pqa-summary-llm takes precedence
         if summary_llm:
             cmd.extend(["--summary_llm", summary_llm])
-    elif not has_summary_llm_passthrough:
+    else:
         summary_llm_default = default_pqa_summary_llm(llm_for_pqa)
         if summary_llm_default:
             cmd.extend(["--summary_llm", summary_llm_default])
@@ -3395,22 +3966,20 @@ def ask(
 
     # temperature
     temperature_source = ctx.get_parameter_source("temperature")
-    has_temperature_passthrough = any(arg in {"--temperature"} or arg.startswith("--temperature=") for arg in ctx.args)
     if temperature_source != click.core.ParameterSource.DEFAULT:
         if temperature is not None:
             cmd.extend(["--temperature", str(temperature)])
-    elif not has_temperature_passthrough:
+    else:
         temperature_default = default_pqa_temperature()
         if temperature_default is not None:
             cmd.extend(["--temperature", str(temperature_default)])
 
     # verbosity
     verbosity_source = ctx.get_parameter_source("verbosity")
-    has_verbosity_passthrough = any(arg in {"--verbosity", "-v"} or arg.startswith("--verbosity=") for arg in ctx.args)
     if verbosity_source != click.core.ParameterSource.DEFAULT:
         if verbosity is not None:
             cmd.extend(["--verbosity", str(verbosity)])
-    elif not has_verbosity_passthrough:
+    else:
         verbosity_default = default_pqa_verbosity()
         if verbosity_default is not None:
             cmd.extend(["--verbosity", str(verbosity_default)])
@@ -3515,8 +4084,8 @@ def ask(
         if failed_count and not retry_failed:
             echo_warning(
                 f"PaperQA2 index '{index_name_raw}' has {failed_count} failed document(s) (marked ERROR); "
-                "PaperQA2 will not retry them automatically. Re-run with --retry-failed "
-                "or --rebuild-index to rebuild the whole index."
+                "PaperQA2 will not retry them automatically. Re-run with --pqa-retry-failed "
+                "or --pqa-rebuild-index to rebuild the whole index."
             )
         if retry_failed:
             cleared, cleared_files = _paperqa_clear_failed_documents(
@@ -3589,8 +4158,8 @@ def ask(
                 echo_warning("Options:")
                 echo_warning("  1. Remove problematic paper(s) entirely: papi remove <name>")
                 echo_warning("  2. Re-run query (excluded docs will stay excluded): papi ask '...'")
-                echo_warning("  3. Re-stage excluded docs for retry: papi ask '...' --retry-failed")
-                echo_warning("  4. Rebuild index from scratch: papi ask '...' --rebuild-index")
+                echo_warning("  3. Re-stage excluded docs for retry: papi ask '...' --pqa-retry-failed")
+                echo_warning("  4. Rebuild index from scratch: papi ask '...' --pqa-rebuild-index")
                 if len(failed_docs) <= 5:
                     echo_warning(f"Failed documents: {', '.join(Path(f).stem for f in failed_docs)}")
                 raise SystemExit(1)
@@ -3860,7 +4429,7 @@ def models(
                 "claude-sonnet-4-20250514",
             ]
             embedding_models = [
-                # OpenAI embeddings (current + legacy)
+                # OpenAI embeddings
                 "text-embedding-ada-002",
                 "text-embedding-3-small",
                 # Google + Voyage (include older/smaller options)
@@ -4445,7 +5014,8 @@ def install_prompts(targets: tuple[str, ...], force: bool, copy: bool):
     multiple=True,
     help="Install repo-local MCP configs (.mcp.json + .gemini/settings.json) in the current directory",
 )
-@click.option("--name", default="paperqa", show_default=True, help="MCP server name")
+@click.option("--name", default="paperqa", show_default=True, help="PaperQA2 MCP server name")
+@click.option("--leann-name", default="leann", show_default=True, help="LEANN MCP server name")
 @click.option(
     "--embedding",
     default=None,
@@ -4453,14 +5023,17 @@ def install_prompts(targets: tuple[str, ...], force: bool, copy: bool):
     help="Embedding model id (defaults to paperpipe config/env)",
 )
 @click.option("--force", is_flag=True, help="Overwrite existing MCP installation")
-def install_mcp(targets: tuple[str, ...], name: str, embedding: Optional[str], force: bool) -> None:
-    """Install the PaperQA2 MCP server configuration for Claude Code / Codex CLI / Gemini CLI.
+def install_mcp(targets: tuple[str, ...], name: str, leann_name: str, embedding: Optional[str], force: bool) -> None:
+    """Install MCP server configuration(s) for Claude Code / Codex CLI / Gemini CLI.
 
-    This command configures an MCP server entry named `paperqa` (customizable via `--name`)
-    that runs `papi-mcp`. For Codex CLI, it shells out to `codex mcp add ...` to let Codex
-    manage its own config. For Claude Code user installs, it shells out to `claude mcp add`.
-    For Gemini CLI user installs, it shells out to `gemini mcp add` when available. For repo-local
-    installs, it writes `.mcp.json` (Claude Code) and `.gemini/settings.json` (Gemini CLI project scope).
+    Depending on what is installed in the current environment, this command can install:
+    - PaperQA2 retrieval MCP server (`papi-mcp`)   [requires `paperpipe[mcp]`, Python 3.11+]
+    - LEANN MCP server (`papi-leann-mcp`)         [requires `paperpipe[leann]` or `leann_mcp` on PATH]
+
+    For Codex CLI, it shells out to `codex mcp add ...`. For Claude Code user installs, it shells out
+    to `claude mcp add ...`. For Gemini CLI user installs, it shells out to `gemini mcp add` when available
+    (otherwise it falls back to writing `~/.gemini/settings.json`). For repo-local installs, it writes
+    `.mcp.json` (Claude Code) and `.gemini/settings.json` (Gemini CLI project scope).
 
     \b
     Examples:
@@ -4472,11 +5045,66 @@ def install_mcp(targets: tuple[str, ...], name: str, embedding: Optional[str], f
         papi install-mcp --force              # Overwrite existing entries
         papi install-mcp --embedding text-embedding-3-small
     """
-    server_name = (name or "").strip()
-    if not server_name:
-        raise click.UsageError("--name must be non-empty")
+
+    @dataclass(frozen=True)
+    class McpServerSpec:
+        name: str
+        command: str
+        args: tuple[str, ...]
+        env: dict[str, str]
+        description: str
+
+    def _paperqa_mcp_is_available() -> bool:
+        if sys.version_info < (3, 11):
+            return False
+        import importlib.util
+
+        return (
+            importlib.util.find_spec("mcp.server.fastmcp") is not None
+            and importlib.util.find_spec("paperqa") is not None
+        )
+
+    def _leann_mcp_is_available() -> bool:
+        return shutil.which("leann_mcp") is not None
+
+    paperqa_name = (name or "").strip()
+    leann_server_name = (leann_name or "").strip()
 
     embedding_model = (embedding or "").strip() if embedding else default_pqa_embedding_model()
+
+    servers: list[McpServerSpec] = []
+    if _paperqa_mcp_is_available():
+        if not paperqa_name:
+            raise click.UsageError("--name must be non-empty")
+        servers.append(
+            McpServerSpec(
+                name=paperqa_name,
+                command="papi-mcp",
+                args=(),
+                env={"PAPERQA_EMBEDDING": embedding_model},
+                description="PaperQA2 retrieval-only search",
+            )
+        )
+
+    if _leann_mcp_is_available():
+        if not leann_server_name:
+            raise click.UsageError("--leann-name must be non-empty")
+        servers.append(
+            McpServerSpec(
+                name=leann_server_name,
+                command="papi-leann-mcp",
+                args=(),
+                env={},
+                description="LEANN semantic search",
+            )
+        )
+
+    if not servers:
+        echo_error("No MCP servers available to install in this environment.")
+        echo_error("Install one of:")
+        echo_error("  pip install 'paperpipe[mcp]'    # PaperQA2 MCP server (Python 3.11+)")
+        echo_error("  pip install 'paperpipe[leann]'  # LEANN MCP server (compiled)")
+        raise SystemExit(1)
 
     install_targets = set(targets) if targets else {"claude", "codex", "gemini"}
     successes: list[str] = []
@@ -4503,7 +5131,7 @@ def install_mcp(targets: tuple[str, ...], name: str, embedding: Optional[str], f
             return False
         return True
 
-    def upsert_mcp_servers(path: Path, *, where: str, entry: dict[str, Any]) -> bool:
+    def upsert_mcp_servers(path: Path, *, where: str, server_key: str, entry: dict[str, Any]) -> bool:
         obj = _read_json_object(path, where=where)
         if obj is None:
             return False
@@ -4516,12 +5144,12 @@ def install_mcp(targets: tuple[str, ...], name: str, embedding: Optional[str], f
             echo_error(f"{where}: expected 'mcpServers' to be an object in {path}")
             return False
 
-        existing = mcp_servers.get(server_name)
+        existing = mcp_servers.get(server_key)
         if existing is not None and existing != entry and not force:
-            echo_warning(f"{where}: {server_name!r} already configured in {path} (use --force to overwrite)")
+            echo_warning(f"{where}: {server_key!r} already configured in {path} (use --force to overwrite)")
             return True
 
-        mcp_servers[server_name] = entry
+        mcp_servers[server_key] = entry
         return _write_json_object(path, obj, where=where)
 
     for target in sorted(install_targets):
@@ -4531,90 +5159,90 @@ def install_mcp(targets: tuple[str, ...], name: str, embedding: Optional[str], f
                 echo("  papi install-mcp --repo")
                 continue
 
-            if force:
-                subprocess.run(["claude", "mcp", "remove", server_name], capture_output=True, text=True)
-            proc = subprocess.run(
-                [
-                    "claude",
-                    "mcp",
-                    "add",
-                    "--transport",
-                    "stdio",
-                    "--env",
-                    f"PAPERQA_EMBEDDING={embedding_model}",
-                    "--scope",
-                    "user",
-                    server_name,
-                    "--",
-                    "papi-mcp",
-                ],
-                capture_output=True,
-                text=True,
-            )
-            if proc.returncode != 0:
-                echo_warning("claude: failed to install via `claude mcp add`")
-                if proc.stdout.strip():
-                    echo(proc.stdout.rstrip("\n"))
-                if proc.stderr.strip():
-                    echo(proc.stderr.rstrip("\n"), err=True)
-                echo_warning("You can install a project-scoped config file instead:")
-                echo("  papi install-mcp --repo")
-                continue
+            for spec in servers:
+                if force:
+                    subprocess.run(["claude", "mcp", "remove", spec.name], capture_output=True, text=True)
 
-            echo_success(f"claude: installed {server_name!r}")
-            successes.append("claude")
+                cmd = ["claude", "mcp", "add", "--transport", "stdio"]
+                for k, v in spec.env.items():
+                    cmd.extend(["--env", f"{k}={v}"])
+                cmd.extend(["--scope", "user", spec.name, "--", spec.command, *spec.args])
+
+                proc = subprocess.run(cmd, capture_output=True, text=True)
+                if proc.returncode != 0:
+                    echo_warning(f"claude: failed to install {spec.name!r} via `claude mcp add`")
+                    if proc.stdout.strip():
+                        echo(proc.stdout.rstrip("\n"))
+                    if proc.stderr.strip():
+                        echo(proc.stderr.rstrip("\n"), err=True)
+                    echo_warning("You can install a project-scoped config file instead:")
+                    echo("  papi install-mcp --repo")
+                    continue
+
+                echo_success(f"claude: installed {spec.name!r}")
+                successes.append(f"claude:{spec.name}")
             continue
 
         if target == "repo":
-            claude_entry = {"command": "papi-mcp", "args": [], "env": {"PAPERQA_EMBEDDING": embedding_model}}
             claude_dest = Path.cwd() / ".mcp.json"
-            if upsert_mcp_servers(claude_dest, where="repo/claude", entry=claude_entry):
-                echo_success(f"repo: wrote {claude_dest}")
-                successes.append("repo/claude")
-
-            gemini_entry = {"command": "papi-mcp", "args": [], "env": {"PAPERQA_EMBEDDING": embedding_model}}
             gemini_dest = Path.cwd() / ".gemini" / "settings.json"
-            if upsert_mcp_servers(gemini_dest, where="repo/gemini", entry=gemini_entry):
-                echo_success(f"repo: wrote {gemini_dest}")
-                successes.append("repo/gemini")
+            for spec in servers:
+                entry: dict[str, Any] = {"command": spec.command, "args": list(spec.args), "env": dict(spec.env)}
+                if upsert_mcp_servers(claude_dest, where="repo/claude", server_key=spec.name, entry=entry):
+                    echo_success(f"repo: wrote {claude_dest} ({spec.name!r})")
+                    successes.append(f"repo/claude:{spec.name}")
+                if upsert_mcp_servers(gemini_dest, where="repo/gemini", server_key=spec.name, entry=entry):
+                    echo_success(f"repo: wrote {gemini_dest} ({spec.name!r})")
+                    successes.append(f"repo/gemini:{spec.name}")
             continue
 
         if target == "codex":
             if not shutil.which("codex"):
                 echo_warning("codex: `codex` not found on PATH; run this manually:")
-                echo(f"  codex mcp add {server_name} --env PAPERQA_EMBEDDING={embedding_model} -- papi-mcp")
+                for spec in servers:
+                    env_flags = " ".join([f"--env {k}={v}" for k, v in spec.env.items()])
+                    env_flags = f" {env_flags}" if env_flags else ""
+                    echo(f"  codex mcp add {spec.name}{env_flags} -- {spec.command}")
                 continue
 
             # Let Codex manage its own config. Prefer replacing only when requested.
-            if force:
-                subprocess.run(["codex", "mcp", "remove", server_name], capture_output=True, text=True)
-            proc = subprocess.run(
-                ["codex", "mcp", "add", server_name, "--env", f"PAPERQA_EMBEDDING={embedding_model}", "--", "papi-mcp"],
-                capture_output=True,
-                text=True,
-            )
-            if proc.returncode != 0:
-                echo_warning("codex: failed to install via `codex mcp add`")
-                if proc.stdout.strip():
-                    echo(proc.stdout.rstrip("\n"))
-                if proc.stderr.strip():
-                    echo(proc.stderr.rstrip("\n"), err=True)
-                echo("Try re-running with --force, or run manually:")
-                echo(f"  codex mcp add {server_name} --env PAPERQA_EMBEDDING={embedding_model} -- papi-mcp")
-                continue
+            for spec in servers:
+                if force:
+                    subprocess.run(["codex", "mcp", "remove", spec.name], capture_output=True, text=True)
 
-            echo_success(f"codex: installed {server_name!r}")
-            successes.append("codex")
+                cmd = ["codex", "mcp", "add", spec.name]
+                for k, v in spec.env.items():
+                    cmd.extend(["--env", f"{k}={v}"])
+                cmd.extend(["--", spec.command, *spec.args])
+
+                proc = subprocess.run(cmd, capture_output=True, text=True)
+                if proc.returncode != 0:
+                    echo_warning(f"codex: failed to install {spec.name!r} via `codex mcp add`")
+                    if proc.stdout.strip():
+                        echo(proc.stdout.rstrip("\n"))
+                    if proc.stderr.strip():
+                        echo(proc.stderr.rstrip("\n"), err=True)
+                    echo("Try re-running with --force, or run manually:")
+                    env_flags = " ".join([f"--env {k}={v}" for k, v in spec.env.items()])
+                    env_flags = f" {env_flags}" if env_flags else ""
+                    echo(f"  codex mcp add {spec.name}{env_flags} -- {spec.command}")
+                    continue
+
+                echo_success(f"codex: installed {spec.name!r}")
+                successes.append(f"codex:{spec.name}")
             continue
 
         if target == "gemini":
             if shutil.which("gemini"):
-                if force:
-                    subprocess.run(
-                        ["gemini", "mcp", "remove", "--scope", "user", server_name], capture_output=True, text=True
-                    )
-                proc = subprocess.run(
-                    [
+                for spec in servers:
+                    if force:
+                        subprocess.run(
+                            ["gemini", "mcp", "remove", "--scope", "user", spec.name],
+                            capture_output=True,
+                            text=True,
+                        )
+
+                    cmd = [
                         "gemini",
                         "mcp",
                         "add",
@@ -4622,32 +5250,32 @@ def install_mcp(targets: tuple[str, ...], name: str, embedding: Optional[str], f
                         "user",
                         "--transport",
                         "stdio",
-                        "--env",
-                        f"PAPERQA_EMBEDDING={embedding_model}",
-                        "--description",
-                        "PaperQA2 retrieval-only search",
-                        server_name,
-                        "papi-mcp",
-                    ],
-                    capture_output=True,
-                    text=True,
-                )
-                if proc.returncode == 0:
-                    echo_success(f"gemini: installed {server_name!r}")
-                    successes.append("gemini")
-                    continue
+                    ]
+                    for k, v in spec.env.items():
+                        cmd.extend(["--env", f"{k}={v}"])
+                    cmd.extend(["--description", spec.description, spec.name, spec.command, *spec.args])
 
-                echo_warning("gemini: failed to install via `gemini mcp add`; falling back to ~/.gemini/settings.json")
-                if proc.stdout.strip():
-                    echo(proc.stdout.rstrip("\n"))
-                if proc.stderr.strip():
-                    echo(proc.stderr.rstrip("\n"), err=True)
+                    proc = subprocess.run(cmd, capture_output=True, text=True)
+                    if proc.returncode == 0:
+                        echo_success(f"gemini: installed {spec.name!r}")
+                        successes.append(f"gemini:{spec.name}")
+                        continue
+
+                    echo_warning(
+                        f"gemini: failed to install {spec.name!r} via `gemini mcp add`; "
+                        "falling back to ~/.gemini/settings.json"
+                    )
+                    if proc.stdout.strip():
+                        echo(proc.stdout.rstrip("\n"))
+                    if proc.stderr.strip():
+                        echo(proc.stderr.rstrip("\n"), err=True)
 
             dest = Path.home() / ".gemini" / "settings.json"
-            gemini_entry = {"command": "papi-mcp", "args": [], "env": {"PAPERQA_EMBEDDING": embedding_model}}
-            if upsert_mcp_servers(dest, where="gemini", entry=gemini_entry):
-                echo_success(f"gemini: configured {server_name!r} in {dest}")
-                successes.append("gemini")
+            for spec in servers:
+                gemini_entry: dict[str, Any] = {"command": spec.command, "args": list(spec.args), "env": dict(spec.env)}
+                if upsert_mcp_servers(dest, where="gemini", server_key=spec.name, entry=gemini_entry):
+                    echo_success(f"gemini: configured {spec.name!r} in {dest}")
+                    successes.append(f"gemini:{spec.name}")
             continue
 
         raise click.UsageError(f"Unknown target: {target}")

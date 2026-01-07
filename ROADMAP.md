@@ -24,7 +24,7 @@ Goal: make the codebase maintainable without changing CLI behavior or on-disk da
 - **Packaging**
   - Move to a `src/` layout (e.g., `src/paperpipe/*.py`) and update `pyproject.toml` accordingly.
   - Keep `papi` entrypoint stable (likely `paperpipe.cli:cli`).
-  - Consider keeping a thin `paperpipe.py` shim for backwards compatibility (imports + delegates to the package).
+  - Consider keeping a thin `paperpipe.py` shim (imports + delegates to the package).
 - **Proposed module split (initial cut)**
   - `paperpipe/cli.py`: Click group + command wiring
   - `paperpipe/config.py`: config/env precedence + defaults
@@ -52,7 +52,7 @@ PaperQA2 (when installed).
     - Detect/normalize common env var names (e.g., `OLLAMA_HOST` vs `OLLAMA_API_BASE`) so users don’t have to guess.
     - Fail with a clear error when Ollama isn’t reachable (connection refused, wrong host, missing model, etc.).
 - **PaperQA2 via `papi ask`**
-  - Ensure `papi ask --llm ... --embedding ...` works cleanly with Ollama identifiers.
+  - Ensure `papi ask --pqa-llm ... --pqa-embedding ...` works cleanly with Ollama identifiers.
   - Add docs/examples for local-only `papi ask` (including an embedding model choice).
 
 ### 3) `papi ask`: PaperQA2 output stream hygiene

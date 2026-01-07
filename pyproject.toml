@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "paperpipe"
-version = "0.4.0"
+version = "0.5.0"
 description = "Unified paper database for coding agents + PaperQA2"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -41,6 +41,10 @@ dependencies = [
 llm = [
     "litellm>=1.0.0",
 ]
+leann = [
+    "leann-core>=0.3.5",
+    "leann-backend-hnsw>=0.3.5",
+]
 paperqa = [
     "paper-qa>=5.0.0; python_version >= '3.11'",
 ]
@@ -52,7 +56,7 @@ mcp = [
     "paper-qa>=5.0.0; python_version >= '3.11'",
 ]
 all = [
-    "paperpipe[llm,paperqa,paperqa-media,mcp]",
+    "paperpipe[llm,leann,paperqa,paperqa-media,mcp]",
 ]
 dev = [
     "build>=1.0.0",
@@ -75,6 +79,7 @@ dev = [
 [project.scripts]
 papi = "paperpipe:cli"
 papi-mcp = "paperqa_mcp_server:main"
+papi-leann-mcp = "paperpipe:leann_mcp_entry"
 
 [project.urls]
 Homepage = "https://github.com/hummat/paperpipe"

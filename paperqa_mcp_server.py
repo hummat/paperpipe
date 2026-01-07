@@ -6,7 +6,7 @@ This server is optimized for "fast RAG": it returns raw retrieved chunks (with
 citations) so the client model can do synthesis, avoiding PaperQA2's full agent
 loop (LLM summarization + answer generation).
 
-It reuses the same PaperQA2 index that `papi ask` maintains under
+It reuses the same PaperQA2 index that `papi ask` / `papi index` maintain under
 `~/.paperpipe/.pqa_index/` by default (no duplicate embeddings).
 
 Usage:
@@ -23,7 +23,7 @@ Configuration via environment variables:
     PAPERPIPE_PQA_INDEX_DIR   - Root dir containing PaperQA2 indices (default: ~/.paperpipe/.pqa_index)
     PAPERPIPE_PQA_INDEX_NAME  - Index name to query (default: paperpipe_<embedding_model>)
     PAPERQA_EMBEDDING         - Embedding model used to embed the query (default: from paperpipe config)
-    PAPERQA_LLM               - Unused for retrieval-only tools (kept for compatibility)
+    PAPERQA_LLM               - Unused for retrieval-only tools
 
 Requires Python 3.11+ (paper-qa requirement).
 """
@@ -182,7 +182,7 @@ def _register_tools() -> None:
         if not _index_meta_exists(index_root, index_name) or not files_zip.exists():
             return {
                 "ok": False,
-                "error": "PaperQA2 index not found. Run `papi ask ...` once to build it, or set index_dir/index_name.",
+                "error": "PaperQA2 index not found. Run `papi index` (or `papi ask ...`) to build it, or set index_dir/index_name.",
                 "index": {"directory": str(index_root), "name": index_name, "embedding_model": embedding_model},
             }
 

@@ -169,6 +169,49 @@ class TestConfigToml:
         assert paperpipe.default_pqa_timeout() == 300.0
         assert paperpipe.default_pqa_concurrency() == 4
 
+    def test_leann_config_from_toml(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        for env_var in [
+            "PAPERPIPE_LEANN_LLM_PROVIDER",
+            "PAPERPIPE_LEANN_LLM_MODEL",
+            "PAPERPIPE_LEANN_EMBEDDING_MODEL",
+            "PAPERPIPE_LEANN_EMBEDDING_MODE",
+        ]:
+            monkeypatch.delenv(env_var, raising=False)
+
+        (temp_db / "config.toml").write_text(
+            "\n".join(
+                [
+                    "[leann]",
+                    'llm_provider = "ollama"',
+                    'llm_model = "qwen3:8b"',
+                    'embedding_model = "nomic-embed-text"',
+                    'embedding_mode = "ollama"',
+                    "",
+                ]
+            )
+        )
+        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+
+        assert paperpipe.default_leann_llm_provider() == "ollama"
+        assert paperpipe.default_leann_llm_model() == "qwen3:8b"
+        assert paperpipe.default_leann_embedding_model() == "nomic-embed-text"
+        assert paperpipe.default_leann_embedding_mode() == "ollama"
+
+    def test_leann_config_env_overrides_toml(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        (temp_db / "config.toml").write_text(
+            "\n".join(
+                [
+                    "[leann]",
+                    'llm_model = "config-model"',
+                    "",
+                ]
+            )
+        )
+        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        monkeypatch.setenv("PAPERPIPE_LEANN_LLM_MODEL", "env-model")
+
+        assert paperpipe.default_leann_llm_model() == "env-model"
+
     def test_pqa_config_env_overrides_toml(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
         (temp_db / "config.toml").write_text(
             "\n".join(
@@ -1839,6 +1882,24 @@ class TestInstallPromptsCommand:
 
 
 class TestInstallMcpCommand:
+    @pytest.fixture(autouse=True)
+    def _pretend_paperqa_mcp_is_installed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """install-mcp now installs only MCP servers available in the environment.
+
+        Tests run without optional deps installed, so we pretend PaperQA2 MCP deps exist.
+        """
+        import importlib.machinery
+        import importlib.util
+
+        real_find_spec = importlib.util.find_spec
+
+        def fake_find_spec(name: str, package: str | None = None):  # type: ignore[override]
+            if name in {"mcp.server.fastmcp", "paperqa"}:
+                return importlib.machinery.ModuleSpec(name, loader=None)
+            return real_find_spec(name, package)
+
+        monkeypatch.setattr(importlib.util, "find_spec", fake_find_spec)
+
     def test_install_mcp_claude_runs_claude_mcp_add(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/claude" if cmd == "claude" else None)
 
@@ -1878,6 +1939,18 @@ class TestInstallMcpCommand:
             assert cfg["mcpServers"]["paperqa"]["command"] == "papi-mcp"
             cfg2 = json.loads((Path(".gemini") / "settings.json").read_text())
             assert cfg2["mcpServers"]["paperqa"]["command"] == "papi-mcp"
+
+    def test_install_mcp_repo_writes_leann_when_available(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann_mcp" if cmd == "leann_mcp" else None)
+
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            result = runner.invoke(paperpipe.cli, ["install-mcp", "--repo", "--embedding", "text-embedding-3-small"])
+            assert result.exit_code == 0, result.output
+
+            cfg = json.loads(Path(".mcp.json").read_text())
+            assert cfg["mcpServers"]["paperqa"]["command"] == "papi-mcp"
+            assert cfg["mcpServers"]["leann"]["command"] == "papi-leann-mcp"
 
     def test_install_mcp_repo_uses_paperqa_embedding_env_override(
         self, temp_db: Path, monkeypatch: pytest.MonkeyPatch
@@ -2237,13 +2310,13 @@ class TestAskCommand:
             [
                 "ask",
                 "query",
-                "--llm",
+                "--pqa-llm",
                 "my-llm",
-                "--embedding",
+                "--pqa-embedding",
                 "my-embed",
-                "--temperature",
+                "--pqa-temperature",
                 "0.7",
-                "--verbosity",
+                "--pqa-verbosity",
                 "2",
             ],
         )
@@ -2299,7 +2372,7 @@ class TestAskCommand:
         index_dir = temp_db / ".pqa_index" / "paperpipe_my-embed"
         index_dir.mkdir(parents=True)
         files_zip = index_dir / "files.zip"
-        # pickle is required for PaperQA2 index format compatibility
+        # pickle is required for PaperQA2 index format
         files_zip.write_bytes(
             zlib.compress(
                 pickle.dumps({str(staging_dir / "test-paper.pdf"): "ERROR"}, protocol=pickle.HIGHEST_PROTOCOL)
@@ -2309,7 +2382,7 @@ class TestAskCommand:
         runner = CliRunner()
         result = runner.invoke(
             paperpipe.cli,
-            ["ask", "query", "--llm", "my-llm", "--embedding", "my-embed", "--retry-failed"],
+            ["ask", "query", "--pqa-llm", "my-llm", "--pqa-embedding", "my-embed", "--pqa-retry-failed"],
         )
         assert result.exit_code == 0
 
@@ -2443,7 +2516,7 @@ class TestAskCommand:
         runner = CliRunner()
         result = runner.invoke(
             paperpipe.cli,
-            ["ask", "query", "--embedding", "my-embed", "--agent.index.paper_directory", str(custom_papers)],
+            ["ask", "query", "--pqa-embedding", "my-embed", "--agent.index.paper_directory", str(custom_papers)],
         )
 
         assert result.exit_code == 1
@@ -2468,27 +2541,27 @@ class TestAskCommand:
             [
                 "ask",
                 "test query",
-                "--llm",
+                "--pqa-llm",
                 "gpt-4o",
-                "--summary-llm",
+                "--pqa-summary-llm",
                 "gpt-4o-mini",
-                "--embedding",
+                "--pqa-embedding",
                 "text-embedding-3-small",
-                "--temperature",
+                "--pqa-temperature",
                 "0.5",
-                "--verbosity",
+                "--pqa-verbosity",
                 "3",
-                "--answer-length",
+                "--pqa-answer-length",
                 "about 100 words",
-                "--evidence-k",
+                "--pqa-evidence-k",
                 "15",
-                "--max-sources",
+                "--pqa-max-sources",
                 "8",
-                "--timeout",
+                "--pqa-timeout",
                 "300",
-                "--concurrency",
+                "--pqa-concurrency",
                 "4",
-                "--rebuild-index",
+                "--pqa-rebuild-index",
             ],
         )
 
@@ -2528,6 +2601,167 @@ class TestAskCommand:
         # Concurrency should be set to 1 by default
         concurrency_idx = pqa_call.index("--agent.index.concurrency") + 1
         assert pqa_call[concurrency_idx] == "1"
+
+
+class TestLeannCommands:
+    def test_leann_index_runs_leann_build(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann" if cmd == "leann" else None)
+
+        calls: list[tuple[list[str], dict]] = []
+
+        def fake_run(args: list[str], **kwargs):
+            calls.append((args, kwargs))
+            return types.SimpleNamespace(returncode=0)
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        (temp_db / "papers" / "test-paper").mkdir(parents=True)
+        (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["leann-index"])
+        assert result.exit_code == 0, result.output
+
+        cmd, kwargs = calls[0]
+        assert cmd[:2] == ["leann", "build"]
+        assert "papers" in cmd
+        assert "--docs" in cmd and str(temp_db / ".pqa_papers") in cmd
+        assert "--file-types" in cmd and ".pdf" in cmd
+        assert "--embedding-model" in cmd and "nomic-embed-text" in cmd
+        assert "--embedding-mode" in cmd and "ollama" in cmd
+        assert kwargs.get("cwd") == temp_db
+        assert (temp_db / ".pqa_papers" / "test-paper.pdf").exists()
+
+    def test_leann_index_rejects_file_types_override(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann" if cmd == "leann" else None)
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["leann-index", "--file-types", ".txt"])
+        assert result.exit_code != 0
+        assert "PDF-only" in result.output
+
+    def test_ask_backend_leann_runs_leann_ask(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann" if cmd == "leann" else None)
+
+        meta = temp_db / ".leann" / "indexes" / "papers" / "documents.leann.meta.json"
+        meta.parent.mkdir(parents=True)
+        meta.write_text("{}")
+
+        mock_popen = MockPopen(returncode=0, stdout="OUT\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            paperpipe.cli,
+            [
+                "ask",
+                "what is x",
+                "--backend",
+                "leann",
+                "--leann-provider",
+                "ollama",
+                "--leann-model",
+                "qwen3:8b",
+                "--leann-top-k",
+                "3",
+                "--leann-no-recompute",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "OUT" in result.output
+
+        cmd, kwargs = mock_popen.calls[0]
+        assert cmd[:3] == ["leann", "ask", "papers"]
+        assert "what is x" in cmd
+        assert "--llm" in cmd and "ollama" in cmd
+        assert "--model" in cmd and "qwen3:8b" in cmd
+        assert "--top-k" in cmd and "3" in cmd
+        assert "--no-recompute" in cmd
+        assert kwargs.get("cwd") == temp_db
+
+    def test_ask_backend_leann_requires_index(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann" if cmd == "leann" else None)
+
+        (temp_db / "papers" / "test-paper").mkdir(parents=True)
+        (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
+
+        build_calls: list[tuple[list[str], dict]] = []
+
+        def fake_run(args: list[str], **kwargs):
+            build_calls.append((args, kwargs))
+            # Simulate that `leann build` created the index metadata file.
+            meta = temp_db / ".leann" / "indexes" / "papers" / "documents.leann.meta.json"
+            meta.parent.mkdir(parents=True, exist_ok=True)
+            meta.write_text('{"backend_name":"hnsw"}')
+            return types.SimpleNamespace(returncode=0)
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        mock_popen = MockPopen(returncode=0, stdout="OUT\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["ask", "q", "--backend", "leann"])
+        assert result.exit_code == 0, result.output
+        assert "OUT" in result.output
+        assert build_calls, "Expected `leann build` to run when index is missing"
+
+    def test_ask_backend_leann_can_disable_auto_index(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann" if cmd == "leann" else None)
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["ask", "q", "--backend", "leann", "--leann-no-auto-index"])
+        assert result.exit_code != 0
+        assert "Build it first" in result.output
+
+
+class TestIndexCommand:
+    def test_index_backend_pqa_runs_pqa_index(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: False)
+
+        mock_popen = MockPopen(returncode=0, stdout="Indexed\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+
+        (temp_db / "papers" / "test-paper").mkdir(parents=True)
+        (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["index", "--pqa-embedding", "my-embed"])
+        assert result.exit_code == 0, result.output
+
+        pqa_call, _ = next(c for c in mock_popen.calls if c[0][0] == "pqa")
+        assert "index" in pqa_call
+        assert str(temp_db / ".pqa_papers") in pqa_call
+        assert "--agent.index.paper_directory" in pqa_call
+        assert "--index" in pqa_call and "paperpipe_my-embed" in pqa_call
+        assert (temp_db / ".pqa_papers" / "test-paper.pdf").exists()
+
+    def test_index_backend_leann_runs_leann_build(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann" if cmd == "leann" else None)
+
+        calls: list[tuple[list[str], dict]] = []
+
+        def fake_run(args: list[str], **kwargs):
+            calls.append((args, kwargs))
+            return types.SimpleNamespace(returncode=0)
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        (temp_db / "papers" / "test-paper").mkdir(parents=True)
+        (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["index", "--backend", "leann"])
+        assert result.exit_code == 0, result.output
+
+        cmd, kwargs = calls[0]
+        assert cmd[:2] == ["leann", "build"]
+        assert "papers" in cmd
+        assert "--docs" in cmd and str(temp_db / ".pqa_papers") in cmd
+        assert "--embedding-model" in cmd and "nomic-embed-text" in cmd
+        assert "--embedding-mode" in cmd and "ollama" in cmd
+        assert kwargs.get("cwd") == temp_db
 
 
 class TestModelsCommand:
@@ -3152,10 +3386,10 @@ class TestAskErrorHandling:
         files_zip.write_bytes(zlib.compress(pickle.dumps({staged_path_str: "ERROR"}, protocol=pickle.HIGHEST_PROTOCOL)))
 
         runner = CliRunner()
-        # Run ask WITHOUT --retry-failed
+        # Run ask WITHOUT --pqa-retry-failed
         result = runner.invoke(
             paperpipe.cli,
-            ["ask", "query", "--embedding", embedding_model, "--agent.index.index_directory", str(index_dir)],
+            ["ask", "query", "--pqa-embedding", embedding_model, "--agent.index.index_directory", str(index_dir)],
         )
 
         assert result.exit_code == 0
@@ -3189,17 +3423,17 @@ class TestAskErrorHandling:
         files_zip.write_bytes(zlib.compress(pickle.dumps({staged_path_str: "ERROR"}, protocol=pickle.HIGHEST_PROTOCOL)))
 
         runner = CliRunner()
-        # Run ask WITH --retry-failed
+        # Run ask WITH --pqa-retry-failed
         result = runner.invoke(
             paperpipe.cli,
             [
                 "ask",
                 "query",
-                "--embedding",
+                "--pqa-embedding",
                 embedding_model,
                 "--agent.index.index_directory",
                 str(index_dir),
-                "--retry-failed",
+                "--pqa-retry-failed",
             ],
         )
 

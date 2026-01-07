@@ -19,7 +19,7 @@ Use this skill when the user:
 
 1. Prefer reading local files: `{paper}/equations.md` and `{paper}/source.tex`.
 2. Prefer retrieval-only MCP chunks over full `papi ask` when you only need “top passages about X”.
-3. Use `papi ask` only when explicitly requested to run PaperQA2’s synthesis/answer loop.
+3. Use `papi ask` only when explicitly requested to run a RAG backend (default: PaperQA2; optional: `--backend leann`).
 
 ### 1. Find the paper database location
 
@@ -72,7 +72,10 @@ export PAPERPIPE_LLM_TEMPERATURE=0.3
 
 ```bash
 papi search "query"      # fast text search
-papi ask "question"      # PaperQA2 RAG (if installed)
+papi index               # build/update PaperQA2 index (no question)
+papi ask "question"      # PaperQA2 RAG (default backend, if installed)
+papi index --backend leann
+papi ask "question" --backend leann
 ```
 
 ## Adding New Papers

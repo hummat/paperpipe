@@ -58,7 +58,7 @@ Runtime data is stored outside the repo in `~/.paperpipe/` (PDFs, LaTeX, summari
 ## LLM & PaperQA2 Integration Notes
 
 - PaperQA2 integration uses the `pqa` CLI if installed.
-- PaperQA2 model selection uses LiteLLM identifiers (passed through via `papi ask --llm/--embedding`).
+- PaperQA2 model selection uses LiteLLM identifiers (via `papi ask --pqa-llm/--pqa-embedding`).
 - Summaries/equations/tags are generated via LiteLLM when available; otherwise paperpipe
   falls back to simpler non-LLM extraction (metadata-based summaries, regex equation extraction).
 - Common API keys paperpipe checks for:
