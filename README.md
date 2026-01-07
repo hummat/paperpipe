@@ -30,6 +30,9 @@ pip install 'paperpipe[paperqa]'
 # With PaperQA2 + multimodal PDF parsing (images/tables; installs Pillow)
 pip install 'paperpipe[paperqa-media]'
 
+# With MCP server for Claude Code (requires Python 3.11+)
+pip install 'paperpipe[mcp]'
+
 # Everything
 pip install 'paperpipe[all]'
 ```
@@ -125,13 +128,17 @@ paperpipe includes a skill that automatically activates when you ask about paper
 verification, or equations. Install it for Claude Code and/or Codex CLI:
 
 ```bash
-# Install for both Claude Code and Codex CLI
+# Install for Claude Code + Codex CLI + Gemini CLI
 papi install-skill
 
 # Or install for a specific CLI only
 papi install-skill --claude
 papi install-skill --codex
+papi install-skill --gemini
 ```
+
+Gemini CLI note: skills are currently experimental; enable them in `~/.gemini/settings.json`:
+`{"experimental": {"skills": true}}`.
 
 Restart your CLI after installing the skill.
 
@@ -140,6 +147,7 @@ Restart your CLI after installing the skill.
 paperpipe also ships lightweight prompt templates you can invoke as:
 - Claude Code: slash commands (from `~/.claude/commands/`)
 - Codex CLI: prompts (from `~/.codex/prompts/`)
+- Gemini CLI: custom commands (from `~/.gemini/commands/`, can run `papi` via `!{...}`)
 
 Install them with:
 
@@ -147,13 +155,39 @@ Install them with:
 papi install-prompts
 papi install-prompts --claude
 papi install-prompts --codex
+papi install-prompts --gemini
 ```
 
 Usage:
 - Claude Code: `/ground-with-paper`, `/compare-papers`, `/curate-paper-note`
 - Codex CLI: `/prompts:ground-with-paper`, `/prompts:compare-papers`, `/prompts:curate-paper-note`
+- Gemini CLI (prompts): `/ground-with-paper`, `/compare-papers`, `/curate-paper-note`
+- Gemini CLI (papi helpers): `/papi-path`, `/papi-list`, `/papi-tags`, `/papi-search`, `/papi-show-summary`, `/papi-show-eq`, `/papi-show-tex`
 
 For Codex CLI prompts, attach exported context with `@...` (or paste output from `papi show ... --level ...`).
+For Gemini CLI commands, inject files/directories with `@{...}` (or paste output from `papi show ... --level ...`).
+
+### When to Use What (User + Agent)
+
+Prefer the cheapest/highest-fidelity mechanism first:
+
+- **Read files** (best fidelity): use `{paper}/equations.md` and `{paper}/source.tex` for implementation correctness.
+- **Gemini custom commands** (fast, local): use `/papi-search` + `/papi-show-eq` to pull exact snippets into the chat.
+- **Skill** (workflow guardrails): keeps the agent in the “read files / cite evidence / verify symbols” mode.
+- **MCP retrieval** (cross-paper search): use when you need “top chunks about X” without running PaperQA2’s LLM loop.
+- **`papi ask`** (slow/expensive): only when you explicitly want PaperQA2 to do synthesis/answering.
+
+### Optional: MCP Server Install
+
+If you want fast retrieval-only RAG (raw chunks + citations, no LLM answering), install the MCP server config:
+
+```bash
+# Install for Claude Code (via `claude mcp add`) + Codex CLI (via `codex mcp add`) + Gemini CLI (via `gemini mcp add`)
+papi install-mcp
+
+# Repo-local config files for Claude Code (.mcp.json) + Gemini CLI (.gemini/settings.json)
+papi install-mcp --repo
+```
 
 Most coding-agent CLIs can read local files directly. The best workflow is:
 
@@ -209,8 +243,9 @@ papi show neuralangelo neus --level eq
 | `papi models` | Probe which models work with your API keys |
 | `papi tags` | List all tags with counts |
 | `papi path` | Print database location |
-| `papi install-skill` | Install the papi skill for Claude Code / Codex CLI |
-| `papi install-prompts` | Install shared prompts (Claude commands + Codex prompts) |
+| `papi install-skill` | Install the papi skill (Claude Code + Codex CLI + Gemini CLI) |
+| `papi install-prompts` | Install shared prompts/commands (Claude + Codex + Gemini) |
+| `papi install-mcp` | Install MCP server config (Claude + Codex + Gemini) |
 | `--quiet/-q` | Suppress progress messages |
 | `--verbose/-v` | Enable debug output |
 
@@ -456,6 +491,112 @@ papi models all
 # show underlying provider errors (noisy):
 papi models --verbose
 ```
+
+## MCP Server (Claude Code / Codex CLI / Gemini CLI)
+
+paperpipe includes an MCP (Model Context Protocol) server that exposes retrieval-only search
+over your PaperQA2 index. This lets your coding agent fetch raw chunks (with citations)
+and do synthesis itself (no PaperQA2 agent loop).
+
+### Installation
+
+```bash
+# Install with MCP support (requires Python 3.11+)
+pip install 'paperpipe[mcp]'
+```
+
+### Setup (Recommended)
+
+Use the installer (Claude via `claude mcp add`, Codex via `codex mcp add`, Gemini via `gemini mcp add`):
+
+```bash
+papi install-mcp
+papi install-mcp --repo
+```
+
+### Setup (Manual)
+
+Claude Code (project `.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "paperqa": {
+      "command": "papi-mcp",
+      "args": [],
+      "env": {
+        "PAPERQA_EMBEDDING": "text-embedding-3-small"
+      }
+    }
+  }
+}
+```
+
+Claude Code (user scope via CLI):
+
+```bash
+claude mcp add --transport stdio --env PAPERQA_EMBEDDING=text-embedding-3-small --scope user paperqa -- papi-mcp
+```
+
+Codex CLI:
+
+```bash
+codex mcp add paperqa --env PAPERQA_EMBEDDING=text-embedding-3-small -- papi-mcp
+```
+
+Gemini CLI (user `~/.gemini/settings.json` or project `.gemini/settings.json`):
+
+```json
+{
+  "mcpServers": {
+    "paperqa": {
+      "command": "papi-mcp",
+      "args": [],
+      "env": {
+        "PAPERQA_EMBEDDING": "text-embedding-3-small"
+      }
+    }
+  }
+}
+```
+
+Gemini CLI (user scope via CLI):
+
+```bash
+gemini mcp add --scope user --transport stdio --env PAPERQA_EMBEDDING=text-embedding-3-small paperqa papi-mcp
+```
+
+### Configuration
+
+| Environment Variable | Default | Description |
+|---------------------|---------|-------------|
+| `PAPERPIPE_PQA_INDEX_DIR` | `~/.paperpipe/.pqa_index` | Root directory containing PaperQA2 indices |
+| `PAPERPIPE_PQA_INDEX_NAME` | `paperpipe_<embedding>` | Index name to query (subfolder under index dir) |
+| `PAPERQA_EMBEDDING` | (from env or `papi` config) | Embedding model id (must match the index you built) |
+| `PAPERQA_LLM` | `gpt-4o-mini` | Unused for retrieval-only tools (kept for compatibility) |
+
+### Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `retrieve_chunks` | Retrieve raw chunks + citations (no LLM answering) |
+| `list_pqa_indexes` | List available PaperQA2 indices under the index dir |
+| `get_pqa_index_status` | Show basic index stats (files, failures) |
+
+### Usage in Claude Code
+
+```
+# Build/update the PaperQA2 index once (outside MCP)
+> Run: papi ask "test" --embedding text-embedding-3-small
+
+# Retrieve chunks (Claude does synthesis)
+> Retrieve chunks: What methods exist for neural surface reconstruction?
+
+# Check what's indexed
+> Get pqa index status
+```
+
+Debug with: `claude --debug` (note: `--mcp-debug` is deprecated)
 
 ## Non-arXiv Papers
 

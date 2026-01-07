@@ -1,8 +1,6 @@
----
-description: Ground responses strictly in provided paper excerpts; include quotes.
-argument-hint: (no args)
----
-You are given paper excerpts (paste `papi show ... --level ...` output above, or reference exported files).
+description = "Ground responses strictly in provided paper excerpts; include quotes."
+prompt = """
+You are given paper excerpts (inject files with @{...}, or paste `papi show ... --level ...` output above).
 
 Rules:
 - If a claim is not supported by the provided excerpts, say: "Not supported by provided excerpts."
@@ -13,3 +11,4 @@ Rules:
 
 End with:
 Cited papers: <comma-separated paper names and/or arXiv IDs>
+"""

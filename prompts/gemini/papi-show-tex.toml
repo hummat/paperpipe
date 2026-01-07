@@ -1,0 +1,7 @@
+description = "Print LaTeX source for one or more papers via `papi show --level tex`."
+prompt = """
+Print LaTeX source for: `{{args}}`
+
+LaTeX:
+!{papi show {{args}} --level tex}
+"""

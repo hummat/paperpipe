@@ -97,8 +97,32 @@ paperpipe ships prompt templates you can install into your agent CLI:
 
 ```bash
 papi install-prompts
+papi install-prompts --gemini
 ```
 
 Usage:
 - Claude Code: `/ground-with-paper`, `/compare-papers`, `/curate-paper-note`
 - Codex CLI: `/prompts:ground-with-paper`, `/prompts:compare-papers`, `/prompts:curate-paper-note`
+- Gemini CLI: `/ground-with-paper`, `/compare-papers`, `/curate-paper-note`
+- Gemini CLI (papi helpers): `/papi-path`, `/papi-list`, `/papi-tags`, `/papi-search`, `/papi-show-summary`, `/papi-show-eq`, `/papi-show-tex`
+
+Notes:
+- Codex CLI: attach exported context with `@...` or paste output from `papi show ... --level ...`.
+- Gemini CLI: inject files/directories with `@{...}` or paste output from `papi show ... --level ...`.
+- Gemini CLI skills are experimental; enable them in `~/.gemini/settings.json`: `{"experimental": {"skills": true}}`.
+
+### Decision Rules (Use the Cheapest Thing That Works)
+
+1. If you know the paper: read `{paper}/equations.md` (and `source.tex` for definitions).
+2. If you need to pull paper content into chat quickly: use Gemini `/papi-show-eq` / `/papi-show-tex`.
+3. If you need cross-paper retrieval (raw chunks + citations): use the MCP tool (`retrieve_chunks`).
+4. Avoid `papi ask` unless explicitly requested (it runs an LLM loop).
+
+### Optional: MCP Server (Retrieval-Only)
+
+paperpipe also ships an MCP server (`papi-mcp`) that returns raw retrieved chunks (no LLM answering).
+
+```bash
+papi install-mcp          # Claude (via `claude mcp add`) + Codex (via `codex mcp add`) + Gemini (via `gemini mcp add`)
+papi install-mcp --repo   # Repo-local .mcp.json (Claude) + .gemini/settings.json (Gemini)
+```

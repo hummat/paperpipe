@@ -1,0 +1,7 @@
+description = "Print equations for one or more papers via `papi show --level eq`."
+prompt = """
+Print equations for: `{{args}}`
+
+Equations:
+!{papi show {{args}} --level eq}
+"""

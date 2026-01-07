@@ -248,6 +248,13 @@ class TestConfigToml:
         assert paperpipe.default_pqa_concurrency() == 2
 
 
+class TestPqaIndexNaming:
+    def test_pqa_index_name_for_embedding_is_stable_and_safe(self):
+        assert paperpipe.pqa_index_name_for_embedding("text-embedding-3-small") == "paperpipe_text-embedding-3-small"
+        assert paperpipe.pqa_index_name_for_embedding("foo/bar:baz") == "paperpipe_foo_bar_baz"
+        assert paperpipe.pqa_index_name_for_embedding("") == "paperpipe_default"
+
+
 class TestNotesCommand:
     def test_notes_creates_file_and_prints(self, temp_db: Path):
         paper_dir = temp_db / "papers" / "my-paper"
@@ -1748,6 +1755,17 @@ class TestInstallSkillCommand:
 
         assert dest.is_symlink()
 
+    def test_install_skill_creates_symlink_for_gemini(self, temp_db: Path, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["install-skill", "--gemini"])
+        assert result.exit_code == 0, result.output
+
+        dest = tmp_path / ".gemini" / "skills" / "papi"
+        assert dest.is_symlink()
+        assert dest.resolve() == (Path(__file__).parent / "skill").resolve()
+
 
 class TestInstallPromptsCommand:
     def test_install_prompts_creates_symlinks_for_codex(self, temp_db: Path, tmp_path: Path, monkeypatch):
@@ -1791,6 +1809,171 @@ class TestInstallPromptsCommand:
         dest = tmp_path / ".codex" / "prompts" / "curate-paper-note.md"
         assert dest.exists()
         assert not dest.is_symlink()
+
+    def test_install_prompts_creates_symlinks_for_gemini(self, temp_db: Path, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["install-prompts", "--gemini"])
+        assert result.exit_code == 0, result.output
+
+        prompt_dir = tmp_path / ".gemini" / "commands"
+        assert prompt_dir.exists()
+
+        expected = [
+            "compare-papers.toml",
+            "curate-paper-note.toml",
+            "ground-with-paper.toml",
+            "papi-list.toml",
+            "papi-path.toml",
+            "papi-search.toml",
+            "papi-show-eq.toml",
+            "papi-show-summary.toml",
+            "papi-show-tex.toml",
+            "papi-tags.toml",
+        ]
+        for filename in expected:
+            dest = prompt_dir / filename
+            assert dest.is_symlink()
+            assert dest.resolve() == (Path(__file__).parent / "prompts" / "gemini" / filename).resolve()
+
+
+class TestInstallMcpCommand:
+    def test_install_mcp_claude_runs_claude_mcp_add(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/claude" if cmd == "claude" else None)
+
+        calls: list[list[str]] = []
+
+        def fake_run(args: list[str], **_kwargs):
+            calls.append(args)
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["install-mcp", "--claude"])
+        assert result.exit_code == 0, result.output
+
+        assert any(
+            c[:3] == ["claude", "mcp", "add"]
+            and "--transport" in c
+            and "stdio" in c
+            and "--env" in c
+            and any(s.startswith("PAPERQA_EMBEDDING=") for s in c)
+            and "--scope" in c
+            and "user" in c
+            and "paperqa" in c
+            and "--" in c
+            and "papi-mcp" in c
+            for c in calls
+        )
+
+    def test_install_mcp_repo_writes_mcp_json(self, temp_db: Path):
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            result = runner.invoke(paperpipe.cli, ["install-mcp", "--repo", "--embedding", "text-embedding-3-small"])
+            assert result.exit_code == 0, result.output
+
+            cfg = json.loads(Path(".mcp.json").read_text())
+            assert cfg["mcpServers"]["paperqa"]["command"] == "papi-mcp"
+            cfg2 = json.loads((Path(".gemini") / "settings.json").read_text())
+            assert cfg2["mcpServers"]["paperqa"]["command"] == "papi-mcp"
+
+    def test_install_mcp_repo_uses_paperqa_embedding_env_override(
+        self, temp_db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (temp_db / "config.toml").write_text("\n".join(["[paperqa]", 'embedding = "config-embedding"', ""]))
+        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        monkeypatch.setenv("PAPERQA_EMBEDDING", "env-embedding")
+
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            result = runner.invoke(paperpipe.cli, ["install-mcp", "--repo"])
+            assert result.exit_code == 0, result.output
+
+            cfg = json.loads(Path(".mcp.json").read_text())
+            assert cfg["mcpServers"]["paperqa"]["env"]["PAPERQA_EMBEDDING"] == "env-embedding"
+
+    def test_install_mcp_gemini_writes_settings_json(self, temp_db: Path, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setattr(shutil, "which", lambda _cmd: None)
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["install-mcp", "--gemini", "--embedding", "text-embedding-3-small"])
+        assert result.exit_code == 0, result.output
+
+        cfg = json.loads((tmp_path / ".gemini" / "settings.json").read_text())
+        assert cfg["mcpServers"]["paperqa"]["command"] == "papi-mcp"
+        assert cfg["mcpServers"]["paperqa"]["env"]["PAPERQA_EMBEDDING"] == "text-embedding-3-small"
+
+    def test_install_mcp_gemini_runs_gemini_mcp_add(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/gemini" if cmd == "gemini" else None)
+
+        calls: list[list[str]] = []
+
+        def fake_run(args: list[str], **_kwargs):
+            calls.append(args)
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["install-mcp", "--gemini", "--embedding", "text-embedding-3-small"])
+        assert result.exit_code == 0, result.output
+
+        assert any(
+            c[:3] == ["gemini", "mcp", "add"]
+            and "--scope" in c
+            and "user" in c
+            and "--transport" in c
+            and "stdio" in c
+            and "--env" in c
+            and "PAPERQA_EMBEDDING=text-embedding-3-small" in c
+            and "paperqa" in c
+            and "papi-mcp" in c
+            for c in calls
+        )
+
+    def test_install_mcp_codex_runs_codex_mcp_add(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/codex" if cmd == "codex" else None)
+
+        calls: list[list[str]] = []
+
+        def fake_run(args: list[str], **_kwargs):
+            calls.append(args)
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["install-mcp", "--codex", "--embedding", "text-embedding-3-small"])
+        assert result.exit_code == 0, result.output
+        assert any(
+            c[:4] == ["codex", "mcp", "add", "paperqa"]
+            and "papi-mcp" in c
+            and "PAPERQA_EMBEDDING=text-embedding-3-small" in " ".join(c)
+            for c in calls
+        )
+
+    def test_install_mcp_codex_force_removes_then_adds(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/codex" if cmd == "codex" else None)
+
+        calls: list[list[str]] = []
+
+        def fake_run(args: list[str], **_kwargs):
+            calls.append(args)
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            paperpipe.cli,
+            ["install-mcp", "--codex", "--force", "--embedding", "text-embedding-3-small"],
+        )
+        assert result.exit_code == 0, result.output
+        assert calls[0][:4] == ["codex", "mcp", "remove", "paperqa"]
+        assert calls[1][:4] == ["codex", "mcp", "add", "paperqa"]
 
 
 class TestRemoveMultiplePapers:

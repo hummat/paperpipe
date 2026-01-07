@@ -231,6 +231,9 @@ def default_pqa_llm_model() -> str:
 
 
 def default_pqa_embedding_model() -> str:
+    configured = os.environ.get("PAPERQA_EMBEDDING")
+    if configured and configured.strip():
+        return configured.strip()
     cfg = load_config()
     raw = _config_get(cfg, ("paperqa", "embedding"))
     if isinstance(raw, str) and raw.strip():
@@ -247,6 +250,13 @@ def default_pqa_index_dir() -> Path:
     if isinstance(raw, str) and raw.strip():
         return Path(raw.strip()).expanduser()
     return (PAPER_DB / ".pqa_index").expanduser()
+
+
+def pqa_index_name_for_embedding(embedding_model: str) -> str:
+    """Return the stable PaperQA2 index name used by paperpipe for a given embedding model."""
+    safe_name = (embedding_model or "").replace("/", "_").replace(":", "_")
+    safe_name = safe_name.strip() or "default"
+    return f"paperpipe_{safe_name}"
 
 
 def default_pqa_summary_llm(fallback: Optional[str]) -> Optional[str]:
@@ -1547,7 +1557,7 @@ Abstract: {abstract[:800]}"""
 
 
 @click.group()
-@click.version_option(version="0.3.0")
+@click.version_option(version="0.4.0")
 @click.option("--quiet", "-q", is_flag=True, help="Suppress progress messages.")
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug output.")
 def cli(quiet: bool = False, verbose: bool = False):
@@ -3307,10 +3317,7 @@ def ask(
         for arg in ctx.args
     )
     if not has_index_name_override and embedding_for_pqa:
-        # Create a stable index name from the embedding model.
-        # Replace special chars that might cause filesystem issues.
-        safe_name = embedding_for_pqa.replace("/", "_").replace(":", "_")
-        cmd.extend(["--agent.index.name", f"paperpipe_{safe_name}"])
+        cmd.extend(["--agent.index.name", pqa_index_name_for_embedding(embedding_for_pqa)])
 
     # Determine effective index params to check for exclusions (files marked ERROR)
     # We need to look at both what we've built so far and what the user passed
@@ -4211,17 +4218,21 @@ def path():
     "--claude", "targets", flag_value="claude", multiple=True, help="Install for Claude Code (~/.claude/skills)"
 )
 @click.option("--codex", "targets", flag_value="codex", multiple=True, help="Install for Codex CLI (~/.codex/skills)")
+@click.option(
+    "--gemini", "targets", flag_value="gemini", multiple=True, help="Install for Gemini CLI (~/.gemini/skills)"
+)
 @click.option("--force", is_flag=True, help="Overwrite existing skill installation")
 def install_skill(targets: tuple[str, ...], force: bool):
-    """Install the papi skill for Claude Code and/or Codex CLI.
+    """Install the papi skill for Claude Code / Codex CLI / Gemini CLI.
 
     Creates a symlink from the skill directory to the appropriate location.
 
     \b
     Examples:
-        papi install-skill              # Install for both Claude Code and Codex CLI
+        papi install-skill              # Install for Claude Code + Codex CLI + Gemini CLI
         papi install-skill --claude     # Install for Claude Code only
         papi install-skill --codex      # Install for Codex CLI only
+        papi install-skill --gemini     # Install for Gemini CLI only
         papi install-skill --force      # Overwrite existing installation
     """
     # Find the skill directory relative to this module
@@ -4233,16 +4244,19 @@ def install_skill(targets: tuple[str, ...], force: bool):
         echo_error("This may happen if paperpipe was installed without the skill files.")
         raise SystemExit(1)
 
-    # Default to both if no specific target given
-    install_targets = set(targets) if targets else {"claude", "codex"}
+    # Default to all if no specific target given
+    install_targets = set(targets) if targets else {"claude", "codex", "gemini"}
 
     target_dirs = {
         "claude": Path.home() / ".claude" / "skills",
         "codex": Path.home() / ".codex" / "skills",
+        "gemini": Path.home() / ".gemini" / "skills",
     }
 
     installed = []
     for target in sorted(install_targets):
+        if target not in target_dirs:
+            raise click.UsageError(f"Unknown install target: {target}")
         skills_dir = target_dirs[target]
         dest = skills_dir / "papi"
 
@@ -4268,6 +4282,20 @@ def install_skill(targets: tuple[str, ...], force: bool):
         installed.append((target, dest))
         echo_success(f"{target}: installed at {dest} -> {skill_source}")
 
+        if target == "gemini":
+            settings_path = Path.home() / ".gemini" / "settings.json"
+            enabled = False
+            if settings_path.exists():
+                try:
+                    obj = json.loads(settings_path.read_text())
+                    experimental = obj.get("experimental")
+                    enabled = isinstance(experimental, dict) and experimental.get("skills") is True
+                except Exception:
+                    enabled = False
+            if not enabled:
+                echo_warning("gemini: skills are experimental; enable them in ~/.gemini/settings.json:")
+                echo('  {"experimental": {"skills": true}}')
+
     if installed:
         echo()
         echo("Restart your CLI to activate the skill.")
@@ -4288,19 +4316,27 @@ def install_skill(targets: tuple[str, ...], force: bool):
     multiple=True,
     help="Install for Codex CLI (~/.codex/prompts)",
 )
+@click.option(
+    "--gemini",
+    "targets",
+    flag_value="gemini",
+    multiple=True,
+    help="Install for Gemini CLI (~/.gemini/commands)",
+)
 @click.option("--force", is_flag=True, help="Overwrite existing prompt installation")
 @click.option("--copy", is_flag=True, help="Copy files instead of symlinking (useful if symlinks are unavailable).")
 def install_prompts(targets: tuple[str, ...], force: bool, copy: bool):
-    """Install shared paperpipe prompts for Claude Code and/or Codex CLI.
+    """Install shared paperpipe prompts/commands for Claude Code / Codex CLI / Gemini CLI.
 
     These are lightweight "prompt templates" (not the papi skill). By default, this command creates symlinks
     from the packaged `prompts/` directory into the target prompt directories.
 
     \b
     Examples:
-        papi install-prompts             # Install for both Claude Code and Codex CLI
+        papi install-prompts             # Install for Claude Code + Codex CLI + Gemini CLI
         papi install-prompts --claude    # Install for Claude Code only
         papi install-prompts --codex     # Install for Codex CLI only
+        papi install-prompts --gemini    # Install for Gemini CLI only
         papi install-prompts --force     # Overwrite existing installation
         papi install-prompts --copy      # Copy files (no symlinks)
     """
@@ -4312,26 +4348,31 @@ def install_prompts(targets: tuple[str, ...], force: bool, copy: bool):
         echo_error("This may happen if paperpipe was installed without the prompt files.")
         raise SystemExit(1)
 
-    install_targets = set(targets) if targets else {"claude", "codex"}
+    install_targets = set(targets) if targets else {"claude", "codex", "gemini"}
 
     target_dirs = {
         "claude": Path.home() / ".claude" / "commands",
         "codex": Path.home() / ".codex" / "prompts",
+        "gemini": Path.home() / ".gemini" / "commands",
     }
 
     source_dirs = {
         "claude": prompt_root / "claude",
         "codex": prompt_root / "codex",
+        "gemini": prompt_root / "gemini",
     }
 
     installed: list[tuple[str, Path]] = []
     for target in sorted(install_targets):
+        if target not in target_dirs:
+            raise click.UsageError(f"Unknown install target: {target}")
         prompt_source = source_dirs.get(target, prompt_root)
         if not prompt_source.exists():
             echo_error(f"{target}: prompts directory not found at {prompt_source}")
             raise SystemExit(1)
 
-        prompt_files = sorted([p for p in prompt_source.glob("*.md") if p.is_file()])
+        suffix = ".toml" if target == "gemini" else ".md"
+        prompt_files = sorted([p for p in prompt_source.glob(f"*{suffix}") if p.is_file()])
         if not prompt_files:
             echo_error(f"{target}: no prompts found in {prompt_source}")
             raise SystemExit(1)
@@ -4373,6 +4414,249 @@ def install_prompts(targets: tuple[str, ...], force: bool, copy: bool):
     if installed:
         echo()
         echo("Restart your CLI to pick up new prompts/commands.")
+
+
+@cli.command("install-mcp")
+@click.option(
+    "--claude",
+    "targets",
+    flag_value="claude",
+    multiple=True,
+    help="Install for Claude Code user scope (via `claude mcp add --transport stdio ...`)",
+)
+@click.option(
+    "--codex",
+    "targets",
+    flag_value="codex",
+    multiple=True,
+    help="Install for Codex CLI (via `codex mcp add`)",
+)
+@click.option(
+    "--gemini",
+    "targets",
+    flag_value="gemini",
+    multiple=True,
+    help="Install for Gemini CLI user scope (via `gemini mcp add --scope user` when available)",
+)
+@click.option(
+    "--repo",
+    "targets",
+    flag_value="repo",
+    multiple=True,
+    help="Install repo-local MCP configs (.mcp.json + .gemini/settings.json) in the current directory",
+)
+@click.option("--name", default="paperqa", show_default=True, help="MCP server name")
+@click.option(
+    "--embedding",
+    default=None,
+    show_default=False,
+    help="Embedding model id (defaults to paperpipe config/env)",
+)
+@click.option("--force", is_flag=True, help="Overwrite existing MCP installation")
+def install_mcp(targets: tuple[str, ...], name: str, embedding: Optional[str], force: bool) -> None:
+    """Install the PaperQA2 MCP server configuration for Claude Code / Codex CLI / Gemini CLI.
+
+    This command configures an MCP server entry named `paperqa` (customizable via `--name`)
+    that runs `papi-mcp`. For Codex CLI, it shells out to `codex mcp add ...` to let Codex
+    manage its own config. For Claude Code user installs, it shells out to `claude mcp add`.
+    For Gemini CLI user installs, it shells out to `gemini mcp add` when available. For repo-local
+    installs, it writes `.mcp.json` (Claude Code) and `.gemini/settings.json` (Gemini CLI project scope).
+
+    \b
+    Examples:
+        papi install-mcp                      # Install for Claude Code + Codex CLI + Gemini CLI
+        papi install-mcp --claude             # Claude only (requires `claude` on PATH)
+        papi install-mcp --gemini             # Gemini only (~/.gemini/settings.json)
+        papi install-mcp --repo               # Repo-local (.mcp.json + .gemini/settings.json)
+        papi install-mcp --codex              # Codex only (requires `codex` on PATH)
+        papi install-mcp --force              # Overwrite existing entries
+        papi install-mcp --embedding text-embedding-3-small
+    """
+    server_name = (name or "").strip()
+    if not server_name:
+        raise click.UsageError("--name must be non-empty")
+
+    embedding_model = (embedding or "").strip() if embedding else default_pqa_embedding_model()
+
+    install_targets = set(targets) if targets else {"claude", "codex", "gemini"}
+    successes: list[str] = []
+
+    def _read_json_object(path: Path, *, where: str) -> Optional[dict[str, Any]]:
+        if path.exists():
+            try:
+                obj = json.loads(path.read_text())
+            except Exception:
+                echo_error(f"{where}: failed to parse JSON at {path}")
+                return None
+            if not isinstance(obj, dict):
+                echo_error(f"{where}: expected a JSON object at {path}")
+                return None
+            return obj
+        return {}
+
+    def _write_json_object(path: Path, obj: dict[str, Any], *, where: str) -> bool:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(obj, indent=2) + "\n")
+        except OSError as e:
+            echo_error(f"{where}: failed to write {path}: {e}")
+            return False
+        return True
+
+    def upsert_mcp_servers(path: Path, *, where: str, entry: dict[str, Any]) -> bool:
+        obj = _read_json_object(path, where=where)
+        if obj is None:
+            return False
+
+        mcp_servers = obj.get("mcpServers")
+        if mcp_servers is None:
+            mcp_servers = {}
+            obj["mcpServers"] = mcp_servers
+        if not isinstance(mcp_servers, dict):
+            echo_error(f"{where}: expected 'mcpServers' to be an object in {path}")
+            return False
+
+        existing = mcp_servers.get(server_name)
+        if existing is not None and existing != entry and not force:
+            echo_warning(f"{where}: {server_name!r} already configured in {path} (use --force to overwrite)")
+            return True
+
+        mcp_servers[server_name] = entry
+        return _write_json_object(path, obj, where=where)
+
+    for target in sorted(install_targets):
+        if target == "claude":
+            if not shutil.which("claude"):
+                echo_warning("claude: `claude` not found on PATH; install project config instead:")
+                echo("  papi install-mcp --repo")
+                continue
+
+            if force:
+                subprocess.run(["claude", "mcp", "remove", server_name], capture_output=True, text=True)
+            proc = subprocess.run(
+                [
+                    "claude",
+                    "mcp",
+                    "add",
+                    "--transport",
+                    "stdio",
+                    "--env",
+                    f"PAPERQA_EMBEDDING={embedding_model}",
+                    "--scope",
+                    "user",
+                    server_name,
+                    "--",
+                    "papi-mcp",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if proc.returncode != 0:
+                echo_warning("claude: failed to install via `claude mcp add`")
+                if proc.stdout.strip():
+                    echo(proc.stdout.rstrip("\n"))
+                if proc.stderr.strip():
+                    echo(proc.stderr.rstrip("\n"), err=True)
+                echo_warning("You can install a project-scoped config file instead:")
+                echo("  papi install-mcp --repo")
+                continue
+
+            echo_success(f"claude: installed {server_name!r}")
+            successes.append("claude")
+            continue
+
+        if target == "repo":
+            claude_entry = {"command": "papi-mcp", "args": [], "env": {"PAPERQA_EMBEDDING": embedding_model}}
+            claude_dest = Path.cwd() / ".mcp.json"
+            if upsert_mcp_servers(claude_dest, where="repo/claude", entry=claude_entry):
+                echo_success(f"repo: wrote {claude_dest}")
+                successes.append("repo/claude")
+
+            gemini_entry = {"command": "papi-mcp", "args": [], "env": {"PAPERQA_EMBEDDING": embedding_model}}
+            gemini_dest = Path.cwd() / ".gemini" / "settings.json"
+            if upsert_mcp_servers(gemini_dest, where="repo/gemini", entry=gemini_entry):
+                echo_success(f"repo: wrote {gemini_dest}")
+                successes.append("repo/gemini")
+            continue
+
+        if target == "codex":
+            if not shutil.which("codex"):
+                echo_warning("codex: `codex` not found on PATH; run this manually:")
+                echo(f"  codex mcp add {server_name} --env PAPERQA_EMBEDDING={embedding_model} -- papi-mcp")
+                continue
+
+            # Let Codex manage its own config. Prefer replacing only when requested.
+            if force:
+                subprocess.run(["codex", "mcp", "remove", server_name], capture_output=True, text=True)
+            proc = subprocess.run(
+                ["codex", "mcp", "add", server_name, "--env", f"PAPERQA_EMBEDDING={embedding_model}", "--", "papi-mcp"],
+                capture_output=True,
+                text=True,
+            )
+            if proc.returncode != 0:
+                echo_warning("codex: failed to install via `codex mcp add`")
+                if proc.stdout.strip():
+                    echo(proc.stdout.rstrip("\n"))
+                if proc.stderr.strip():
+                    echo(proc.stderr.rstrip("\n"), err=True)
+                echo("Try re-running with --force, or run manually:")
+                echo(f"  codex mcp add {server_name} --env PAPERQA_EMBEDDING={embedding_model} -- papi-mcp")
+                continue
+
+            echo_success(f"codex: installed {server_name!r}")
+            successes.append("codex")
+            continue
+
+        if target == "gemini":
+            if shutil.which("gemini"):
+                if force:
+                    subprocess.run(
+                        ["gemini", "mcp", "remove", "--scope", "user", server_name], capture_output=True, text=True
+                    )
+                proc = subprocess.run(
+                    [
+                        "gemini",
+                        "mcp",
+                        "add",
+                        "--scope",
+                        "user",
+                        "--transport",
+                        "stdio",
+                        "--env",
+                        f"PAPERQA_EMBEDDING={embedding_model}",
+                        "--description",
+                        "PaperQA2 retrieval-only search",
+                        server_name,
+                        "papi-mcp",
+                    ],
+                    capture_output=True,
+                    text=True,
+                )
+                if proc.returncode == 0:
+                    echo_success(f"gemini: installed {server_name!r}")
+                    successes.append("gemini")
+                    continue
+
+                echo_warning("gemini: failed to install via `gemini mcp add`; falling back to ~/.gemini/settings.json")
+                if proc.stdout.strip():
+                    echo(proc.stdout.rstrip("\n"))
+                if proc.stderr.strip():
+                    echo(proc.stderr.rstrip("\n"), err=True)
+
+            dest = Path.home() / ".gemini" / "settings.json"
+            gemini_entry = {"command": "papi-mcp", "args": [], "env": {"PAPERQA_EMBEDDING": embedding_model}}
+            if upsert_mcp_servers(dest, where="gemini", entry=gemini_entry):
+                echo_success(f"gemini: configured {server_name!r} in {dest}")
+                successes.append("gemini")
+            continue
+
+        raise click.UsageError(f"Unknown target: {target}")
+
+    if not successes:
+        raise SystemExit(1)
+
+    echo()
+    echo("Restart your CLI to pick up the new MCP server.")
 
 
 if __name__ == "__main__":

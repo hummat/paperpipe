@@ -1,0 +1,6 @@
+description = "List tags in the PaperPipe database via `papi tags`."
+prompt = """
+List tags in the PaperPipe database:
+
+!{papi tags}
+"""

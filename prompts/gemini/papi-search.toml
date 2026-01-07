@@ -1,0 +1,7 @@
+description = "Search papers by title/tag/content via `papi search`."
+prompt = """
+Search the PaperPipe database for: `{{args}}`
+
+Search results:
+!{papi search \"{{args}}\"}
+"""

@@ -15,6 +15,12 @@ Use this skill when the user:
 
 ## Workflow
 
+### Decision Rules (Use the Cheapest Thing That Works)
+
+1. Prefer reading local files: `{paper}/equations.md` and `{paper}/source.tex`.
+2. Prefer retrieval-only MCP chunks over full `papi ask` when you only need “top passages about X”.
+3. Use `papi ask` only when explicitly requested to run PaperQA2’s synthesis/answer loop.
+
 ### 1. Find the paper database location
 
 ```bash

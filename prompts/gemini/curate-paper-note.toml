@@ -1,10 +1,8 @@
----
-description: Turn papi (summary/equations/tex) excerpts into a project note with citations.
-argument-hint: [project-context...]
----
-You are given paper excerpts (paste `papi show ... --level ...` output above, or reference exported files).
+description = "Turn papi (summary/equations/tex) excerpts into a project note with citations."
+prompt = """
+You are given paper excerpts (inject files with @{...}, or paste `papi show ... --level ...` output above).
 
-Project context (optional): $ARGUMENTS
+Project context (optional): {{args}}
 
 Create a project-focused note in markdown.
 
@@ -20,3 +18,4 @@ Include:
 If multiple papers are included, structure sections per paper and add a short cross-paper synthesis.
 
 Return the complete markdown only.
+"""

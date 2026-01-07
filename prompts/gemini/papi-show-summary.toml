@@ -1,0 +1,7 @@
+description = "Print summaries for one or more papers via `papi show --level summary`."
+prompt = """
+Print summaries for: `{{args}}`
+
+Summaries:
+!{papi show {{args}} --level summary}
+"""

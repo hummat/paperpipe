@@ -1,0 +1,6 @@
+description = "Print PaperPipe database path (where papers live)."
+prompt = """
+Print the active PaperPipe database path:
+
+!{papi path}
+"""

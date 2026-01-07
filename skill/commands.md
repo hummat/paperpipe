@@ -11,7 +11,12 @@
 | `papi search "query"` | Search by title, tag, or content |
 | `papi show <papers...>` | Show paper details or print stored content |
 | `papi notes <paper>` | Open or print per-paper implementation notes |
-| `papi install-prompts` | Install shared prompts (Claude commands + Codex prompts) |
+| `papi install-skill` | Install the papi skill (Claude Code + Codex CLI + Gemini CLI) |
+| `papi install-prompts` | Install shared prompts (Claude + Codex + Gemini) |
+| `papi install-mcp` | Install MCP server config (Claude + Codex + Gemini) |
+
+Gemini CLI note: skills are currently experimental; enable them in `~/.gemini/settings.json`:
+`{"experimental": {"skills": true}}`.
 
 ## Paper Management
 
