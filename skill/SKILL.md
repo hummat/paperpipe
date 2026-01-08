@@ -17,7 +17,7 @@ Use this skill when the user:
 
 ### Decision Rules (Use the Cheapest Thing That Works)
 
-1. Prefer reading local files: `{paper}/equations.md` and `{paper}/source.tex`.
+1. Prefer `papi show <paper> -l eq|tex|summary` (prints to stdout); use direct files under `{db}/papers/{name}/` if needed.
 2. Prefer retrieval-only MCP chunks over full `papi ask` when you only need “top passages about X”.
 3. Use `papi ask` only when explicitly requested to run a RAG backend (PaperQA2 via `--backend pqa`, or LEANN via `--backend leann`).
 
@@ -58,15 +58,15 @@ export PAPERPIPE_LLM_TEMPERATURE=0.3
 ### 3. For code verification
 
 1. Identify which paper(s) the code references (check comments, function names, README)
-2. Read `{db}/papers/{name}/equations.md` — compare symbol-by-symbol with implementation
-3. If ambiguous, check `{db}/papers/{name}/source.tex` for exact definitions
+2. Run `papi show {name} -l eq` — compare symbol-by-symbol with implementation
+3. If ambiguous, run `papi show {name} -l tex` for exact definitions
 4. Check `{db}/papers/{name}/notes.md` for local implementation gotchas (or run `papi notes {name}`)
 
 ### 4. For implementation guidance
 
-1. Read `{db}/papers/{name}/summary.md` for high-level approach
-2. Read `{db}/papers/{name}/equations.md` for formulas to implement
-3. Cross-reference with `source.tex` if equation details are unclear
+1. Run `papi show {name} -l summary` for high-level approach
+2. Run `papi show {name} -l eq` for formulas to implement
+3. Cross-reference with `papi show {name} -l tex` if equation details are unclear
 
 ### 5. For cross-paper questions
 

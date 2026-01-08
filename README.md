@@ -193,7 +193,7 @@ For Gemini CLI commands, inject files/directories with `@{...}` (or paste output
 
 Prefer the cheapest/highest-fidelity mechanism first:
 
-- **Read files** (best fidelity): use `{paper}/equations.md` and `{paper}/source.tex` for implementation correctness.
+- **`papi show` (best default)**: use `papi show {paper} --level eq` (and `--level tex` for definitions).
 - **CLI prompts/commands** (fast, local): use your agent CLI’s installed prompts/commands to pull exact snippets into chat.
 - **Skill** (workflow guardrails): keeps the agent in the “read files / cite evidence / verify symbols” mode.
 - **MCP retrieval/search** (cross-paper): use when you need “top chunks about X” without running a full `papi ask` synthesis loop.
@@ -229,26 +229,8 @@ papi install mcp --force
 Most coding-agent CLIs can read local files directly. The best workflow is:
 
 1. Use `papi` to build/manage your paper collection.
-2. For code verification, have the agent read `{paper}/equations.md` (and `source.tex` when needed).
+2. For code verification, use `papi show {paper} --level eq` (and `--level tex` when needed).
 3. For research-y questions across many papers, use `papi ask` (default backend: PaperQA2 if installed; optional: `--backend leann`).
-
-Minimal snippet to add to your agent instructions:
-
-```markdown
-## Paper References (PaperPipe)
-
-PaperPipe manages papers via `papi`. Find the active database root with:
-`papi path`
-
-Per-paper files are under `<paper_db>/papers/{paper}/`:
-- `equations.md` — best for implementation verification
-- `summary.md` — high-level overview
-- `source.tex` — exact definitions (if available)
-
-Use `papi search "query"` to find papers/tags quickly.
-Use `papi index` to build/update the retrieval index (PaperQA2 by default if installed; `--backend leann` for LEANN).
-Use `papi ask "question"` for multi-paper queries (default backend: PaperQA2 if installed; `--backend leann` optional).
-```
 
 If you want paper context inside your repo (useful for agents that can’t access `~`), export it:
 
