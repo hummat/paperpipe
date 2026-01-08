@@ -1595,7 +1595,7 @@ Abstract: {abstract[:800]}"""
 
 
 @click.group()
-@click.version_option(version="0.5.1")
+@click.version_option(version="0.5.2")
 @click.option("--quiet", "-q", is_flag=True, help="Suppress progress messages.")
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug output.")
 def cli(quiet: bool = False, verbose: bool = False):

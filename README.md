@@ -1,21 +1,16 @@
 # paperpipe
 
-A unified paper database for coding agents with optional RAG backends: [PaperQA2](https://github.com/Future-House/paper-qa) and LEANN.
+paperpipe is a local paper database optimized for coding work: keep PDFs + (when available) LaTeX source, and
+generate coding-oriented summaries + extracted equations. Optional RAG backends: [PaperQA2](https://github.com/Future-House/paper-qa) and LEANN.
 
-**The problem:** You want AI coding assistants (Claude Code, Codex CLI, Gemini CLI) to reference scientific papers while implementing algorithms. But:
-- PDFs are token-heavy and lose equation fidelity
-- RAG backends (PaperQA2/LEANN) are great for retrieval/synthesis but not optimized for equation-level code verification
-- No simple way to ask "does my code match equation 7?"
-
-**The solution:** A local database that stores:
-- PDFs (for RAG queries: PaperQA2/LEANN)
-- LaTeX source (for exact equation comparison)
-- Summaries optimized for coding context
-- Extracted equations with explanations
+**Most users use paperpipe for:**
+- building a curated local library (`papi add`, `papi list`, `papi search`)
+- pulling high-fidelity context for implementation and verification (`papi show --level eq`, `papi export --level equations`)
+- keeping per-paper implementation notes (`papi notes`)
 
 ## Installation
 
-### Global install (recommended)
+### Install a global CLI (recommended)
 
 Install as a standalone CLI tool using [uv](https://docs.astral.sh/uv/):
 
@@ -23,9 +18,11 @@ Install as a standalone CLI tool using [uv](https://docs.astral.sh/uv/):
 # Basic installation
 uv tool install paperpipe
 
-# With optional features
-uv tool install paperpipe --with "paperpipe[llm]"
-uv tool install paperpipe --with "paperpipe[leann]"
+# Optional features (pick what you need)
+uv tool install paperpipe --with "paperpipe[llm]"      # better summaries/equations via LLMs
+uv tool install paperpipe --with "paperpipe[paperqa]"  # `papi ask` via PaperQA2
+uv tool install paperpipe --with "paperpipe[leann]"    # `papi ask` via local LEANN backend
+uv tool install paperpipe --with "paperpipe[mcp]"      # MCP server integrations (Python 3.11+)
 uv tool install paperpipe --with "paperpipe[all]"
 ```
 
@@ -37,88 +34,47 @@ Install from PyPI (use `uv pip` if you use uv; otherwise use `pip`):
 # Basic installation
 pip install paperpipe
 
-# With LLM support (for better summaries/equations)
-pip install 'paperpipe[llm]'
-
-# With LEANN integration (local RAG backend)
-pip install 'paperpipe[leann]'
-
-# With PaperQA2 integration
-pip install 'paperpipe[paperqa]'
-
-# With PaperQA2 + multimodal PDF parsing (images/tables; installs Pillow)
-pip install 'paperpipe[paperqa-media]'
-
-# With MCP server support (MCP for Claude Code / Codex CLI / Gemini CLI; requires Python 3.11+)
-pip install 'paperpipe[mcp]'
-
-# Everything
+pip install 'paperpipe[llm]'         # better summaries/equations via LLMs
+pip install 'paperpipe[paperqa]'     # `papi ask` via PaperQA2
+pip install 'paperpipe[paperqa-media]'  # PaperQA2 + multimodal PDF parsing (installs Pillow)
+pip install 'paperpipe[leann]'       # `papi ask` via LEANN (local)
+pip install 'paperpipe[mcp]'         # MCP server integrations (Python 3.11+)
 pip install 'paperpipe[all]'
 ```
 
 Install from source:
+
 ```bash
 git clone https://github.com/hummat/paperpipe
 cd paperpipe
 pip install -e ".[all]"  # or: uv pip install -e ".[all]"
 ```
 
-## Release (GitHub + PyPI)
-
-This repo publishes to PyPI when a GitHub Release is published (see `.github/workflows/publish.yml`).
-
-```bash
-# Bump versions first (pyproject.toml + paperpipe.py), then:
-make release
-```
-
 ## Quick Start
 
 ```bash
-# Add papers (names auto-generated from title; auto-tags from arXiv + LLM)
-papi add 2303.13476 2106.10689 2112.03907
+# Add papers from arXiv (names auto-generated from title; tags from arXiv + optional LLM)
+papi add 2303.13476 2106.10689
 
-# Override auto-generated name with --name (single paper only):
-papi add https://arxiv.org/abs/1706.03762 --name attention
-
-# Re-adding the same arXiv ID is idempotent (skips). Use --update to refresh, or --duplicate for another copy:
-papi add 1706.03762
-papi add 1706.03762 --update --name attention
-papi add 1706.03762 --duplicate
-
-# Add local PDFs (non-arXiv)
-papi add --pdf /path/to/paper.pdf --title "Some Paper" --tags my-project
-
-# List papers
+# List and search
 papi list
 papi list --tag sdf
-
-# Search
 papi search "surface reconstruction"
 
-# Export for coding session
-papi export neuralangelo neus --level equations --to ./paper-context/
+# Print equations to stdout (good for pasting into agent sessions / piping)
+papi show neuralangelo --level eq
 
-# Query across papers (PaperQA2 default if installed; or LEANN)
+# Export context into a repo (good when your agent can't read from `~`)
+papi export neuralangelo neus --level equations --to ./paper-context/
+```
+
+If you installed a RAG backend, you can also ask cross-paper questions:
+
+```bash
 papi ask "What are the key differences between NeuS and Neuralangelo loss functions?"
 ```
 
-If PaperQA2 is installed, `papi ask` defaults to PaperQA2 (`--backend pqa`) and can also use LEANN (`--backend leann`).
-For explicit index builds without asking a question, use `papi index` (see below).
-
-The first PaperQA2 query may take a while while it builds its index; subsequent queries reuse it
-(stored at `<paper_db>/.pqa_index/` by default).
-Override the index location by passing `--agent.index.index_directory ...` through to `pqa`, or with
-`PAPERPIPE_PQA_INDEX_DIR`.
-By default, `papi ask` indexes **PDFs only** (it avoids indexing paperpipe’s generated `summary.md` / `equations.md`
-Markdown files by staging PDFs under `<paper_db>/.pqa_papers/`). If you previously ran `papi ask` and PaperQA2
-indexed Markdown, delete `<paper_db>/.pqa_index/` once to force a clean rebuild.
-If PaperQA2 previously failed to index a PDF, it records it as `ERROR` and will not retry automatically; re-run
-with `papi ask "..." --pqa-retry-failed` (or `--pqa-rebuild-index` to rebuild the whole index).
-You can also override the models PaperQA2 uses for summarization/enrichment with
-`PAPERPIPE_PQA_SUMMARY_LLM` and `PAPERPIPE_PQA_ENRICHMENT_LLM` (or use `--pqa-summary-llm` / `--parsing.enrichment_llm`).
-
-## Database Structure
+## Where data lives
 
 Default database root is `~/.paperpipe/` (override with `PAPER_DB_PATH`; see `papi path`).
 
@@ -139,136 +95,25 @@ Default database root is `~/.paperpipe/` (override with `PAPER_DB_PATH`; see `pa
 │       └── ...
 ```
 
-## Integration with Coding Agents
-
-> **Tip:** See [AGENT_INTEGRATION.md](AGENT_INTEGRATION.md) for a ready-to-use snippet you can append to your
-> repo's agent instructions file (for example `AGENTS.md`, or CLI-specific equivalents like `CLAUDE.md` / `GEMINI.md`).
-
-### Claude Code / Codex CLI / Gemini CLI Skill
-
-paperpipe includes a skill that automatically activates when you ask about papers,
-verification, or equations. Install it for Claude Code, Codex CLI, and/or Gemini CLI:
-
-```bash
-# Install everything (skill + prompts + mcp)
-papi install
-
-# Or install for a specific CLI only
-papi install skill --claude
-papi install skill --codex
-papi install skill --gemini
-```
-
-Gemini CLI note: skills are currently experimental; enable them in `~/.gemini/settings.json`:
-`{"experimental": {"skills": true}}`.
-
-Restart your CLI after installing the skill.
-
-### Optional: Shared Prompts / Commands
-
-paperpipe also ships lightweight prompt templates you can invoke as:
-- Claude Code: slash commands (from `~/.claude/commands/`)
-- Codex CLI: prompts (from `~/.codex/prompts/`)
-- Gemini CLI: custom commands (from `~/.gemini/commands/`, can run `papi` via `!{...}`)
-
-Install them with:
-
-```bash
-papi install prompts
-papi install prompts --claude
-papi install prompts --codex
-papi install prompts --gemini
-```
-
-Usage:
-- Claude Code: `/papi`, `/verify-with-paper`, `/ground-with-paper`, `/compare-papers`, `/curate-paper-note`
-- Codex CLI: `/prompts:papi`, `/prompts:verify-with-paper`, `/prompts:ground-with-paper`, `/prompts:compare-papers`, `/prompts:curate-paper-note`
-- Gemini CLI (prompts): `/papi`, `/papi-run`, `/verify-with-paper`, `/ground-with-paper`, `/compare-papers`, `/curate-paper-note`
-- Gemini CLI (papi helpers): `/papi-path`, `/papi-list`, `/papi-tags`, `/papi-search`, `/papi-show-summary`, `/papi-show-eq`, `/papi-show-tex`
-
-For Codex CLI prompts, attach exported context with `@...` (or paste output from `papi show ... --level ...`).
-For Gemini CLI commands, inject files/directories with `@{...}` (or paste output from `papi show ... --level ...`).
-
-### When to Use What (User + Agent)
-
-Prefer the cheapest/highest-fidelity mechanism first:
-
-- **`papi show` (best default)**: use `papi show {paper} --level eq` (and `--level tex` for definitions).
-- **CLI prompts/commands** (fast, local): use your agent CLI’s installed prompts/commands to pull exact snippets into chat.
-- **Skill** (workflow guardrails): keeps the agent in the “read files / cite evidence / verify symbols” mode.
-- **MCP retrieval/search** (cross-paper): use when you need “top chunks about X” without running a full `papi ask` synthesis loop.
-- **`papi ask`** (slow/expensive): only when you explicitly want a RAG backend to do synthesis/answering.
-
-### Optional: MCP Server Install
-
-If you want fast retrieval-only search tools exposed to your coding agent, install MCP server config(s).
-`papi install mcp` installs whichever servers are available in your environment (PaperQA2 and/or LEANN):
-
-```bash
-# Install for Claude Code (via `claude mcp add`) + Codex CLI (via `codex mcp add`) + Gemini CLI (via `gemini mcp add`)
-papi install mcp
-
-# Repo-local config files for Claude Code (.mcp.json) + Gemini CLI (.gemini/settings.json); Codex CLI uses `codex mcp add`
-papi install mcp --repo
-
-# Only install for specific targets
-papi install mcp --codex
-papi install mcp --claude
-papi install mcp --gemini
-
-# Customize server names (defaults: --name paperqa, --leann-name leann)
-papi install mcp --name paperqa --leann-name leann
-
-# Set the embedding model used by the PaperQA2 MCP server
-papi install mcp --embedding text-embedding-3-small
-
-# Overwrite existing entries
-papi install mcp --force
-```
-
-Most coding-agent CLIs can read local files directly. The best workflow is:
-
-1. Use `papi` to build/manage your paper collection.
-2. For code verification, use `papi show {paper} --level eq` (and `--level tex` when needed).
-3. For research-y questions across many papers, use `papi ask` (default backend: PaperQA2 if installed; optional: `--backend leann`).
-
-If you want paper context inside your repo (useful for agents that can’t access `~`), export it:
-
-```bash
-papi export neuralangelo neus --level equations --to ./paper-context/
-```
-
-If you want to paste context directly into a terminal agent session, print to stdout:
-
-```bash
-papi show neuralangelo neus --level eq
-```
-
-## Commands
+## Core commands (most-used)
 
 | Command | Description |
 |---------|-------------|
-| `papi add <ids-or-urls...>` | Add one or more arXiv papers (idempotent by arXiv ID; use `--update`/`--duplicate` for existing) |
+| `papi add <ids-or-urls...>` | Add arXiv papers (idempotent by arXiv ID; use `--update`/`--duplicate` for existing) |
 | `papi add --pdf PATH --title TEXT` | Add a local PDF as a first-class paper |
-| `papi regenerate <papers...>` | Regenerate summary/equations/tags (use `--overwrite name` to rename) |
-| `papi regenerate --all` | Regenerate for all papers |
-| `papi audit [papers...]` | Audit generated summaries/equations and optionally regenerate flagged papers |
-| `papi remove <papers...>` | Remove one or more papers (by name or arXiv ID/URL) |
-| `papi list [--tag TAG]` | List papers, optionally filtered by tag |
-| `papi search <query>` | Exact search (with fuzzy fallback if no exact matches) across title/tags/metadata + local summaries/equations (use `--exact` to disable fallback; `--tex` includes LaTeX) |
-| `papi show <papers...>` | Show paper details or print stored content |
+| `papi list [--tag TAG]` | List papers (optionally filter by tag) |
+| `papi search <query>` | Search across title/tags/metadata + stored summaries/equations (use `--tex` to include LaTeX) |
+| `papi show <papers...>` | Show metadata or print stored content (`--level eq|summary|tex`) |
+| `papi export <papers...> --to DIR` | Export context files into a directory (`--level summary|equations|full`) |
 | `papi notes <paper>` | Open or print per-paper implementation notes (`notes.md`) |
-| `papi export <papers...>` | Export context files to a directory |
-| `papi leann-index` | Build/update a LEANN index over stored PDFs (PDF-only) |
-| `papi index` | Build/update the default index (`--backend pqa|leann`) |
-| `papi ask <query> [opts]` | Query papers via PaperQA2 (default) or LEANN (`--backend leann`) |
-| `papi models` | Probe which models work with your API keys |
-| `papi tags` | List all tags with counts |
+| `papi regenerate <papers...>` | Regenerate summary/equations/tags |
+| `papi remove <papers...>` | Remove papers |
+| `papi ask <query>` | Ask cross-paper questions (requires PaperQA2 and/or LEANN) |
+| `papi index` | Build/update the retrieval index (for `papi ask`) |
+| `papi tags` | List tags with counts |
 | `papi path` | Print database location |
-| `papi install [components...]` | Install integrations (components: `skill`, `prompts`, `mcp`) |
-| `papi uninstall [components...]` | Uninstall integrations (components: `skill`, `prompts`, `mcp`) |
-| `--quiet/-q` | Suppress progress messages |
-| `--verbose/-v` | Enable debug output |
+
+For everything else: `papi --help` and `papi <command> --help`.
 
 ## Tagging
 
@@ -287,7 +132,7 @@ papi add 2303.13476
 papi add 2303.13476 --name my-neuralangelo --tags my-project,priority
 ```
 
-## Export Levels
+## Export levels
 
 ```bash
 # Just summaries (smallest, good for overview)
@@ -300,7 +145,7 @@ papi export neuralangelo neus --level equations
 papi export neuralangelo neus --level full
 ```
 
-## Show Levels (stdout)
+## Show levels (stdout)
 
 ```bash
 # Metadata (default)
@@ -326,30 +171,10 @@ papi notes neuralangelo
 papi notes neuralangelo --print
 ```
 
-## Workflow Example
-
-```bash
-# 1. Build your paper collection (names auto-generated)
-papi add 2303.13476 2106.10689 2104.06405
-# → neuralangelo, neus, volsdf
-
-# 2. Research phase: use `papi ask` (PaperQA2 default backend if installed; optional: `--backend leann`)
-papi ask "Compare the volume rendering approaches in NeuS, VolSDF, and Neuralangelo"
-
-# 3. Implementation phase: export equations to project
-cd ~/my-neural-surface-project
-papi export neuralangelo neus volsdf --level equations --to ./paper-context/
-
-# 4. In Claude Code / Codex CLI / Gemini CLI:
-# "Compare my eikonal_loss() implementation with the formulations in paper-context/"
-
-# 5. Clean up: remove papers you no longer need
-papi remove volsdf neus
-```
-
 ## Configuration
 
 Set custom database location:
+
 ```bash
 export PAPER_DB_PATH=/path/to/your/papers
 ```
@@ -381,22 +206,9 @@ cv = "computer-vision"
 nerf = "neural-radiance-field"
 ```
 
-## Environment Setup
+## Optional: LLM support (better summaries/equations)
 
-To use the PaperQA2 backend via `papi ask` with the built-in default models, set the environment variables for your
-chosen provider (PaperQA2 uses LiteLLM identifiers for `--pqa-llm` and `--pqa-embedding`).
-
-| Provider | Required Env Var | Used For |
-|----------|------------------|----------|
-| **Google** | `GEMINI_API_KEY` | Gemini models & embeddings |
-| **Anthropic** | `ANTHROPIC_API_KEY` | Claude models |
-| **Voyage AI** | `VOYAGE_API_KEY` | Embeddings (recommended when using Claude) |
-| **OpenAI** | `OPENAI_API_KEY` | GPT models & embeddings |
-| **OpenRouter** | `OPENROUTER_API_KEY` | Access to 200+ models via unified API |
-
-## LLM Support
-
-For better summaries and equation extraction, install with LLM support:
+Install with LLM support:
 
 ```bash
 pip install 'paperpipe[llm]'  # or: uv pip install 'paperpipe[llm]'
@@ -408,15 +220,18 @@ This installs LiteLLM, which supports many providers. Set the appropriate API ke
 export GEMINI_API_KEY=...      # For Gemini (default)
 export OPENAI_API_KEY=...      # For OpenAI/GPT
 export ANTHROPIC_API_KEY=...   # For Claude
+export VOYAGE_API_KEY=...      # For Voyage embeddings (recommended when using Claude)
 export OPENROUTER_API_KEY=...  # For OpenRouter (200+ models)
 ```
 
 paperpipe defaults to `gemini/gemini-3-flash-preview`. Override via:
+
 ```bash
 export PAPERPIPE_LLM_MODEL=gpt-4o  # or any LiteLLM model identifier
 ```
 
 You can also tune LLM generation:
+
 ```bash
 export PAPERPIPE_LLM_TEMPERATURE=0.3  # default: 0.3
 ```
@@ -425,7 +240,23 @@ Without LLM support, paperpipe falls back to:
 - Metadata + section headings from LaTeX
 - Regex-based equation extraction
 
-## PaperQA2 Integration
+## Optional: `papi ask` (RAG backends)
+
+If you installed a backend, `papi ask` can answer cross-paper questions:
+
+```bash
+papi ask "What optimizer settings do these papers recommend?"
+```
+
+Backends:
+- **PaperQA2** (`--backend pqa`, default if installed): agentic synthesis with citations.
+- **LEANN** (`--backend leann`): local retrieval/search backend (no PaperQA2 dependency).
+
+For explicit index builds without asking a question, use `papi index`.
+PaperQA2 uses LiteLLM identifiers for `--pqa-llm` / `--pqa-embedding` and the same API key env vars as the LLM
+section (including `VOYAGE_API_KEY` if you use Voyage embeddings).
+
+### PaperQA2 (default backend if installed)
 
 When both paperpipe and [PaperQA2](https://github.com/Future-House/paper-qa) are installed, they share the same PDFs:
 
@@ -437,7 +268,13 @@ When both paperpipe and [PaperQA2](https://github.com/Future-House/paper-qa) are
 papi ask "What optimizer settings do these papers recommend?"
 ```
 
-### First-Class Options
+Index/caching notes:
+- First run builds an index under `<paper_db>/.pqa_index/` and stages PDFs under `<paper_db>/.pqa_papers/` (PDF-only).
+- Override the index location with `PAPERPIPE_PQA_INDEX_DIR`.
+- If you accidentally indexed the wrong content (or changed embeddings), delete `<paper_db>/.pqa_index/` once to force a clean rebuild.
+- If some PDFs failed indexing and are recorded as `ERROR`, re-run with `--pqa-retry-failed` (or `--pqa-rebuild-index` to rebuild everything).
+
+#### Common options
 
 The most common PaperQA2 options are exposed as first-class `papi ask` flags:
 
@@ -458,7 +295,7 @@ The most common PaperQA2 options are exposed as first-class `papi ask` flags:
 
 Any additional arguments are passed through to `pqa` (e.g., `--agent.search_count 10`).
 
-### Index Builds (No Question)
+#### Index builds (no question)
 
 Use `papi index` to build/update the retrieval index without asking a question:
 
@@ -501,7 +338,7 @@ settings files; pass `-s/--settings <name>` to use a specific PaperQA2 settings 
 If Pillow is not installed, `papi ask` forces `--parsing.multimodal OFF` to avoid PDF
 image extraction errors; pass your own `--parsing...` args to override.
 
-## LEANN Integration (Local)
+### LEANN (local backend)
 
 LEANN uses a separate local index stored under `<paper_db>/.leann/` (by default, `papers`). paperpipe indexes
 only staged PDFs from `<paper_db>/.pqa_papers/` (no `*.md`).
@@ -540,7 +377,7 @@ papi ask "..." --backend leann --leann-top-k 12 --leann-complexity 64
 papi ask "..." --backend leann --leann-no-auto-index
 ```
 
-### Model Probing
+## Optional: model probing
 
 To see which model ids work with your currently configured API keys (this makes small live API calls):
 
@@ -561,7 +398,34 @@ papi models all
 papi models --verbose
 ```
 
-## MCP Server (Claude Code / Codex CLI / Gemini CLI)
+## Optional: coding agent integrations
+
+See [AGENT_INTEGRATION.md](AGENT_INTEGRATION.md) for a ready-to-paste snippet for your repo’s agent instructions.
+
+### Skill + prompts
+
+```bash
+# Install everything (skill + prompts + mcp)
+papi install
+
+# Or install for a specific CLI only
+papi install skill --claude
+papi install skill --codex
+papi install skill --gemini
+```
+
+Install only prompt templates/commands (no skill):
+
+```bash
+papi install prompts
+```
+
+Gemini CLI note: skills are currently experimental; enable them in `~/.gemini/settings.json`:
+`{"experimental": {"skills": true}}`.
+
+Restart your CLI after installing the skill.
+
+### MCP servers (retrieval-only tools)
 
 paperpipe supports MCP (Model Context Protocol) servers for retrieval-only workflows:
 - **PaperQA2 retrieval** (`papi mcp-server`): raw chunks + citations over the cached PaperQA2 index.
@@ -684,7 +548,7 @@ papi add --pdf /path/to/paper.pdf --title "Some Paper"
 papi add --pdf ./paper.pdf --title "Some Paper" --name some-paper --tags my-project
 ```
 
-## Development
+## Development (contributors)
 
 ```bash
 # Install app + dev tooling (ruff, pyright, pytest)
@@ -692,6 +556,15 @@ make deps
 
 # Format + lint + typecheck + unit tests
 make check
+```
+
+## Release (maintainers)
+
+This repo publishes to PyPI when a GitHub Release is published (see `.github/workflows/publish.yml`).
+
+```bash
+# Bump versions first (pyproject.toml + paperpipe.py), then:
+make release
 ```
 
 ## Credits
