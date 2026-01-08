@@ -15,6 +15,21 @@ A unified paper database for coding agents + [PaperQA2](https://github.com/Futur
 
 ## Installation
 
+### Global install (recommended)
+
+Install as a standalone CLI tool using [uv](https://docs.astral.sh/uv/):
+
+```bash
+# Basic installation
+uv tool install paperpipe
+
+# With optional features
+uv tool install paperpipe --with "paperpipe[llm]"
+uv tool install paperpipe --with "paperpipe[all]"
+```
+
+### Project install
+
 Install from PyPI (use `uv pip` if you use uv; otherwise use `pip`):
 
 ```bash
@@ -131,13 +146,13 @@ paperpipe includes a skill that automatically activates when you ask about paper
 verification, or equations. Install it for Claude Code and/or Codex CLI:
 
 ```bash
-# Install for Claude Code + Codex CLI + Gemini CLI
-papi install-skill
+# Install everything (skill + prompts + mcp)
+papi install
 
 # Or install for a specific CLI only
-papi install-skill --claude
-papi install-skill --codex
-papi install-skill --gemini
+papi install skill --claude
+papi install skill --codex
+papi install skill --gemini
 ```
 
 Gemini CLI note: skills are currently experimental; enable them in `~/.gemini/settings.json`:
@@ -155,16 +170,16 @@ paperpipe also ships lightweight prompt templates you can invoke as:
 Install them with:
 
 ```bash
-papi install-prompts
-papi install-prompts --claude
-papi install-prompts --codex
-papi install-prompts --gemini
+papi install prompts
+papi install prompts --claude
+papi install prompts --codex
+papi install prompts --gemini
 ```
 
 Usage:
-- Claude Code: `/ground-with-paper`, `/compare-papers`, `/curate-paper-note`
-- Codex CLI: `/prompts:ground-with-paper`, `/prompts:compare-papers`, `/prompts:curate-paper-note`
-- Gemini CLI (prompts): `/ground-with-paper`, `/compare-papers`, `/curate-paper-note`
+- Claude Code: `/papi`, `/verify-with-paper`, `/ground-with-paper`, `/compare-papers`, `/curate-paper-note`
+- Codex CLI: `/prompts:papi`, `/prompts:verify-with-paper`, `/prompts:ground-with-paper`, `/prompts:compare-papers`, `/prompts:curate-paper-note`
+- Gemini CLI (prompts): `/papi`, `/papi-run`, `/verify-with-paper`, `/ground-with-paper`, `/compare-papers`, `/curate-paper-note`
 - Gemini CLI (papi helpers): `/papi-path`, `/papi-list`, `/papi-tags`, `/papi-search`, `/papi-show-summary`, `/papi-show-eq`, `/papi-show-tex`
 
 For Codex CLI prompts, attach exported context with `@...` (or paste output from `papi show ... --level ...`).
@@ -183,28 +198,28 @@ Prefer the cheapest/highest-fidelity mechanism first:
 ### Optional: MCP Server Install
 
 If you want fast retrieval-only search tools exposed to your coding agent, install MCP server config(s).
-`papi install-mcp` installs whichever servers are available in your environment (PaperQA2 and/or LEANN):
+`papi install mcp` installs whichever servers are available in your environment (PaperQA2 and/or LEANN):
 
 ```bash
 # Install for Claude Code (via `claude mcp add`) + Codex CLI (via `codex mcp add`) + Gemini CLI (via `gemini mcp add`)
-papi install-mcp
+papi install mcp
 
 # Repo-local config files for Claude Code (.mcp.json) + Gemini CLI (.gemini/settings.json)
-papi install-mcp --repo
+papi install mcp --repo
 
 # Only install for specific targets
-papi install-mcp --codex
-papi install-mcp --claude
-papi install-mcp --gemini
+papi install mcp --codex
+papi install mcp --claude
+papi install mcp --gemini
 
 # Customize server names (defaults: --name paperqa, --leann-name leann)
-papi install-mcp --name paperqa --leann-name leann
+papi install mcp --name paperqa --leann-name leann
 
 # Set the embedding model used by the PaperQA2 MCP server
-papi install-mcp --embedding text-embedding-3-small
+papi install mcp --embedding text-embedding-3-small
 
 # Overwrite existing entries
-papi install-mcp --force
+papi install mcp --force
 ```
 
 Most coding-agent CLIs can read local files directly. The best workflow is:
@@ -264,9 +279,8 @@ papi show neuralangelo neus --level eq
 | `papi models` | Probe which models work with your API keys |
 | `papi tags` | List all tags with counts |
 | `papi path` | Print database location |
-| `papi install-skill` | Install the papi skill (Claude Code + Codex CLI + Gemini CLI) |
-| `papi install-prompts` | Install shared prompts/commands (Claude + Codex + Gemini) |
-| `papi install-mcp` | Install available MCP server config(s) (PaperQA2 and/or LEANN) |
+| `papi install [components...]` | Install integrations (components: `skill`, `prompts`, `mcp`) |
+| `papi uninstall [components...]` | Uninstall integrations (components: `skill`, `prompts`, `mcp`) |
 | `--quiet/-q` | Suppress progress messages |
 | `--verbose/-v` | Enable debug output |
 
@@ -564,8 +578,8 @@ papi models --verbose
 ## MCP Server (Claude Code / Codex CLI / Gemini CLI)
 
 paperpipe supports MCP (Model Context Protocol) servers for retrieval-only workflows:
-- **PaperQA2 retrieval** (`papi-mcp`): raw chunks + citations over the cached PaperQA2 index.
-- **LEANN search** (`papi-leann-mcp`): wraps LEANN's `leann_mcp` server, running from your paper DB directory.
+- **PaperQA2 retrieval** (`papi mcp-server`): raw chunks + citations over the cached PaperQA2 index.
+- **LEANN search** (`papi leann-mcp-server`): wraps LEANN's `leann_mcp` server, running from your paper DB directory.
 
 ### Installation
 
@@ -582,8 +596,8 @@ pip install 'paperpipe[leann]'
 Use the installer (it installs all available MCP servers):
 
 ```bash
-papi install-mcp
-papi install-mcp --repo
+papi install mcp
+papi install mcp --repo
 ```
 
 ### Setup (Manual)
@@ -594,15 +608,15 @@ Claude Code (project `.mcp.json`):
 {
   "mcpServers": {
     "paperqa": {
-      "command": "papi-mcp",
-      "args": [],
+      "command": "papi",
+      "args": ["mcp-server"],
       "env": {
         "PAPERQA_EMBEDDING": "text-embedding-3-small"
       }
     },
     "leann": {
-      "command": "papi-leann-mcp",
-      "args": [],
+      "command": "papi",
+      "args": ["leann-mcp-server"],
       "env": {}
     }
   }
@@ -612,14 +626,14 @@ Claude Code (project `.mcp.json`):
 Claude Code (user scope via CLI):
 
 ```bash
-claude mcp add --transport stdio --env PAPERQA_EMBEDDING=text-embedding-3-small --scope user paperqa -- papi-mcp
+claude mcp add --transport stdio --env PAPERQA_EMBEDDING=text-embedding-3-small --scope user paperqa -- papi mcp-server
 ```
 
 Codex CLI:
 
 ```bash
-codex mcp add paperqa --env PAPERQA_EMBEDDING=text-embedding-3-small -- papi-mcp
-codex mcp add leann -- papi-leann-mcp
+codex mcp add paperqa --env PAPERQA_EMBEDDING=text-embedding-3-small -- papi mcp-server
+codex mcp add leann -- papi leann-mcp-server
 ```
 
 Gemini CLI (user `~/.gemini/settings.json` or project `.gemini/settings.json`):
@@ -628,15 +642,15 @@ Gemini CLI (user `~/.gemini/settings.json` or project `.gemini/settings.json`):
 {
   "mcpServers": {
     "paperqa": {
-      "command": "papi-mcp",
-      "args": [],
+      "command": "papi",
+      "args": ["mcp-server"],
       "env": {
         "PAPERQA_EMBEDDING": "text-embedding-3-small"
       }
     },
     "leann": {
-      "command": "papi-leann-mcp",
-      "args": [],
+      "command": "papi",
+      "args": ["leann-mcp-server"],
       "env": {}
     }
   }
@@ -646,8 +660,8 @@ Gemini CLI (user `~/.gemini/settings.json` or project `.gemini/settings.json`):
 Gemini CLI (user scope via CLI):
 
 ```bash
-gemini mcp add --scope user --transport stdio --env PAPERQA_EMBEDDING=text-embedding-3-small paperqa papi-mcp
-gemini mcp add --scope user --transport stdio leann papi-leann-mcp
+gemini mcp add --scope user --transport stdio --env PAPERQA_EMBEDDING=text-embedding-3-small paperqa -- papi mcp-server
+gemini mcp add --scope user --transport stdio leann -- papi leann-mcp-server
 ```
 
 ### Configuration

@@ -11,16 +11,16 @@
 | `papi search "query"` | Search by title, tag, or content |
 | `papi show <papers...>` | Show paper details or print stored content |
 | `papi notes <paper>` | Open or print per-paper implementation notes |
-| `papi install-skill` | Install the papi skill (Claude Code + Codex CLI + Gemini CLI) |
-| `papi install-prompts` | Install shared prompts (Claude + Codex + Gemini) |
-| `papi install-mcp` | Install available MCP server config(s) (PaperQA2 and/or LEANN) for Claude + Codex + Gemini |
+| `papi install [components...]` | Install integrations (components: `skill`, `prompts`, `mcp`) |
+| `papi uninstall [components...]` | Uninstall integrations (components: `skill`, `prompts`, `mcp`) |
 | `papi index` | Build/update retrieval index (`--backend pqa|leann`) |
 
-### `papi install-mcp` Options
+### `papi install` Options
 
-- Targets: `--claude`, `--codex`, `--gemini`, `--repo` (default: install for Claude + Codex + Gemini).
-- Names: `--name <paperqa>` and `--leann-name <leann>` (server keys in MCP config).
-- PaperQA2 embedding: `--embedding <model-id>` (sets `PAPERQA_EMBEDDING` for the PaperQA2 MCP server).
+- Components: `skill`, `prompts`, `mcp` (default: installs all 3).
+- Targets: `--claude`, `--codex`, `--gemini` (plus `--repo` for `mcp` only).
+- Prompts: `--copy` copies files (no symlinks).
+- MCP: `--name`, `--leann-name`, `--embedding`.
 - `--force` overwrites existing entries.
 
 Gemini CLI note: skills are currently experimental; enable them in `~/.gemini/settings.json`:

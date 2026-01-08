@@ -1,0 +1,5 @@
+description = "Execute an exact `papi ...` command (paste arguments after the command)."
+prompt = """
+Run:
+!{papi {{args}}}
+"""

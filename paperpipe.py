@@ -116,25 +116,6 @@ DEFAULT_LEANN_LLM_PROVIDER = "ollama"
 DEFAULT_LEANN_LLM_MODEL = "olmo-3:7b"
 
 
-def leann_mcp_entry() -> None:
-    """Exec LEANN's MCP server (`leann_mcp`) from the paper DB directory.
-
-    LEANN's MCP server shells out to `leann` and uses project-local `.leann/` indexes
-    under the current working directory. Running it from `PAPER_DB` makes it easy to
-    keep the LEANN index alongside the paper database.
-    """
-    PAPER_DB.mkdir(parents=True, exist_ok=True)
-    if not shutil.which("leann_mcp"):
-        print(
-            "Error: `leann_mcp` not found on PATH. Install LEANN (e.g. `pip install 'paperpipe[leann]'`) first.",
-            file=sys.stderr,
-        )
-        raise SystemExit(1)
-
-    os.chdir(PAPER_DB)
-    os.execvp("leann_mcp", ["leann_mcp"])
-
-
 _CONFIG_CACHE: Optional[tuple[Path, Optional[float], dict[str, Any]]] = None
 
 
@@ -1614,7 +1595,7 @@ Abstract: {abstract[:800]}"""
 
 
 @click.group()
-@click.version_option(version="0.5.0")
+@click.version_option(version="0.5.1")
 @click.option("--quiet", "-q", is_flag=True, help="Suppress progress messages.")
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug output.")
 def cli(quiet: bool = False, verbose: bool = False):
@@ -4782,28 +4763,40 @@ def path():
     click.echo(PAPER_DB)
 
 
-@cli.command("install-skill")
-@click.option(
-    "--claude", "targets", flag_value="claude", multiple=True, help="Install for Claude Code (~/.claude/skills)"
-)
-@click.option("--codex", "targets", flag_value="codex", multiple=True, help="Install for Codex CLI (~/.codex/skills)")
-@click.option(
-    "--gemini", "targets", flag_value="gemini", multiple=True, help="Install for Gemini CLI (~/.gemini/skills)"
-)
-@click.option("--force", is_flag=True, help="Overwrite existing skill installation")
-def install_skill(targets: tuple[str, ...], force: bool):
-    """Install the papi skill for Claude Code / Codex CLI / Gemini CLI.
+@cli.command("mcp-server")
+def mcp_server():
+    """Run the PaperQA2 retrieval MCP server.
 
-    Creates a symlink from the skill directory to the appropriate location.
-
-    \b
-    Examples:
-        papi install-skill              # Install for Claude Code + Codex CLI + Gemini CLI
-        papi install-skill --claude     # Install for Claude Code only
-        papi install-skill --codex      # Install for Codex CLI only
-        papi install-skill --gemini     # Install for Gemini CLI only
-        papi install-skill --force      # Overwrite existing installation
+    This is used by MCP-enabled agents (Claude Code, Codex CLI, Gemini CLI).
+    Normally invoked via MCP config, not directly.
     """
+    try:
+        from paperqa_mcp_server import main
+    except ImportError as e:
+        echo_error("PaperQA2 MCP server not available.")
+        echo_error("Install with: pip install 'paperpipe[mcp]'")
+        raise SystemExit(1) from e
+    main()
+
+
+@cli.command("leann-mcp-server")
+def leann_mcp_server():
+    """Run the LEANN MCP server from the paper database directory.
+
+    This is used by MCP-enabled agents (Claude Code, Codex CLI, Gemini CLI).
+    Normally invoked via MCP config, not directly.
+    """
+    PAPER_DB.mkdir(parents=True, exist_ok=True)
+    if not shutil.which("leann_mcp"):
+        echo_error("`leann_mcp` not found on PATH.")
+        echo_error("Install with: pip install 'paperpipe[leann]'")
+        raise SystemExit(1)
+
+    os.chdir(PAPER_DB)
+    os.execvp("leann_mcp", ["leann_mcp"])
+
+
+def _install_skill(*, targets: tuple[str, ...], force: bool) -> None:
     # Find the skill directory relative to this module
     module_dir = Path(__file__).parent
     skill_source = module_dir / "skill"
@@ -4870,45 +4863,7 @@ def install_skill(targets: tuple[str, ...], force: bool):
         echo("Restart your CLI to activate the skill.")
 
 
-@cli.command("install-prompts")
-@click.option(
-    "--claude",
-    "targets",
-    flag_value="claude",
-    multiple=True,
-    help="Install for Claude Code (~/.claude/commands)",
-)
-@click.option(
-    "--codex",
-    "targets",
-    flag_value="codex",
-    multiple=True,
-    help="Install for Codex CLI (~/.codex/prompts)",
-)
-@click.option(
-    "--gemini",
-    "targets",
-    flag_value="gemini",
-    multiple=True,
-    help="Install for Gemini CLI (~/.gemini/commands)",
-)
-@click.option("--force", is_flag=True, help="Overwrite existing prompt installation")
-@click.option("--copy", is_flag=True, help="Copy files instead of symlinking (useful if symlinks are unavailable).")
-def install_prompts(targets: tuple[str, ...], force: bool, copy: bool):
-    """Install shared paperpipe prompts/commands for Claude Code / Codex CLI / Gemini CLI.
-
-    These are lightweight "prompt templates" (not the papi skill). By default, this command creates symlinks
-    from the packaged `prompts/` directory into the target prompt directories.
-
-    \b
-    Examples:
-        papi install-prompts             # Install for Claude Code + Codex CLI + Gemini CLI
-        papi install-prompts --claude    # Install for Claude Code only
-        papi install-prompts --codex     # Install for Codex CLI only
-        papi install-prompts --gemini    # Install for Gemini CLI only
-        papi install-prompts --force     # Overwrite existing installation
-        papi install-prompts --copy      # Copy files (no symlinks)
-    """
+def _install_prompts(*, targets: tuple[str, ...], force: bool, copy: bool) -> None:
     module_dir = Path(__file__).parent
 
     prompt_root = module_dir / "prompts"
@@ -4985,67 +4940,9 @@ def install_prompts(targets: tuple[str, ...], force: bool, copy: bool):
         echo("Restart your CLI to pick up new prompts/commands.")
 
 
-@cli.command("install-mcp")
-@click.option(
-    "--claude",
-    "targets",
-    flag_value="claude",
-    multiple=True,
-    help="Install for Claude Code user scope (via `claude mcp add --transport stdio ...`)",
-)
-@click.option(
-    "--codex",
-    "targets",
-    flag_value="codex",
-    multiple=True,
-    help="Install for Codex CLI (via `codex mcp add`)",
-)
-@click.option(
-    "--gemini",
-    "targets",
-    flag_value="gemini",
-    multiple=True,
-    help="Install for Gemini CLI user scope (via `gemini mcp add --scope user` when available)",
-)
-@click.option(
-    "--repo",
-    "targets",
-    flag_value="repo",
-    multiple=True,
-    help="Install repo-local MCP configs (.mcp.json + .gemini/settings.json) in the current directory",
-)
-@click.option("--name", default="paperqa", show_default=True, help="PaperQA2 MCP server name")
-@click.option("--leann-name", default="leann", show_default=True, help="LEANN MCP server name")
-@click.option(
-    "--embedding",
-    default=None,
-    show_default=False,
-    help="Embedding model id (defaults to paperpipe config/env)",
-)
-@click.option("--force", is_flag=True, help="Overwrite existing MCP installation")
-def install_mcp(targets: tuple[str, ...], name: str, leann_name: str, embedding: Optional[str], force: bool) -> None:
-    """Install MCP server configuration(s) for Claude Code / Codex CLI / Gemini CLI.
-
-    Depending on what is installed in the current environment, this command can install:
-    - PaperQA2 retrieval MCP server (`papi-mcp`)   [requires `paperpipe[mcp]`, Python 3.11+]
-    - LEANN MCP server (`papi-leann-mcp`)         [requires `paperpipe[leann]` or `leann_mcp` on PATH]
-
-    For Codex CLI, it shells out to `codex mcp add ...`. For Claude Code user installs, it shells out
-    to `claude mcp add ...`. For Gemini CLI user installs, it shells out to `gemini mcp add` when available
-    (otherwise it falls back to writing `~/.gemini/settings.json`). For repo-local installs, it writes
-    `.mcp.json` (Claude Code) and `.gemini/settings.json` (Gemini CLI project scope).
-
-    \b
-    Examples:
-        papi install-mcp                      # Install for Claude Code + Codex CLI + Gemini CLI
-        papi install-mcp --claude             # Claude only (requires `claude` on PATH)
-        papi install-mcp --gemini             # Gemini only (~/.gemini/settings.json)
-        papi install-mcp --repo               # Repo-local (.mcp.json + .gemini/settings.json)
-        papi install-mcp --codex              # Codex only (requires `codex` on PATH)
-        papi install-mcp --force              # Overwrite existing entries
-        papi install-mcp --embedding text-embedding-3-small
-    """
-
+def _install_mcp(
+    *, targets: tuple[str, ...], name: str, leann_name: str, embedding: Optional[str], force: bool
+) -> None:
     @dataclass(frozen=True)
     class McpServerSpec:
         name: str
@@ -5079,8 +4976,8 @@ def install_mcp(targets: tuple[str, ...], name: str, leann_name: str, embedding:
         servers.append(
             McpServerSpec(
                 name=paperqa_name,
-                command="papi-mcp",
-                args=(),
+                command="papi",
+                args=("mcp-server",),
                 env={"PAPERQA_EMBEDDING": embedding_model},
                 description="PaperQA2 retrieval-only search",
             )
@@ -5092,8 +4989,8 @@ def install_mcp(targets: tuple[str, ...], name: str, leann_name: str, embedding:
         servers.append(
             McpServerSpec(
                 name=leann_server_name,
-                command="papi-leann-mcp",
-                args=(),
+                command="papi",
+                args=("leann-mcp-server",),
                 env={},
                 description="LEANN semantic search",
             )
@@ -5131,10 +5028,10 @@ def install_mcp(targets: tuple[str, ...], name: str, leann_name: str, embedding:
             return False
         return True
 
-    def upsert_mcp_servers(path: Path, *, where: str, server_key: str, entry: dict[str, Any]) -> bool:
+    def upsert_mcp_servers(path: Path, *, where: str, server_key: str, entry: dict[str, Any]) -> str:
         obj = _read_json_object(path, where=where)
         if obj is None:
-            return False
+            return "error"
 
         mcp_servers = obj.get("mcpServers")
         if mcp_servers is None:
@@ -5142,21 +5039,23 @@ def install_mcp(targets: tuple[str, ...], name: str, leann_name: str, embedding:
             obj["mcpServers"] = mcp_servers
         if not isinstance(mcp_servers, dict):
             echo_error(f"{where}: expected 'mcpServers' to be an object in {path}")
-            return False
+            return "error"
 
         existing = mcp_servers.get(server_key)
         if existing is not None and existing != entry and not force:
             echo_warning(f"{where}: {server_key!r} already configured in {path} (use --force to overwrite)")
-            return True
+            return "skipped"
+        if existing is not None and existing == entry:
+            return "unchanged"
 
         mcp_servers[server_key] = entry
-        return _write_json_object(path, obj, where=where)
+        return "written" if _write_json_object(path, obj, where=where) else "error"
 
     for target in sorted(install_targets):
         if target == "claude":
             if not shutil.which("claude"):
                 echo_warning("claude: `claude` not found on PATH; install project config instead:")
-                echo("  papi install-mcp --repo")
+                echo("  papi install mcp --repo")
                 continue
 
             for spec in servers:
@@ -5176,7 +5075,7 @@ def install_mcp(targets: tuple[str, ...], name: str, leann_name: str, embedding:
                     if proc.stderr.strip():
                         echo(proc.stderr.rstrip("\n"), err=True)
                     echo_warning("You can install a project-scoped config file instead:")
-                    echo("  papi install-mcp --repo")
+                    echo("  papi install mcp --repo")
                     continue
 
                 echo_success(f"claude: installed {spec.name!r}")
@@ -5188,11 +5087,24 @@ def install_mcp(targets: tuple[str, ...], name: str, leann_name: str, embedding:
             gemini_dest = Path.cwd() / ".gemini" / "settings.json"
             for spec in servers:
                 entry: dict[str, Any] = {"command": spec.command, "args": list(spec.args), "env": dict(spec.env)}
-                if upsert_mcp_servers(claude_dest, where="repo/claude", server_key=spec.name, entry=entry):
+                claude_status = upsert_mcp_servers(claude_dest, where="repo/claude", server_key=spec.name, entry=entry)
+                if claude_status == "written":
                     echo_success(f"repo: wrote {claude_dest} ({spec.name!r})")
                     successes.append(f"repo/claude:{spec.name}")
-                if upsert_mcp_servers(gemini_dest, where="repo/gemini", server_key=spec.name, entry=entry):
+                elif claude_status == "unchanged":
+                    echo(f"repo: already configured {spec.name!r} in {claude_dest}")
+                    successes.append(f"repo/claude:{spec.name}")
+                elif claude_status == "skipped":
+                    successes.append(f"repo/claude:{spec.name}")
+
+                gemini_status = upsert_mcp_servers(gemini_dest, where="repo/gemini", server_key=spec.name, entry=entry)
+                if gemini_status == "written":
                     echo_success(f"repo: wrote {gemini_dest} ({spec.name!r})")
+                    successes.append(f"repo/gemini:{spec.name}")
+                elif gemini_status == "unchanged":
+                    echo(f"repo: already configured {spec.name!r} in {gemini_dest}")
+                    successes.append(f"repo/gemini:{spec.name}")
+                elif gemini_status == "skipped":
                     successes.append(f"repo/gemini:{spec.name}")
             continue
 
@@ -5233,7 +5145,9 @@ def install_mcp(targets: tuple[str, ...], name: str, leann_name: str, embedding:
             continue
 
         if target == "gemini":
+            install_via_cli_ok = False
             if shutil.which("gemini"):
+                install_via_cli_ok = True
                 for spec in servers:
                     if force:
                         subprocess.run(
@@ -5261,6 +5175,7 @@ def install_mcp(targets: tuple[str, ...], name: str, leann_name: str, embedding:
                         successes.append(f"gemini:{spec.name}")
                         continue
 
+                    install_via_cli_ok = False
                     echo_warning(
                         f"gemini: failed to install {spec.name!r} via `gemini mcp add`; "
                         "falling back to ~/.gemini/settings.json"
@@ -5270,12 +5185,23 @@ def install_mcp(targets: tuple[str, ...], name: str, leann_name: str, embedding:
                     if proc.stderr.strip():
                         echo(proc.stderr.rstrip("\n"), err=True)
 
-            dest = Path.home() / ".gemini" / "settings.json"
-            for spec in servers:
-                gemini_entry: dict[str, Any] = {"command": spec.command, "args": list(spec.args), "env": dict(spec.env)}
-                if upsert_mcp_servers(dest, where="gemini", server_key=spec.name, entry=gemini_entry):
-                    echo_success(f"gemini: configured {spec.name!r} in {dest}")
-                    successes.append(f"gemini:{spec.name}")
+            if not install_via_cli_ok:
+                dest = Path.home() / ".gemini" / "settings.json"
+                for spec in servers:
+                    gemini_entry: dict[str, Any] = {
+                        "command": spec.command,
+                        "args": list(spec.args),
+                        "env": dict(spec.env),
+                    }
+                    status = upsert_mcp_servers(dest, where="gemini", server_key=spec.name, entry=gemini_entry)
+                    if status == "written":
+                        echo_success(f"gemini: configured {spec.name!r} in {dest}")
+                        successes.append(f"gemini:{spec.name}")
+                    elif status == "unchanged":
+                        echo(f"gemini: already configured {spec.name!r} in {dest}")
+                        successes.append(f"gemini:{spec.name}")
+                    elif status == "skipped":
+                        successes.append(f"gemini:{spec.name}")
             continue
 
         raise click.UsageError(f"Unknown target: {target}")
@@ -5285,6 +5211,482 @@ def install_mcp(targets: tuple[str, ...], name: str, leann_name: str, embedding:
 
     echo()
     echo("Restart your CLI to pick up the new MCP server.")
+
+
+def _parse_components(args: tuple[str, ...]) -> list[str]:
+    raw: list[str] = []
+    for item in args:
+        for part in item.split(","):
+            part = part.strip().lower()
+            if part:
+                raw.append(part)
+    return raw
+
+
+def _uninstall_skill(*, targets: tuple[str, ...], force: bool) -> None:
+    module_dir = Path(__file__).parent
+    skill_source = module_dir / "skill"
+
+    if not skill_source.exists() and not force:
+        echo_error(f"Skill directory not found at {skill_source}")
+        echo_error("Re-run with --force to remove install locations without validating the source.")
+        raise SystemExit(1)
+
+    uninstall_targets = set(targets) if targets else {"claude", "codex", "gemini"}
+
+    target_dirs = {
+        "claude": Path.home() / ".claude" / "skills",
+        "codex": Path.home() / ".codex" / "skills",
+        "gemini": Path.home() / ".gemini" / "skills",
+    }
+
+    removed = 0
+    skipped = 0
+    for target in sorted(uninstall_targets):
+        if target not in target_dirs:
+            raise click.UsageError(f"Unknown uninstall target: {target}")
+        skills_dir = target_dirs[target]
+        dest = skills_dir / "papi"
+
+        if not dest.exists() and not dest.is_symlink():
+            echo(f"{target}: not installed")
+            continue
+
+        if dest.is_symlink() and skill_source.exists() and dest.resolve() == skill_source.resolve():
+            dest.unlink()
+            echo_success(f"{target}: removed {dest}")
+            removed += 1
+            continue
+
+        if force:
+            if dest.is_symlink() or dest.is_file():
+                dest.unlink()
+            elif dest.is_dir():
+                shutil.rmtree(dest)
+            else:
+                dest.unlink(missing_ok=True)
+            echo_success(f"{target}: removed {dest}")
+            removed += 1
+            continue
+
+        echo_warning(f"{target}: {dest} exists but does not point to this install (use --force to remove)")
+        skipped += 1
+
+    if removed:
+        echo()
+        echo("Restart your CLI to unload the skill.")
+    if skipped:
+        raise SystemExit(1)
+
+
+def _uninstall_prompts(*, targets: tuple[str, ...], force: bool) -> None:
+    module_dir = Path(__file__).parent
+    prompt_root = module_dir / "prompts"
+    if not prompt_root.exists():
+        echo_error(f"Prompts directory not found at {prompt_root}")
+        echo_error("This may happen if paperpipe was installed without the prompt files.")
+        raise SystemExit(1)
+
+    uninstall_targets = set(targets) if targets else {"claude", "codex", "gemini"}
+
+    target_dirs = {
+        "claude": Path.home() / ".claude" / "commands",
+        "codex": Path.home() / ".codex" / "prompts",
+        "gemini": Path.home() / ".gemini" / "commands",
+    }
+
+    source_dirs = {
+        "claude": prompt_root / "claude",
+        "codex": prompt_root / "codex",
+        "gemini": prompt_root / "gemini",
+    }
+
+    removed = 0
+    skipped = 0
+    for target in sorted(uninstall_targets):
+        if target not in target_dirs:
+            raise click.UsageError(f"Unknown uninstall target: {target}")
+
+        dest_dir = target_dirs[target]
+        if not dest_dir.exists():
+            echo(f"{target}: no prompt directory at {dest_dir}")
+            continue
+
+        suffix = ".toml" if target == "gemini" else ".md"
+        prompt_source = source_dirs.get(target, prompt_root)
+        if not prompt_source.exists():
+            echo_error(f"{target}: prompts directory not found at {prompt_source}")
+            raise SystemExit(1)
+
+        source_files = sorted([p for p in prompt_source.glob(f"*{suffix}") if p.is_file()])
+        for src in source_files:
+            dest = dest_dir / src.name
+            if not dest.exists() and not dest.is_symlink():
+                continue
+
+            if dest.is_symlink():
+                if dest.resolve() == src.resolve() or force:
+                    dest.unlink()
+                    removed += 1
+                else:
+                    echo_warning(f"{target}: {dest} points elsewhere (use --force to remove)")
+                    skipped += 1
+                continue
+
+            # Copied file case: remove only if identical unless forced.
+            if dest.is_file():
+                if force:
+                    dest.unlink()
+                    removed += 1
+                    continue
+                try:
+                    if dest.read_bytes() == src.read_bytes():
+                        dest.unlink()
+                        removed += 1
+                    else:
+                        echo_warning(f"{target}: {dest} differs from packaged prompt (use --force to remove)")
+                        skipped += 1
+                except OSError as e:
+                    echo_warning(f"{target}: failed to read {dest}: {e}")
+                    skipped += 1
+                continue
+
+            if dest.is_dir():
+                if force:
+                    shutil.rmtree(dest)
+                    removed += 1
+                else:
+                    echo_warning(f"{target}: {dest} is a directory (use --force to remove)")
+                    skipped += 1
+
+        if source_files:
+            echo_success(f"{target}: removed prompts from {dest_dir}")
+
+    if removed:
+        echo()
+        echo("Restart your CLI to unload prompts/commands.")
+    if skipped:
+        raise SystemExit(1)
+
+
+def _uninstall_mcp(*, targets: tuple[str, ...], name: str, leann_name: str, force: bool) -> None:
+    paperqa_name = (name or "").strip()
+    leann_server_name = (leann_name or "").strip()
+    if not paperqa_name:
+        raise click.UsageError("--name must be non-empty")
+    if not leann_server_name:
+        raise click.UsageError("--leann-name must be non-empty")
+
+    server_keys = [paperqa_name, leann_server_name]
+
+    uninstall_targets = set(targets) if targets else {"claude", "codex", "gemini"}
+    successes: list[str] = []
+    failures: list[str] = []
+
+    def _read_json_object(path: Path, *, where: str) -> Optional[dict[str, Any]]:
+        if path.exists():
+            try:
+                obj = json.loads(path.read_text())
+            except Exception:
+                echo_error(f"{where}: failed to parse JSON at {path}")
+                return None
+            if not isinstance(obj, dict):
+                echo_error(f"{where}: expected a JSON object at {path}")
+                return None
+            return obj
+        return {}
+
+    def _write_json_object(path: Path, obj: dict[str, Any], *, where: str) -> bool:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(obj, indent=2) + "\n")
+        except OSError as e:
+            echo_error(f"{where}: failed to write {path}: {e}")
+            return False
+        return True
+
+    def remove_mcp_servers(path: Path, *, where: str, keys: list[str]) -> bool:
+        obj = _read_json_object(path, where=where)
+        if obj is None:
+            return False
+
+        mcp_servers = obj.get("mcpServers")
+        if mcp_servers is None:
+            return True
+        if not isinstance(mcp_servers, dict):
+            echo_error(f"{where}: expected 'mcpServers' to be an object in {path}")
+            return False
+
+        changed = False
+        for key in keys:
+            if key in mcp_servers:
+                del mcp_servers[key]
+                changed = True
+
+        if not changed:
+            return True
+        return _write_json_object(path, obj, where=where)
+
+    for target in sorted(uninstall_targets):
+        if target == "claude":
+            if not shutil.which("claude"):
+                echo_warning("claude: `claude` not found on PATH; remove manually or use repo-local config:")
+                echo("  papi uninstall mcp --repo")
+                continue
+
+            for key in server_keys:
+                proc = subprocess.run(["claude", "mcp", "remove", key], capture_output=True, text=True)
+                if proc.returncode != 0 and not force:
+                    echo_warning(f"claude: failed to remove {key!r} via `claude mcp remove`")
+                    if proc.stdout.strip():
+                        echo(proc.stdout.rstrip("\n"))
+                    if proc.stderr.strip():
+                        echo(proc.stderr.rstrip("\n"), err=True)
+                    failures.append(f"claude:{key}")
+                    continue
+                echo_success(f"claude: removed {key!r}")
+                successes.append(f"claude:{key}")
+            continue
+
+        if target == "repo":
+            claude_dest = Path.cwd() / ".mcp.json"
+            gemini_dest = Path.cwd() / ".gemini" / "settings.json"
+            if remove_mcp_servers(claude_dest, where="repo/claude", keys=server_keys):
+                echo_success(f"repo: updated {claude_dest}")
+                successes.extend([f"repo/claude:{k}" for k in server_keys])
+            else:
+                failures.extend([f"repo/claude:{k}" for k in server_keys])
+            if remove_mcp_servers(gemini_dest, where="repo/gemini", keys=server_keys):
+                echo_success(f"repo: updated {gemini_dest}")
+                successes.extend([f"repo/gemini:{k}" for k in server_keys])
+            else:
+                failures.extend([f"repo/gemini:{k}" for k in server_keys])
+            continue
+
+        if target == "codex":
+            if not shutil.which("codex"):
+                echo_warning("codex: `codex` not found on PATH; run this manually:")
+                for key in server_keys:
+                    echo(f"  codex mcp remove {key}")
+                continue
+
+            for key in server_keys:
+                proc = subprocess.run(["codex", "mcp", "remove", key], capture_output=True, text=True)
+                if proc.returncode != 0 and not force:
+                    echo_warning(f"codex: failed to remove {key!r} via `codex mcp remove`")
+                    if proc.stdout.strip():
+                        echo(proc.stdout.rstrip("\n"))
+                    if proc.stderr.strip():
+                        echo(proc.stderr.rstrip("\n"), err=True)
+                    failures.append(f"codex:{key}")
+                    continue
+                echo_success(f"codex: removed {key!r}")
+                successes.append(f"codex:{key}")
+            continue
+
+        if target == "gemini":
+            if shutil.which("gemini"):
+                for key in server_keys:
+                    proc = subprocess.run(
+                        ["gemini", "mcp", "remove", "--scope", "user", key],
+                        capture_output=True,
+                        text=True,
+                    )
+                    if proc.returncode != 0 and not force:
+                        echo_warning(f"gemini: failed to remove {key!r} via `gemini mcp remove`")
+                        if proc.stdout.strip():
+                            echo(proc.stdout.rstrip("\n"))
+                        if proc.stderr.strip():
+                            echo(proc.stderr.rstrip("\n"), err=True)
+                        failures.append(f"gemini:{key}")
+                        continue
+                    echo_success(f"gemini: removed {key!r}")
+                    successes.append(f"gemini:{key}")
+
+            dest = Path.home() / ".gemini" / "settings.json"
+            if remove_mcp_servers(dest, where="gemini", keys=server_keys):
+                echo_success(f"gemini: updated {dest}")
+                successes.extend([f"gemini:{k}" for k in server_keys])
+            else:
+                failures.extend([f"gemini:{k}" for k in server_keys])
+            continue
+
+        raise click.UsageError(f"Unknown target: {target}")
+
+    if failures and not force:
+        raise SystemExit(1)
+    if successes:
+        echo()
+        echo("Restart your CLI to unload the MCP server config.")
+
+
+@cli.command("install")
+@click.argument("components", nargs=-1)
+@click.option(
+    "--claude",
+    "targets",
+    flag_value="claude",
+    multiple=True,
+    help="Install for Claude Code (~/.claude/...)",
+)
+@click.option(
+    "--codex",
+    "targets",
+    flag_value="codex",
+    multiple=True,
+    help="Install for Codex CLI (~/.codex/...)",
+)
+@click.option(
+    "--gemini",
+    "targets",
+    flag_value="gemini",
+    multiple=True,
+    help="Install for Gemini CLI (~/.gemini/...)",
+)
+@click.option(
+    "--repo",
+    "targets",
+    flag_value="repo",
+    multiple=True,
+    help="Install repo-local MCP configs (.mcp.json + .gemini/settings.json) in the current directory (MCP only)",
+)
+@click.option("--force", is_flag=True, help="Overwrite existing installation")
+@click.option("--copy", is_flag=True, help="Copy prompts instead of symlinking (prompts only).")
+@click.option("--name", default="paperqa", show_default=True, help="PaperQA2 MCP server name (MCP only)")
+@click.option("--leann-name", default="leann", show_default=True, help="LEANN MCP server name (MCP only)")
+@click.option("--embedding", default=None, show_default=False, help="Embedding model id (MCP only)")
+def install(
+    components: tuple[str, ...],
+    targets: tuple[str, ...],
+    force: bool,
+    copy: bool,
+    name: str,
+    leann_name: str,
+    embedding: Optional[str],
+) -> None:
+    """Install papi integrations (skill, prompts, and/or MCP config).
+
+    By default, installs everything: skill + prompts + mcp.
+
+    Components can be selected by name and combined:
+      - `papi install mcp prompts`
+      - `papi install mcp,prompts`
+
+    \b
+    Examples:
+        papi install                    # Install skill + prompts + mcp
+        papi install skill              # Install skill only
+        papi install prompts --copy     # Install prompts only, copy files
+        papi install mcp --repo         # Install repo-local MCP configs
+        papi install --codex            # Install everything for Codex only
+        papi install mcp --embedding text-embedding-3-small
+    """
+    requested = _parse_components(components)
+    if not requested:
+        requested = ["skill", "prompts", "mcp"]
+
+    allowed = {"skill", "prompts", "mcp"}
+    unknown = sorted({c for c in requested if c not in allowed})
+    if unknown:
+        raise click.UsageError(f"Unknown component(s): {', '.join(unknown)} (choose from: skill, prompts, mcp)")
+
+    want_skill = "skill" in requested
+    want_prompts = "prompts" in requested
+    want_mcp = "mcp" in requested
+
+    if targets and "repo" in targets and not want_mcp:
+        raise click.UsageError("--repo is only valid when installing mcp")
+    if copy and not want_prompts:
+        raise click.UsageError("--copy is only valid when installing prompts")
+    if (name != "paperqa" or leann_name != "leann" or embedding is not None) and not want_mcp:
+        raise click.UsageError("--name/--leann-name/--embedding are only valid when installing mcp")
+
+    if want_skill:
+        _install_skill(targets=tuple([t for t in targets if t != "repo"]), force=force)
+    if want_prompts:
+        _install_prompts(targets=tuple([t for t in targets if t != "repo"]), force=force, copy=copy)
+    if want_mcp:
+        _install_mcp(targets=targets, name=name, leann_name=leann_name, embedding=embedding, force=force)
+
+
+@cli.command("uninstall")
+@click.argument("components", nargs=-1)
+@click.option(
+    "--claude",
+    "targets",
+    flag_value="claude",
+    multiple=True,
+    help="Uninstall for Claude Code (~/.claude/...)",
+)
+@click.option(
+    "--codex",
+    "targets",
+    flag_value="codex",
+    multiple=True,
+    help="Uninstall for Codex CLI (~/.codex/...)",
+)
+@click.option(
+    "--gemini",
+    "targets",
+    flag_value="gemini",
+    multiple=True,
+    help="Uninstall for Gemini CLI (~/.gemini/...)",
+)
+@click.option(
+    "--repo",
+    "targets",
+    flag_value="repo",
+    multiple=True,
+    help="Uninstall repo-local MCP configs (.mcp.json + .gemini/settings.json) in the current directory (MCP only)",
+)
+@click.option("--force", is_flag=True, help="Remove even if the install does not match exactly")
+@click.option("--name", default="paperqa", show_default=True, help="PaperQA2 MCP server name (MCP only)")
+@click.option("--leann-name", default="leann", show_default=True, help="LEANN MCP server name (MCP only)")
+def uninstall(components: tuple[str, ...], targets: tuple[str, ...], force: bool, name: str, leann_name: str) -> None:
+    """Uninstall papi integrations (skill, prompts, and/or MCP config).
+
+    By default, uninstalls everything: mcp + prompts + skill.
+
+    Components can be selected by name and combined:
+      - `papi uninstall mcp prompts`
+      - `papi uninstall mcp,prompts`
+
+    \b
+    Examples:
+        papi uninstall                  # Uninstall skill + prompts + mcp
+        papi uninstall skill            # Uninstall skill only
+        papi uninstall prompts          # Uninstall prompts only
+        papi uninstall mcp --repo       # Uninstall repo-local MCP configs
+        papi uninstall --codex          # Uninstall everything for Codex only
+        papi uninstall mcp --force      # Ignore remove failures / mismatches
+    """
+    requested = _parse_components(components)
+    if not requested:
+        requested = ["skill", "prompts", "mcp"]
+
+    allowed = {"skill", "prompts", "mcp"}
+    unknown = sorted({c for c in requested if c not in allowed})
+    if unknown:
+        raise click.UsageError(f"Unknown component(s): {', '.join(unknown)} (choose from: skill, prompts, mcp)")
+
+    want_skill = "skill" in requested
+    want_prompts = "prompts" in requested
+    want_mcp = "mcp" in requested
+
+    if targets and "repo" in targets and not want_mcp:
+        raise click.UsageError("--repo is only valid when uninstalling mcp")
+    if (name != "paperqa" or leann_name != "leann") and not want_mcp:
+        raise click.UsageError("--name/--leann-name are only valid when uninstalling mcp")
+
+    non_repo_targets = tuple([t for t in targets if t != "repo"])
+
+    # Default uninstall order is reverse of install: mcp -> prompts -> skill.
+    if want_mcp:
+        _uninstall_mcp(targets=targets, name=name, leann_name=leann_name, force=force)
+    if want_prompts:
+        _uninstall_prompts(targets=non_repo_targets, force=force)
+    if want_skill:
+        _uninstall_skill(targets=non_repo_targets, force=force)
 
 
 if __name__ == "__main__":

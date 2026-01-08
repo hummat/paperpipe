@@ -96,14 +96,14 @@ Without LLM, paperpipe falls back to metadata + section headings + regex equatio
 paperpipe ships prompt templates you can install into your agent CLI:
 
 ```bash
-papi install-prompts
-papi install-prompts --gemini
+papi install prompts
+papi install prompts --gemini
 ```
 
 Usage:
-- Claude Code: `/ground-with-paper`, `/compare-papers`, `/curate-paper-note`
-- Codex CLI: `/prompts:ground-with-paper`, `/prompts:compare-papers`, `/prompts:curate-paper-note`
-- Gemini CLI: `/ground-with-paper`, `/compare-papers`, `/curate-paper-note`
+- Claude Code: `/papi`, `/verify-with-paper`, `/ground-with-paper`, `/compare-papers`, `/curate-paper-note`
+- Codex CLI: `/prompts:papi`, `/prompts:verify-with-paper`, `/prompts:ground-with-paper`, `/prompts:compare-papers`, `/prompts:curate-paper-note`
+- Gemini CLI: `/papi`, `/papi-run`, `/verify-with-paper`, `/ground-with-paper`, `/compare-papers`, `/curate-paper-note`
 - Gemini CLI (papi helpers): `/papi-path`, `/papi-list`, `/papi-tags`, `/papi-search`, `/papi-show-summary`, `/papi-show-eq`, `/papi-show-tex`
 
 Notes:
@@ -121,12 +121,12 @@ Notes:
 ### Optional: MCP Server (Retrieval-Only)
 
 paperpipe can install MCP servers for retrieval-only workflows:
-- `papi-mcp` (PaperQA2 retrieval: raw chunks + citations)
-- `papi-leann-mcp` (LEANN search: wraps `leann_mcp` from the paper DB directory)
+- `papi mcp-server` (PaperQA2 retrieval: raw chunks + citations)
+- `papi leann-mcp-server` (LEANN search: wraps `leann_mcp` from the paper DB directory)
 
 ```bash
-papi install-mcp          # Claude (via `claude mcp add`) + Codex (via `codex mcp add`) + Gemini (via `gemini mcp add`)
-papi install-mcp --repo   # Repo-local .mcp.json (Claude) + .gemini/settings.json (Gemini)
+papi install mcp          # Claude (via `claude mcp add`) + Codex (via `codex mcp add`) + Gemini (via `gemini mcp add`)
+papi install mcp --repo   # Repo-local .mcp.json (Claude) + .gemini/settings.json (Gemini)
 ```
 
 Useful flags:

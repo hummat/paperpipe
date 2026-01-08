@@ -17,7 +17,7 @@ Usage:
     python paperqa_mcp_server.py
 
     # Add to your agent (recommended)
-    papi install-mcp
+    papi install mcp
 
 Configuration via environment variables:
     PAPERPIPE_PQA_INDEX_DIR   - Root dir containing PaperQA2 indices (default: ~/.paperpipe/.pqa_index)
