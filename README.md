@@ -1,5 +1,7 @@
 # paperpipe
 
+![image](https://repository-images.githubusercontent.com/1120503046/8ba4e2ed-30ef-4d0d-996f-68a48962cb9b)
+
 **The problem:** You're implementing a paper. You need the exact equations, want to verify your code matches the math, and your coding agent keeps hallucinating details. Reading PDFs is slow; copy-pasting LaTeX is tedious.
 
 **The solution:** paperpipe maintains a local paper database with PDFs, LaTeX source (when available), extracted equations, and coding-oriented summaries. It integrates with coding agents (Claude Code, Codex, Gemini CLI) so they can ground their responses in actual paper content.
