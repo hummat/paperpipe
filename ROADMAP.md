@@ -41,7 +41,7 @@ Goal: make the codebase maintainable without changing CLI behavior or on-disk da
 ### 2) Local LLM via Ollama (core + `papi ask`)
 
 Goal: make a zero-cloud setup the default happy path: local generation for `add/regenerate` and local RAG via
-PaperQA2 (when installed).
+PaperQA2 or LEANN (when installed).
 
 - **Core paperpipe generation**
   - Support LiteLLM Ollama model ids (exact ids can vary by LiteLLM version; validate via `papi models --model ...`).

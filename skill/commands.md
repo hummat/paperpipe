@@ -76,11 +76,13 @@ Gemini CLI note: skills are currently experimental; enable them in `~/.gemini/se
 | `papi notes <name>` | Open `{paper}/notes.md` in `$EDITOR` (creates if missing) |
 | `papi notes <name> --print` | Print notes to stdout |
 
+paperpipe supports two RAG backends for `papi ask`/`papi index`: PaperQA2 (`--backend pqa`) and LEANN (`--backend leann`).
+
 ## PaperQA2 Integration
 
 | Command | Description |
 |---------|-------------|
-| `papi ask "question"` | Query papers via PaperQA2 RAG (default backend: `pqa`) |
+| `papi ask "question"` | Query papers via PaperQA2 RAG (default backend: `pqa`, if installed) |
 | `papi ask "q" --pqa-llm MODEL --pqa-embedding EMB` | Specify PaperQA2 models |
 | `papi ask "q" --pqa-summary-llm MODEL` | Use cheaper model for summarization |
 | `papi ask "q" --pqa-verbosity 2 --pqa-evidence-k 15` | More verbose, more evidence |
@@ -94,7 +96,7 @@ Any other `pqa` args are passed through (e.g., `--agent.search_count 10`).
 
 Notes:
 - The first `papi ask` may take a while while PaperQA2 builds its index; by default it is cached under `<paper_db>/.pqa_index/`.
-- By default, `papi ask` stages PDFs under `<paper_db>/.pqa_papers/` so PaperQA2 doesn't index generated Markdown.
+- By default, `papi ask` stages PDFs under `<paper_db>/.pqa_papers/` so RAG backends don't index generated Markdown.
 - By default, `papi ask` syncs the PaperQA2 index with the staged PDFs (so newly added papers get indexed on the next ask).
 - Override the index directory by passing `--agent.index.index_directory ...` through to `pqa`, or with `PAPERPIPE_PQA_INDEX_DIR`.
 - Override PaperQA2's summarization/enrichment models with `PAPERPIPE_PQA_SUMMARY_LLM` and `PAPERPIPE_PQA_ENRICHMENT_LLM`
@@ -104,7 +106,7 @@ Notes:
 
 ### Index Build (No Question)
 
-- `papi index` builds/updates the default retrieval index (PaperQA2 by default; same `--pqa-*` flags as `papi ask`).
+- `papi index` builds/updates the default retrieval index (PaperQA2 backend `pqa` by default if installed; same `--pqa-*` flags as `papi ask`).
 - `papi index --backend leann` builds/updates the LEANN index (PDF-only) and passes extra args to `leann build` (except
   `--docs` / `--file-types`, which paperpipe controls).
 
@@ -149,7 +151,7 @@ Located at `<paper_db>/papers/{name}/`:
 | `summary.md` | Coding-context overview | Understanding approach |
 | `source.tex` | Full LaTeX source | Exact definitions |
 | `meta.json` | Metadata + tags | Programmatic access |
-| `paper.pdf` | PDF file | PaperQA2 RAG |
+| `paper.pdf` | PDF file | PaperQA2/LEANN RAG |
 | `notes.md` | Your implementation notes | Gotchas/snippets |
 
 ## LLM Configuration (Optional)

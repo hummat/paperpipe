@@ -1,14 +1,14 @@
 # paperpipe
 
-A unified paper database for coding agents + [PaperQA2](https://github.com/Future-House/paper-qa).
+A unified paper database for coding agents with optional RAG backends: [PaperQA2](https://github.com/Future-House/paper-qa) and LEANN.
 
 **The problem:** You want AI coding assistants (Claude Code, Codex CLI, Gemini CLI) to reference scientific papers while implementing algorithms. But:
 - PDFs are token-heavy and lose equation fidelity
-- PaperQA2 is great for research but not optimized for code verification
+- RAG backends (PaperQA2/LEANN) are great for retrieval/synthesis but not optimized for equation-level code verification
 - No simple way to ask "does my code match equation 7?"
 
 **The solution:** A local database that stores:
-- PDFs (for PaperQA2 RAG queries)
+- PDFs (for RAG queries: PaperQA2/LEANN)
 - LaTeX source (for exact equation comparison)
 - Summaries optimized for coding context
 - Extracted equations with explanations
@@ -25,6 +25,7 @@ uv tool install paperpipe
 
 # With optional features
 uv tool install paperpipe --with "paperpipe[llm]"
+uv tool install paperpipe --with "paperpipe[leann]"
 uv tool install paperpipe --with "paperpipe[all]"
 ```
 
@@ -39,13 +40,16 @@ pip install paperpipe
 # With LLM support (for better summaries/equations)
 pip install 'paperpipe[llm]'
 
+# With LEANN integration (local RAG backend)
+pip install 'paperpipe[leann]'
+
 # With PaperQA2 integration
 pip install 'paperpipe[paperqa]'
 
 # With PaperQA2 + multimodal PDF parsing (images/tables; installs Pillow)
 pip install 'paperpipe[paperqa-media]'
 
-# With MCP server for Claude Code (requires Python 3.11+)
+# With MCP server support (MCP for Claude Code / Codex CLI / Gemini CLI; requires Python 3.11+)
 pip install 'paperpipe[mcp]'
 
 # Everything
@@ -95,11 +99,11 @@ papi search "surface reconstruction"
 # Export for coding session
 papi export neuralangelo neus --level equations --to ./paper-context/
 
-# Query with PaperQA2 (if installed)
+# Query across papers (PaperQA2 default if installed; or LEANN)
 papi ask "What are the key differences between NeuS and Neuralangelo loss functions?"
 ```
 
-`papi ask` defaults to PaperQA2 (`pqa`) and can also use LEANN (`--backend leann`).
+If PaperQA2 is installed, `papi ask` defaults to PaperQA2 (`--backend pqa`) and can also use LEANN (`--backend leann`).
 For explicit index builds without asking a question, use `papi index` (see below).
 
 The first PaperQA2 query may take a while while it builds its index; subsequent queries reuse it
@@ -121,12 +125,12 @@ Default database root is `~/.paperpipe/` (override with `PAPER_DB_PATH`; see `pa
 ```
 <paper_db>/
 ├── index.json                    # Quick lookup index
-├── .pqa_papers/                  # PaperQA2 input staging (PDF-only; created on first `papi ask`)
+├── .pqa_papers/                  # Staged PDFs for RAG backends (PDF-only; created on first `papi ask`)
 ├── .pqa_index/                   # PaperQA2 index cache (created on first `papi ask`)
 ├── papers/
 │   ├── neuralangelo/
 │   │   ├── meta.json             # Metadata + tags
-│   │   ├── paper.pdf             # For PaperQA2
+│   │   ├── paper.pdf             # For RAG backends (PaperQA2/LEANN)
 │   │   ├── source.tex            # Full LaTeX (if available)
 │   │   ├── summary.md            # Coding-context summary
 │   │   ├── equations.md          # Key equations extracted
@@ -138,12 +142,12 @@ Default database root is `~/.paperpipe/` (override with `PAPER_DB_PATH`; see `pa
 ## Integration with Coding Agents
 
 > **Tip:** See [AGENT_INTEGRATION.md](AGENT_INTEGRATION.md) for a ready-to-use snippet you can append to your
-> repo's agent instructions file (for example `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`).
+> repo's agent instructions file (for example `AGENTS.md`, or CLI-specific equivalents like `CLAUDE.md` / `GEMINI.md`).
 
-### Claude Code / Codex CLI Skill
+### Claude Code / Codex CLI / Gemini CLI Skill
 
 paperpipe includes a skill that automatically activates when you ask about papers,
-verification, or equations. Install it for Claude Code and/or Codex CLI:
+verification, or equations. Install it for Claude Code, Codex CLI, and/or Gemini CLI:
 
 ```bash
 # Install everything (skill + prompts + mcp)
@@ -190,9 +194,9 @@ For Gemini CLI commands, inject files/directories with `@{...}` (or paste output
 Prefer the cheapest/highest-fidelity mechanism first:
 
 - **Read files** (best fidelity): use `{paper}/equations.md` and `{paper}/source.tex` for implementation correctness.
-- **Gemini custom commands** (fast, local): use `/papi-search` + `/papi-show-eq` to pull exact snippets into the chat.
+- **CLI prompts/commands** (fast, local): use your agent CLI’s installed prompts/commands to pull exact snippets into chat.
 - **Skill** (workflow guardrails): keeps the agent in the “read files / cite evidence / verify symbols” mode.
-- **MCP retrieval** (cross-paper search): use when you need “top chunks about X” without running PaperQA2’s LLM loop.
+- **MCP retrieval/search** (cross-paper): use when you need “top chunks about X” without running a full `papi ask` synthesis loop.
 - **`papi ask`** (slow/expensive): only when you explicitly want a RAG backend to do synthesis/answering.
 
 ### Optional: MCP Server Install
@@ -204,7 +208,7 @@ If you want fast retrieval-only search tools exposed to your coding agent, insta
 # Install for Claude Code (via `claude mcp add`) + Codex CLI (via `codex mcp add`) + Gemini CLI (via `gemini mcp add`)
 papi install mcp
 
-# Repo-local config files for Claude Code (.mcp.json) + Gemini CLI (.gemini/settings.json)
+# Repo-local config files for Claude Code (.mcp.json) + Gemini CLI (.gemini/settings.json); Codex CLI uses `codex mcp add`
 papi install mcp --repo
 
 # Only install for specific targets
@@ -226,7 +230,7 @@ Most coding-agent CLIs can read local files directly. The best workflow is:
 
 1. Use `papi` to build/manage your paper collection.
 2. For code verification, have the agent read `{paper}/equations.md` (and `source.tex` when needed).
-3. For research-y questions across many papers, use `papi ask` (default backend: PaperQA2; optional: `--backend leann`).
+3. For research-y questions across many papers, use `papi ask` (default backend: PaperQA2 if installed; optional: `--backend leann`).
 
 Minimal snippet to add to your agent instructions:
 
@@ -242,8 +246,8 @@ Per-paper files are under `<paper_db>/papers/{paper}/`:
 - `source.tex` — exact definitions (if available)
 
 Use `papi search "query"` to find papers/tags quickly.
-Use `papi index` to build/update the retrieval index (PaperQA2 by default; `--backend leann` for LEANN).
-Use `papi ask "question"` for multi-paper queries (default backend: PaperQA2; `--backend leann` optional).
+Use `papi index` to build/update the retrieval index (PaperQA2 by default if installed; `--backend leann` for LEANN).
+Use `papi ask "question"` for multi-paper queries (default backend: PaperQA2 if installed; `--backend leann` optional).
 ```
 
 If you want paper context inside your repo (useful for agents that can’t access `~`), export it:
@@ -347,14 +351,14 @@ papi notes neuralangelo --print
 papi add 2303.13476 2106.10689 2104.06405
 # → neuralangelo, neus, volsdf
 
-# 2. Research phase: use PaperQA2
+# 2. Research phase: use `papi ask` (PaperQA2 default backend if installed; optional: `--backend leann`)
 papi ask "Compare the volume rendering approaches in NeuS, VolSDF, and Neuralangelo"
 
 # 3. Implementation phase: export equations to project
 cd ~/my-neural-surface-project
 papi export neuralangelo neus volsdf --level equations --to ./paper-context/
 
-# 4. In Claude Code / Codex / Gemini:
+# 4. In Claude Code / Codex CLI / Gemini CLI:
 # "Compare my eikonal_loss() implementation with the formulations in paper-context/"
 
 # 5. Clean up: remove papers you no longer need
@@ -397,7 +401,7 @@ nerf = "neural-radiance-field"
 
 ## Environment Setup
 
-To use PaperQA2 via `papi ask` with the built-in default models, set the environment variables for your
+To use the PaperQA2 backend via `papi ask` with the built-in default models, set the environment variables for your
 chosen provider (PaperQA2 uses LiteLLM identifiers for `--pqa-llm` and `--pqa-embedding`).
 
 | Provider | Required Env Var | Used For |
@@ -446,7 +450,7 @@ When both paperpipe and [PaperQA2](https://github.com/Future-House/paper-qa) are
 ```bash
 # paperpipe stores PDFs in <paper_db>/papers/*/paper.pdf (see `papi path`)
 # `papi ask` stages PDFs under <paper_db>/.pqa_papers/ so PaperQA2 doesn't index generated Markdown.
-# paperpipe ask routes to PaperQA2 for complex queries
+# `papi ask --backend pqa` routes to PaperQA2 for agentic synthesis/citations
 
 papi ask "What optimizer settings do these papers recommend?"
 ```
@@ -681,20 +685,13 @@ gemini mcp add --scope user --transport stdio leann -- papi leann-mcp-server
 | `list_pqa_indexes` | List available PaperQA2 indices under the index dir |
 | `get_pqa_index_status` | Show basic index stats (files, failures) |
 
-### Usage in Claude Code
+### Usage (Claude Code / Codex CLI / Gemini CLI)
 
-```
-# Build/update the PaperQA2 index once (outside MCP)
-> Run: papi index --pqa-embedding text-embedding-3-small
+1. Build/update the PaperQA2 index once (outside MCP): `papi index --pqa-embedding text-embedding-3-small`
+2. In your agent CLI, call the MCP tool `retrieve_chunks` with your query (the agent does synthesis)
+3. If retrieval looks wrong, call `get_pqa_index_status` to inspect what’s indexed
 
-# Retrieve chunks (Claude does synthesis)
-> Retrieve chunks: What methods exist for neural surface reconstruction?
-
-# Check what's indexed
-> Get pqa index status
-```
-
-Debug with: `claude --debug` (note: `--mcp-debug` is deprecated)
+If your CLI supports a debug flag, enable it. For Claude Code: `claude --debug` (note: `--mcp-debug` is deprecated).
 
 ## Non-arXiv Papers
 
@@ -717,9 +714,10 @@ make check
 
 ## Credits
 
-- **[PaperQA2](https://github.com/Future-House/paper-qa)** by Future House — the RAG engine powering `papi ask`.
+- **[PaperQA2](https://github.com/Future-House/paper-qa)** by Future House — the RAG backend powering `papi ask --backend pqa`.
   *Skarlinski et al., "Language Agents Achieve Superhuman Synthesis of Scientific Knowledge", 2024.*
   [arXiv:2409.13740](https://arxiv.org/abs/2409.13740)
+- **LEANN** (`leann-core`, `leann-backend-hnsw`) — the local RAG backend powering `papi ask --backend leann`.
 
 ## License
 
