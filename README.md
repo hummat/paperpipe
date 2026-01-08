@@ -1,282 +1,249 @@
 # paperpipe
 
-paperpipe is a local paper database optimized for coding work: keep PDFs + (when available) LaTeX source, and
-generate coding-oriented summaries + extracted equations. Optional RAG backends: [PaperQA2](https://github.com/Future-House/paper-qa) and LEANN.
+**The problem:** You're implementing a paper. You need the exact equations, want to verify your code matches the math, and your coding agent keeps hallucinating details. Reading PDFs is slow; copy-pasting LaTeX is tedious.
 
-**Most users use paperpipe for:**
-- building a curated local library (`papi add`, `papi list`, `papi search`)
-- pulling high-fidelity context for implementation and verification (`papi show --level eq`, `papi export --level equations`)
-- keeping per-paper implementation notes (`papi notes`)
+**The solution:** paperpipe maintains a local paper database with PDFs, LaTeX source (when available), extracted equations, and coding-oriented summaries. It integrates with coding agents (Claude Code, Codex, Gemini CLI) so they can ground their responses in actual paper content.
+
+## Typical workflow
+
+```bash
+# 1. Add papers you're implementing
+papi add 2303.08813                    # LoRA paper
+papi add https://arxiv.org/abs/1706.03762  # Attention paper
+
+# 2. Check what equations you need to implement
+papi show lora --level eq             # prints equations to stdout
+
+# 3. Verify your code matches the paper
+#    (or let your coding agent do this via the /papi skill)
+papi show lora --level tex            # exact LaTeX definitions
+
+# 4. Ask cross-paper questions (requires RAG backend)
+papi ask "How does LoRA differ from full fine-tuning in terms of parameter count?"
+
+# 5. Keep implementation notes
+papi notes lora                       # opens notes.md in $EDITOR
+```
 
 ## Installation
 
-### Install a global CLI (recommended)
-
-Install as a standalone CLI tool using [uv](https://docs.astral.sh/uv/):
-
 ```bash
-# Basic installation
+# Basic (uv recommended)
 uv tool install paperpipe
 
-# Optional features (pick what you need)
-uv tool install paperpipe --with "paperpipe[llm]"      # better summaries/equations via LLMs
-uv tool install paperpipe --with "paperpipe[paperqa]"  # `papi ask` via PaperQA2
-uv tool install paperpipe --with "paperpipe[leann]"    # `papi ask` via local LEANN backend
+# With features
+uv tool install paperpipe --with "paperpipe[llm]"      # better summaries via LLMs
+uv tool install paperpipe --with "paperpipe[paperqa]"  # RAG via PaperQA2
+uv tool install paperpipe --with "paperpipe[leann]"    # local RAG via LEANN
 uv tool install paperpipe --with "paperpipe[mcp]"      # MCP server integrations (Python 3.11+)
-uv tool install paperpipe --with "paperpipe[all]"
+uv tool install paperpipe --with "paperpipe[all]"      # everything
 ```
 
-### Project install
-
-Install from PyPI (use `uv pip` if you use uv; otherwise use `pip`):
+<details>
+<summary>Alternative: pip install</summary>
 
 ```bash
-# Basic installation
 pip install paperpipe
-
-pip install 'paperpipe[llm]'         # better summaries/equations via LLMs
-pip install 'paperpipe[paperqa]'     # `papi ask` via PaperQA2
+pip install 'paperpipe[llm]'
+pip install 'paperpipe[paperqa]'
 pip install 'paperpipe[paperqa-media]'  # PaperQA2 + multimodal PDF parsing (installs Pillow)
-pip install 'paperpipe[leann]'       # `papi ask` via LEANN (local)
-pip install 'paperpipe[mcp]'         # MCP server integrations (Python 3.11+)
+pip install 'paperpipe[leann]'
+pip install 'paperpipe[mcp]'
 pip install 'paperpipe[all]'
 ```
+</details>
 
-Install from source:
-
-```bash
-git clone https://github.com/hummat/paperpipe
-cd paperpipe
-pip install -e ".[all]"  # or: uv pip install -e ".[all]"
-```
-
-## Quick Start
+<details>
+<summary>From source</summary>
 
 ```bash
-# Add papers from arXiv (names auto-generated from title; tags from arXiv + optional LLM)
-papi add 2303.13476 2106.10689
-
-# List and search
-papi list
-papi list --tag sdf
-papi search "surface reconstruction"
-
-# Print equations to stdout (good for pasting into agent sessions / piping)
-papi show neuralangelo --level eq
-
-# Export context into a repo (good when your agent can't read from `~`)
-papi export neuralangelo neus --level equations --to ./paper-context/
+git clone https://github.com/hummat/paperpipe && cd paperpipe
+pip install -e ".[all]"
 ```
+</details>
 
-If you installed a RAG backend, you can also ask cross-paper questions:
-
-```bash
-papi ask "What are the key differences between NeuS and Neuralangelo loss functions?"
-```
-
-## Where data lives
-
-Default database root is `~/.paperpipe/` (override with `PAPER_DB_PATH`; see `papi path`).
+## What paperpipe stores
 
 ```
-<paper_db>/
-├── index.json                    # Quick lookup index
-├── .pqa_papers/                  # Staged PDFs for RAG backends (PDF-only; created on first `papi ask`)
-├── .pqa_index/                   # PaperQA2 index cache (created on first `papi ask`)
+~/.paperpipe/                         # override with PAPER_DB_PATH
+├── index.json
+├── .pqa_papers/                      # staged PDFs for RAG (created on first `papi ask`)
+├── .pqa_index/                       # PaperQA2 index cache
+├── .leann/                           # LEANN index cache
 ├── papers/
-│   ├── neuralangelo/
-│   │   ├── meta.json             # Metadata + tags
-│   │   ├── paper.pdf             # For RAG backends (PaperQA2/LEANN)
-│   │   ├── source.tex            # Full LaTeX (if available)
-│   │   ├── summary.md            # Coding-context summary
-│   │   ├── equations.md          # Key equations extracted
-│   │   └── notes.md              # Your implementation notes (created automatically)
-│   └── neus/
-│       └── ...
+│   └── lora/
+│       ├── paper.pdf                 # for RAG backends
+│       ├── source.tex                # full LaTeX (if available from arXiv)
+│       ├── equations.md              # extracted equations with context
+│       ├── summary.md                # coding-oriented summary
+│       ├── meta.json                 # metadata + tags
+│       └── notes.md                  # your implementation notes
 ```
 
-## Core commands (most-used)
+**Why this structure matters:**
+- `equations.md` — Key equations with variable definitions. Use for code verification.
+- `source.tex` — Original LaTeX. Use when you need exact notation or the equation extraction missed something.
+- `summary.md` — High-level overview focused on implementation (not literature review). Use for understanding the approach.
+- `.pqa_papers/` — Staged PDFs only (no markdown) so RAG backends don't index generated content.
 
-| Command | Description |
-|---------|-------------|
-| `papi add <ids-or-urls...>` | Add arXiv papers (idempotent by arXiv ID; use `--update`/`--duplicate` for existing) |
-| `papi add --pdf PATH --title TEXT` | Add a local PDF as a first-class paper |
-| `papi list [--tag TAG]` | List papers (optionally filter by tag) |
-| `papi search <query>` | Search across title/tags/metadata + stored summaries/equations (use `--tex` to include LaTeX) |
-| `papi show <papers...>` | Show metadata or print stored content (`--level eq|summary|tex`) |
-| `papi export <papers...> --to DIR` | Export context files into a directory (`--level summary|equations|full`) |
-| `papi notes <paper>` | Open or print per-paper implementation notes (`notes.md`) |
+## Core commands
+
+| Command | Purpose |
+|---------|---------|
+| `papi add <arxiv-id-or-url>` | Add a paper (downloads PDF + LaTeX, generates summary/equations) |
+| `papi add --pdf file.pdf --title "..."` | Add a local PDF |
+| `papi list` | List papers (filter with `--tag`) |
+| `papi search "query"` | Search across titles, tags, summaries, equations (use `--tex` to include LaTeX) |
+| `papi show <paper> --level eq` | Print equations (best for agent sessions) |
+| `papi show <paper> --level tex` | Print LaTeX source |
+| `papi show <paper> --level summary` | Print summary |
+| `papi export <papers...> --to ./dir` | Export context files into a repo (`--level summary\|equations\|full`) |
+| `papi notes <paper>` | Open/print implementation notes |
 | `papi regenerate <papers...>` | Regenerate summary/equations/tags |
 | `papi remove <papers...>` | Remove papers |
-| `papi ask <query>` | Ask cross-paper questions (requires PaperQA2 and/or LEANN) |
-| `papi index` | Build/update the retrieval index (for `papi ask`) |
-| `papi tags` | List tags with counts |
+| `papi ask "question"` | Cross-paper RAG query (requires PaperQA2 or LEANN) |
+| `papi index` | Build/update the retrieval index |
+| `papi tags` | List all tags |
 | `papi path` | Print database location |
 
-For everything else: `papi --help` and `papi <command> --help`.
+Run `papi --help` or `papi <command> --help` for full options.
 
-## Tagging
+## Agent integration
 
-Papers are automatically tagged from three sources:
-
-1. **arXiv categories** → human-readable tags (cs.CV → computer-vision)
-2. **LLM-generated** → semantic tags from title/abstract
-3. **User-provided** → via `--tags` flag
+paperpipe is designed to work with coding agents. Install the skill and MCP servers:
 
 ```bash
-# Auto-tags from arXiv + LLM
-papi add 2303.13476
-# → name: neuralangelo, tags: computer-vision, graphics, neural-radiance-field, sdf, hash-encoding
-
-# Add custom tags (and override auto-name)
-papi add 2303.13476 --name my-neuralangelo --tags my-project,priority
+papi install                          # installs skill + prompts + MCP for detected CLIs
+# or be specific:
+papi install skill --claude --codex --gemini
+papi install mcp --claude --codex --gemini
 ```
 
-## Export levels
+After installation, your agent can:
+- Use `/papi` to get paper context (skill)
+- Call MCP tools like `retrieve_chunks` for RAG retrieval
+- Verify code against paper equations
+
+For a ready-to-paste snippet for your repo's agent instructions, see [AGENT_INTEGRATION.md](AGENT_INTEGRATION.md).
+
+### What the agent sees
+
+When you (or your agent) run `papi show <paper> --level eq`, you get structured output like:
+
+```markdown
+## Equation 1: LoRA Update
+$$h = W_0 x + \Delta W x = W_0 x + BA x$$
+where:
+- $W_0 \in \mathbb{R}^{d \times k}$: pretrained weight matrix (frozen)
+- $B \in \mathbb{R}^{d \times r}$, $A \in \mathbb{R}^{r \times k}$: low-rank matrices
+- $r \ll \min(d, k)$: the rank (typically 1-64)
+```
+
+This is what makes verification possible — the agent can compare your code symbol-by-symbol.
+
+<details>
+<summary>MCP server setup (manual)</summary>
+
+### MCP servers
+
+paperpipe provides MCP servers for retrieval-only workflows:
+- **PaperQA2 retrieval** (`papi mcp-server`): raw chunks + citations over the cached index
+- **LEANN search** (`papi leann-mcp-server`): wraps LEANN's MCP server
+
+**Claude Code** (project `.mcp.json`):
+```json
+{
+  "mcpServers": {
+    "paperqa": {
+      "command": "papi",
+      "args": ["mcp-server"],
+      "env": { "PAPERQA_EMBEDDING": "text-embedding-3-small" }
+    },
+    "leann": {
+      "command": "papi",
+      "args": ["leann-mcp-server"],
+      "env": {}
+    }
+  }
+}
+```
+
+**Claude Code** (user scope via CLI):
+```bash
+claude mcp add --transport stdio --env PAPERQA_EMBEDDING=text-embedding-3-small --scope user paperqa -- papi mcp-server
+```
+
+**Codex CLI**:
+```bash
+codex mcp add paperqa --env PAPERQA_EMBEDDING=text-embedding-3-small -- papi mcp-server
+codex mcp add leann -- papi leann-mcp-server
+```
+
+**Gemini CLI** (`~/.gemini/settings.json` or `.gemini/settings.json`):
+```json
+{
+  "mcpServers": {
+    "paperqa": {
+      "command": "papi",
+      "args": ["mcp-server"],
+      "env": { "PAPERQA_EMBEDDING": "text-embedding-3-small" }
+    },
+    "leann": {
+      "command": "papi",
+      "args": ["leann-mcp-server"],
+      "env": {}
+    }
+  }
+}
+```
+
+### MCP environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PAPERPIPE_PQA_INDEX_DIR` | `~/.paperpipe/.pqa_index` | Root directory for PaperQA2 indices |
+| `PAPERPIPE_PQA_INDEX_NAME` | `paperpipe_<embedding>` | Index name (subfolder under index dir) |
+| `PAPERQA_EMBEDDING` | (from config) | Embedding model (must match the index you built) |
+
+### MCP tools
+
+| Tool | Description |
+|------|-------------|
+| `retrieve_chunks` | Retrieve raw chunks + citations (no LLM answering) |
+| `list_pqa_indexes` | List available PaperQA2 indices |
+| `get_pqa_index_status` | Show index stats (files, failures) |
+
+### MCP usage
+
+1. Build the index first: `papi index --pqa-embedding text-embedding-3-small`
+2. In your agent, call `retrieve_chunks` with your query
+3. If retrieval looks wrong, call `get_pqa_index_status` to inspect
+
+</details>
+
+## RAG backends (`papi ask`)
+
+paperpipe supports two RAG backends for cross-paper questions:
+
+| Backend | Install | Best for |
+|---------|---------|----------|
+| [PaperQA2](https://github.com/Future-House/paper-qa) | `paperpipe[paperqa]` | Agentic synthesis with citations (cloud LLMs) |
+| [LEANN](https://github.com/yichuan-w/LEANN) | `paperpipe[leann]` | Local retrieval (Ollama) |
 
 ```bash
-# Just summaries (smallest, good for overview)
-papi export neuralangelo neus --level summary
+# PaperQA2 (default if installed)
+papi ask "What regularization techniques do these papers use?"
 
-# Equations only (best for code verification)
-papi export neuralangelo neus --level equations
-
-# Full LaTeX source (most complete)
-papi export neuralangelo neus --level full
+# LEANN (local)
+papi ask "..." --backend leann
 ```
 
-## Show levels (stdout)
+The first query builds an index (cached under `.pqa_index/` or `.leann/`). Use `papi index` to pre-build.
 
-```bash
-# Metadata (default)
-papi show neuralangelo
+<details>
+<summary>PaperQA2 configuration</summary>
 
-# Print equations (for piping into agent sessions)
-papi show neuralangelo neus --level eq
-
-# Print summary / LaTeX
-papi show neuralangelo --level summary
-papi show neuralangelo --level tex
-```
-
-## Notes (per paper)
-
-paperpipe creates a `notes.md` per paper for implementation notes, gotchas, and code snippets.
-
-```bash
-# Open in $EDITOR (creates notes.md if missing)
-papi notes neuralangelo
-
-# Print notes to stdout (useful for piping into an agent session)
-papi notes neuralangelo --print
-```
-
-## Configuration
-
-Set custom database location:
-
-```bash
-export PAPER_DB_PATH=/path/to/your/papers
-```
-
-### config.toml
-
-In addition to env vars, you can use a persistent config file at `<paper_db>/config.toml`
-(override the location with `PAPERPIPE_CONFIG_PATH`).
-
-Precedence is: **CLI flags > env vars > config.toml > built-in defaults**.
-
-Example:
-```toml
-[llm]
-model = "gemini/gemini-3-flash-preview"
-temperature = 0.3
-
-[embedding]
-model = "gemini/gemini-embedding-001"
-
-[paperqa]
-settings = "default"
-index_dir = "~/.paperpipe/.pqa_index"
-summary_llm = "gemini/gemini-3-flash-preview"
-enrichment_llm = "gemini/gemini-3-flash-preview"
-
-[tags.aliases]
-cv = "computer-vision"
-nerf = "neural-radiance-field"
-```
-
-## Optional: LLM support (better summaries/equations)
-
-Install with LLM support:
-
-```bash
-pip install 'paperpipe[llm]'  # or: uv pip install 'paperpipe[llm]'
-```
-
-This installs LiteLLM, which supports many providers. Set the appropriate API key:
-
-```bash
-export GEMINI_API_KEY=...      # For Gemini (default)
-export OPENAI_API_KEY=...      # For OpenAI/GPT
-export ANTHROPIC_API_KEY=...   # For Claude
-export VOYAGE_API_KEY=...      # For Voyage embeddings (recommended when using Claude)
-export OPENROUTER_API_KEY=...  # For OpenRouter (200+ models)
-```
-
-paperpipe defaults to `gemini/gemini-3-flash-preview`. Override via:
-
-```bash
-export PAPERPIPE_LLM_MODEL=gpt-4o  # or any LiteLLM model identifier
-```
-
-You can also tune LLM generation:
-
-```bash
-export PAPERPIPE_LLM_TEMPERATURE=0.3  # default: 0.3
-```
-
-Without LLM support, paperpipe falls back to:
-- Metadata + section headings from LaTeX
-- Regex-based equation extraction
-
-## Optional: `papi ask` (RAG backends)
-
-If you installed a backend, `papi ask` can answer cross-paper questions:
-
-```bash
-papi ask "What optimizer settings do these papers recommend?"
-```
-
-Backends:
-- **PaperQA2** (`--backend pqa`, default if installed): agentic synthesis with citations.
-- **LEANN** (`--backend leann`): local retrieval/search backend (no PaperQA2 dependency).
-
-For explicit index builds without asking a question, use `papi index`.
-PaperQA2 uses LiteLLM identifiers for `--pqa-llm` / `--pqa-embedding` and the same API key env vars as the LLM
-section (including `VOYAGE_API_KEY` if you use Voyage embeddings).
-
-### PaperQA2 (default backend if installed)
-
-When both paperpipe and [PaperQA2](https://github.com/Future-House/paper-qa) are installed, they share the same PDFs:
-
-```bash
-# paperpipe stores PDFs in <paper_db>/papers/*/paper.pdf (see `papi path`)
-# `papi ask` stages PDFs under <paper_db>/.pqa_papers/ so PaperQA2 doesn't index generated Markdown.
-# `papi ask --backend pqa` routes to PaperQA2 for agentic synthesis/citations
-
-papi ask "What optimizer settings do these papers recommend?"
-```
-
-Index/caching notes:
-- First run builds an index under `<paper_db>/.pqa_index/` and stages PDFs under `<paper_db>/.pqa_papers/` (PDF-only).
-- Override the index location with `PAPERPIPE_PQA_INDEX_DIR`.
-- If you accidentally indexed the wrong content (or changed embeddings), delete `<paper_db>/.pqa_index/` once to force a clean rebuild.
-- If some PDFs failed indexing and are recorded as `ERROR`, re-run with `--pqa-retry-failed` (or `--pqa-rebuild-index` to rebuild everything).
-
-#### Common options
-
-The most common PaperQA2 options are exposed as first-class `papi ask` flags:
+### Common options
 
 | Flag | Description |
 |------|-------------|
@@ -295,56 +262,52 @@ The most common PaperQA2 options are exposed as first-class `papi ask` flags:
 
 Any additional arguments are passed through to `pqa` (e.g., `--agent.search_count 10`).
 
-#### Index builds (no question)
-
-Use `papi index` to build/update the retrieval index without asking a question:
-
-- PaperQA2 (default): supports the same `--pqa-*` flags as `papi ask`; extra `pqa` args are passed through.
-- LEANN: `papi index --backend leann [--leann-index NAME] [--leann-force]` (PDF-only); extra args are passed to
-  `leann build` (except `--docs` / `--file-types`, which paperpipe controls).
+### Model combinations
 
 ```bash
-# Examples with first-class options:
+# Gemini + Google Embeddings
+papi ask "Explain the architecture" --pqa-llm "gemini/gemini-2.5-flash" --pqa-embedding "gemini/gemini-embedding-001"
 
-# Use a cheaper model for summarization
-papi ask "Compare the loss functions" --pqa-llm gpt-4o --pqa-summary-llm gpt-4o-mini
-
-# Increase verbosity and evidence retrieval
-papi ask "Explain eq. 4" --pqa-verbosity 2 --pqa-evidence-k 15 --pqa-max-sources 8
-
-# Shorter answers with lower temperature
-papi ask "Summarize the methods" --pqa-answer-length "about 50 words" --pqa-temperature 0.1
-
-# Build/update the PaperQA2 index explicitly (no question)
-papi index
-papi index --pqa-rebuild-index
-
-# Specific model combinations:
-# Gemini 3 Flash + Google Embeddings
-papi ask "Explain the architecture" --pqa-llm "gemini/gemini-3-flash-preview" --pqa-embedding "gemini/gemini-embedding-001"
-
-# Claude Sonnet 4.5 + Voyage AI Embeddings
+# Claude + Voyage Embeddings
 papi ask "Compare the loss functions" --pqa-llm "claude-sonnet-4-5" --pqa-embedding "voyage/voyage-3-large"
 
-# GPT-5.2 + OpenAI Embeddings
-papi ask "How to implement eq 4?" --pqa-llm "gpt-5.2" --pqa-embedding "text-embedding-3-large"
+# GPT + OpenAI Embeddings
+papi ask "How to implement eq 4?" --pqa-llm "gpt-4o" --pqa-embedding "text-embedding-3-large"
 
-# OpenRouter (access 200+ models via unified API)
+# OpenRouter (200+ models)
 papi ask "Explain the method" --pqa-llm "openrouter/anthropic/claude-sonnet-4" --pqa-embedding "openrouter/openai/text-embedding-3-large"
+
+# Cheaper summarization model
+papi ask "Compare methods" --pqa-llm gpt-4o --pqa-summary-llm gpt-4o-mini
 ```
 
-By default, `papi ask` uses `pqa --settings default` to avoid failures caused by stale user
-settings files; pass `-s/--settings <name>` to use a specific PaperQA2 settings profile.
-If Pillow is not installed, `papi ask` forces `--parsing.multimodal OFF` to avoid PDF
-image extraction errors; pass your own `--parsing...` args to override.
+### Index/caching notes
 
-### LEANN (local backend)
+- First run builds an index under `<paper_db>/.pqa_index/` and stages PDFs under `<paper_db>/.pqa_papers/`.
+- Override index location with `PAPERPIPE_PQA_INDEX_DIR`.
+- If you indexed wrong content (or changed embeddings), delete `.pqa_index/` to force rebuild.
+- If PDFs failed indexing (recorded as `ERROR`), re-run with `--pqa-retry-failed` or `--pqa-rebuild-index`.
+- By default, `papi ask` uses `--settings default` to avoid stale user settings; pass `-s/--settings <name>` to override.
+- If Pillow is not installed, `papi ask` forces `--parsing.multimodal OFF`; pass your own `--parsing...` args to override.
 
-LEANN uses a separate local index stored under `<paper_db>/.leann/` (by default, `papers`). paperpipe indexes
-only staged PDFs from `<paper_db>/.pqa_papers/` (no `*.md`).
+</details>
 
-Defaults can be overridden via env vars or `config.toml`:
+<details>
+<summary>LEANN configuration</summary>
 
+### Common options
+
+```bash
+papi ask "..." --backend leann --leann-provider ollama --leann-model qwen3:8b
+papi ask "..." --backend leann --leann-host http://localhost:11434
+papi ask "..." --backend leann --leann-top-k 12 --leann-complexity 64
+```
+
+### Defaults
+
+LEANN defaults to `ollama` with `olmo-3:7b` for answering and `nomic-embed-text` for embeddings.
+
+Override via `config.toml`:
 ```toml
 [leann]
 llm_provider = "ollama"
@@ -353,212 +316,103 @@ embedding_model = "nomic-embed-text"
 embedding_mode = "ollama"
 ```
 
-Env vars (override `config.toml`):
-- `PAPERPIPE_LEANN_LLM_PROVIDER`
-- `PAPERPIPE_LEANN_LLM_MODEL`
-- `PAPERPIPE_LEANN_EMBEDDING_MODEL`
-- `PAPERPIPE_LEANN_EMBEDDING_MODE`
+Or env vars: `PAPERPIPE_LEANN_LLM_PROVIDER`, `PAPERPIPE_LEANN_LLM_MODEL`, `PAPERPIPE_LEANN_EMBEDDING_MODEL`, `PAPERPIPE_LEANN_EMBEDDING_MODE`.
+
+### Index builds
 
 ```bash
-# Build/update the LEANN index explicitly
 papi index --backend leann
 # or:
 papi leann-index
-
-# Ask via LEANN (defaults: ollama + olmo-3:7b; embeddings: nomic-embed-text via ollama)
-papi ask "..." --backend leann
-
-# Common LEANN knobs (see `papi ask --help` for the full set)
-papi ask "..." --backend leann --leann-provider ollama --leann-model qwen3:8b
-papi ask "..." --backend leann --leann-host http://localhost:11434
-papi ask "..." --backend leann --leann-top-k 12 --leann-complexity 64
-
-# By default, `papi ask --backend leann` auto-builds the index if missing (disable with --leann-no-auto-index)
-papi ask "..." --backend leann --leann-no-auto-index
 ```
 
-## Optional: model probing
+By default, `papi ask --backend leann` auto-builds the index if missing (disable with `--leann-no-auto-index`).
 
-To see which model ids work with your currently configured API keys (this makes small live API calls):
+</details>
+
+## LLM configuration
+
+paperpipe uses LLMs for generating summaries, extracting equations, and tagging. Without an LLM, it falls back to regex extraction and metadata-based summaries.
 
 ```bash
-papi models
-# (default: probes one "latest" completion model and one embedding model per provider for
-# which you have an API key set; pass `latest` (or `--preset latest`) to probe a broader list.)
-# or probe specific models only:
-papi models --kind completion --model gemini/gemini-3-flash-preview --model gemini/gemini-2.5-flash --model gpt-4o-mini
-papi models --kind embedding --model gemini/gemini-embedding-001 --model text-embedding-3-small
-# probe "latest" defaults (gpt-5.2/5.1, gemini 3 preview, claude-sonnet-4-5; plus text-embedding-3-large if enabled):
-papi models latest
-# probe "last-gen" defaults (gpt-4.1/4o, gemini 2.5, older/smaller embeddings; Claude 3.5 is retired):
-papi models last-gen
-# probe a broader superset:
-papi models all
-# show underlying provider errors (noisy):
-papi models --verbose
+# Set your API key (pick one)
+export GEMINI_API_KEY=...       # default provider
+export OPENAI_API_KEY=...
+export ANTHROPIC_API_KEY=...
+export VOYAGE_API_KEY=...       # for Voyage embeddings (recommended with Claude)
+export OPENROUTER_API_KEY=...   # 200+ models
+
+# Override the default model
+export PAPERPIPE_LLM_MODEL=gpt-4o
+export PAPERPIPE_LLM_TEMPERATURE=0.3  # default: 0.3
 ```
 
-## Optional: coding agent integrations
+Check which models work with your keys:
+```bash
+papi models                    # probe default models for your configured keys
+papi models latest             # probe latest models (gpt-4o, gemini-2.5, claude-sonnet-4-5)
+papi models last-gen           # probe previous generation
+papi models all                # probe broader superset
+papi models --verbose          # show underlying provider errors
+```
 
-See [AGENT_INTEGRATION.md](AGENT_INTEGRATION.md) for a ready-to-paste snippet for your repo’s agent instructions.
+## Tagging
 
-### Skill + prompts
+Papers are auto-tagged from:
+1. arXiv categories (cs.CV → computer-vision)
+2. LLM-generated semantic tags
+3. Your `--tags` flag
 
 ```bash
-# Install everything (skill + prompts + mcp)
-papi install
-
-# Or install for a specific CLI only
-papi install skill --claude
-papi install skill --codex
-papi install skill --gemini
+papi add 1706.03762 --tags my-project,priority
+papi list --tag attention
 ```
 
-Install only prompt templates/commands (no skill):
+## Non-arXiv papers
 
 ```bash
-papi install prompts
+papi add --pdf ./paper.pdf --title "Some Conference Paper" --tags local
 ```
 
-Gemini CLI note: skills are currently experimental; enable them in `~/.gemini/settings.json`:
-`{"experimental": {"skills": true}}`.
+## Configuration file
 
-Restart your CLI after installing the skill.
+For persistent settings, create `~/.paperpipe/config.toml` (override location with `PAPERPIPE_CONFIG_PATH`):
 
-### MCP servers (retrieval-only tools)
+```toml
+[llm]
+model = "gemini/gemini-2.5-flash"
+temperature = 0.3
 
-paperpipe supports MCP (Model Context Protocol) servers for retrieval-only workflows:
-- **PaperQA2 retrieval** (`papi mcp-server`): raw chunks + citations over the cached PaperQA2 index.
-- **LEANN search** (`papi leann-mcp-server`): wraps LEANN's `leann_mcp` server, running from your paper DB directory.
+[embedding]
+model = "gemini/gemini-embedding-001"
 
-### Installation
+[paperqa]
+settings = "default"
+index_dir = "~/.paperpipe/.pqa_index"
+summary_llm = "gpt-4o-mini"
+enrichment_llm = "gpt-4o-mini"
+
+[leann]
+llm_provider = "ollama"
+llm_model = "qwen3:8b"
+
+[tags.aliases]
+cv = "computer-vision"
+nlp = "natural-language-processing"
+```
+
+Precedence: **CLI flags > env vars > config.toml > built-in defaults**.
+
+## Development
 
 ```bash
-# PaperQA2 MCP support (requires Python 3.11+)
-pip install 'paperpipe[mcp]'
-
-# LEANN MCP support (requires compiled LEANN backend)
-pip install 'paperpipe[leann]'
+git clone https://github.com/hummat/paperpipe && cd paperpipe
+pip install -e ".[dev]"
+make check                            # format + lint + typecheck + test
 ```
 
-### Setup (Recommended)
-
-Use the installer (it installs all available MCP servers):
-
-```bash
-papi install mcp
-papi install mcp --repo
-```
-
-### Setup (Manual)
-
-Claude Code (project `.mcp.json`):
-
-```json
-{
-  "mcpServers": {
-    "paperqa": {
-      "command": "papi",
-      "args": ["mcp-server"],
-      "env": {
-        "PAPERQA_EMBEDDING": "text-embedding-3-small"
-      }
-    },
-    "leann": {
-      "command": "papi",
-      "args": ["leann-mcp-server"],
-      "env": {}
-    }
-  }
-}
-```
-
-Claude Code (user scope via CLI):
-
-```bash
-claude mcp add --transport stdio --env PAPERQA_EMBEDDING=text-embedding-3-small --scope user paperqa -- papi mcp-server
-```
-
-Codex CLI:
-
-```bash
-codex mcp add paperqa --env PAPERQA_EMBEDDING=text-embedding-3-small -- papi mcp-server
-codex mcp add leann -- papi leann-mcp-server
-```
-
-Gemini CLI (user `~/.gemini/settings.json` or project `.gemini/settings.json`):
-
-```json
-{
-  "mcpServers": {
-    "paperqa": {
-      "command": "papi",
-      "args": ["mcp-server"],
-      "env": {
-        "PAPERQA_EMBEDDING": "text-embedding-3-small"
-      }
-    },
-    "leann": {
-      "command": "papi",
-      "args": ["leann-mcp-server"],
-      "env": {}
-    }
-  }
-}
-```
-
-Gemini CLI (user scope via CLI):
-
-```bash
-gemini mcp add --scope user --transport stdio --env PAPERQA_EMBEDDING=text-embedding-3-small paperqa -- papi mcp-server
-gemini mcp add --scope user --transport stdio leann -- papi leann-mcp-server
-```
-
-### Configuration
-
-| Environment Variable | Default | Description |
-|---------------------|---------|-------------|
-| `PAPERPIPE_PQA_INDEX_DIR` | `~/.paperpipe/.pqa_index` | Root directory containing PaperQA2 indices |
-| `PAPERPIPE_PQA_INDEX_NAME` | `paperpipe_<embedding>` | Index name to query (subfolder under index dir) |
-| `PAPERQA_EMBEDDING` | (from env or `papi` config) | Embedding model id (must match the index you built) |
-| `PAPERQA_LLM` | `gpt-4o-mini` | Unused for retrieval-only tools |
-
-### Available Tools
-
-| Tool | Description |
-|------|-------------|
-| `retrieve_chunks` | Retrieve raw chunks + citations (no LLM answering) |
-| `list_pqa_indexes` | List available PaperQA2 indices under the index dir |
-| `get_pqa_index_status` | Show basic index stats (files, failures) |
-
-### Usage (Claude Code / Codex CLI / Gemini CLI)
-
-1. Build/update the PaperQA2 index once (outside MCP): `papi index --pqa-embedding text-embedding-3-small`
-2. In your agent CLI, call the MCP tool `retrieve_chunks` with your query (the agent does synthesis)
-3. If retrieval looks wrong, call `get_pqa_index_status` to inspect what’s indexed
-
-If your CLI supports a debug flag, enable it. For Claude Code: `claude --debug` (note: `--mcp-debug` is deprecated).
-
-## Non-arXiv Papers
-
-You can ingest local PDFs as first-class entries:
-
-```bash
-papi add --pdf /path/to/paper.pdf --title "Some Paper"
-papi add --pdf ./paper.pdf --title "Some Paper" --name some-paper --tags my-project
-```
-
-## Development (contributors)
-
-```bash
-# Install app + dev tooling (ruff, pyright, pytest)
-make deps
-
-# Format + lint + typecheck + unit tests
-make check
-```
-
-## Release (maintainers)
+<details>
+<summary>Release (maintainers)</summary>
 
 This repo publishes to PyPI when a GitHub Release is published (see `.github/workflows/publish.yml`).
 
@@ -567,13 +421,15 @@ This repo publishes to PyPI when a GitHub Release is published (see `.github/wor
 make release
 ```
 
+</details>
+
 ## Credits
 
-- **[PaperQA2](https://github.com/Future-House/paper-qa)** by Future House — the RAG backend powering `papi ask --backend pqa`.
+- [PaperQA2](https://github.com/Future-House/paper-qa) by Future House — RAG backend.
   *Skarlinski et al., "Language Agents Achieve Superhuman Synthesis of Scientific Knowledge", 2024.*
   [arXiv:2409.13740](https://arxiv.org/abs/2409.13740)
-- **LEANN** (`leann-core`, `leann-backend-hnsw`) — the local RAG backend powering `papi ask --backend leann`.
+- [LEANN](https://github.com/yichuan-w/LEANN) — local RAG backend
 
 ## License
 
-MIT (see [LICENSE](LICENSE))
+MIT
