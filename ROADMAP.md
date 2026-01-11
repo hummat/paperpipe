@@ -10,139 +10,224 @@ It is not a commitment to specific timelines.
 - Avoid API-heavy features unless they are clearly optional and cached.
 - Prefer local-first workflows when feasible (no cloud/API keys required).
 - Precedence for configuration: **CLI flags > env vars > config.toml > defaults**.
+- **Leverage existing backends**: PaperQA2 and LEANN already provide sophisticated retrieval. Expose their features rather than reimplementing.
 
 ## Planned (next)
 
-### 1) Refactor: split `paperpipe.py` into a `src/` package
+### 1) Retrieval quality improvements (expose existing backend features)
 
-Goal: make the codebase maintainable without changing CLI behavior or on-disk database formats.
+Goal: improve RAG quality for paper implementation workflows without adding new vector DBs.
 
-- **Constraints**
-  - Keep CLI surface area stable (commands/options/output).
-  - Keep runtime data layout stable (`~/.paperpipe/…`, `papers/*/{paper.pdf,source.tex,meta.json,…}`).
-  - Avoid behavior changes during the refactor; keep diffs mechanical.
-- **Packaging**
-  - Move to a `src/` layout (e.g., `src/paperpipe/*.py`) and update `pyproject.toml` accordingly.
-  - Keep `papi` entrypoint stable (likely `paperpipe.cli:cli`).
-  - Consider keeping a thin `paperpipe.py` shim (imports + delegates to the package).
-- **Proposed module split (initial cut)**
-  - `paperpipe/cli.py`: Click group + command wiring
-  - `paperpipe/config.py`: config/env precedence + defaults
-  - `paperpipe/store.py`: paths, index/meta read/write, paper directory helpers
-  - `paperpipe/arxiv.py`: arXiv fetch/download/source extraction
-  - `paperpipe/llm.py`: LiteLLM wrappers + prompts
-  - `paperpipe/paperqa.py`: `papi ask` orchestration + staging/index handling
-  - `paperpipe/search.py`: local search helpers
-  - `paperpipe/audit.py`: summary/equation audit logic
-  - `paperpipe/util.py`: small shared helpers (logging, IO limits, etc.)
-- **Test plan**
-  - Keep existing tests; add a minimal “CLI smokes” unit test for import/entrypoint regressions if needed.
+**Context from analysis (Jan 2025):**
+- PaperQA2 already has: tantivy (lexical), dense retrieval, LLM reranking, evidence summarization, optional Qdrant backend.
+- LEANN already has: metadata filtering (post-search), grep-based exact text search, AST-aware code chunking.
+- Adding Weaviate/Qdrant/Vespa as a new backend would duplicate existing functionality — not worth the complexity.
+
+**What to expose:**
+
+- **A) LEANN metadata filtering**
+  - LEANN has rich post-search filtering (`==`, `!=`, `<`, `>`, `in`, `contains`, `starts_with`, etc.) that paperpipe doesn't surface.
+  - Add `--leann-filter` option to `papi ask --backend leann` (e.g., `--leann-filter "paper_name in ['lora', 'attention']"`).
+  - Low complexity: just pass through to `leann ask --filter ...`.
+
+- **B) LEANN + grep fusion for hybrid-ish retrieval**
+  - LEANN has grep search (`use_grep=True`) for exact text matching.
+  - For papers, exact string hits matter: hyperparams ("λ=0.1"), symbols ("Eq. 7"), dataset names.
+  - Expose via `--leann-grep` or similar; fuse grep + vector results.
+  - Medium complexity: may need result merging logic if LEANN doesn't do it internally.
+
+- **C) PaperQA2 "fake" agent mode**
+  - PaperQA2 has `agent_type = "fake"` for deterministic, low-token retrieval (search → gather → answer, no LLM agent loop).
+  - Expose via `papi ask --pqa-agent-type fake` for faster/cheaper queries.
+  - Low complexity: just pass `--agent.agent_type fake` to `pqa`.
+
+- **D) Better evidence block formatting**
+  - The actual hallucination reduction comes from forcing the agent to cite evidence.
+  - Add `papi ask --format evidence-blocks` that outputs structured JSON with `{paper, section, page, snippet}`.
+  - Useful for agent integrations that want to enforce "no claim without citation".
+  - Medium complexity: parse PaperQA2/LEANN output and reformat.
+
+- **E) Optional API reranking for LEANN**
+  - LEANN's "reranking" is ANN-internal (approx → exact distance), not cross-encoder.
+  - Add optional `--leann-rerank cohere|voyage` that calls an external reranker after retrieval.
+  - Medium complexity: ~50-100 lines; retrieve `top_k=50` → rerank → keep `top_n=10`.
+  - Requires API key; clearly optional.
+
+**Not doing:**
+- Adding Weaviate/Qdrant/Vespa as backends (duplicates PaperQA2's Qdrant option, high complexity).
+- Building a custom vector index (PaperQA2 and LEANN already exist).
 
 ### 2) Local LLM via Ollama (core + `papi ask`)
 
-Goal: make a zero-cloud setup the default happy path: local generation for `add/regenerate` and local RAG via
-PaperQA2 or LEANN (when installed).
+Goal: make a zero-cloud setup the default happy path.
+
+**Utility: HIGH** — aligns with local-first principle, requested often.
+**Complexity: LOW-MEDIUM** — mostly config/docs, some error handling.
 
 - **Core paperpipe generation**
-  - Support LiteLLM Ollama model ids (exact ids can vary by LiteLLM version; validate via `papi models --model ...`).
+  - Support LiteLLM Ollama model ids.
   - Document a working baseline:
     - LLM: `PAPERPIPE_LLM_MODEL=ollama/<chat-model>`
-    - Embeddings (optional): `PAPERPIPE_EMBEDDING_MODEL=ollama/<embed-model>` (commonly a `nomic-embed-text`-style model)
-  - Make Ollama base URL configuration “just work”:
-    - Detect/normalize common env var names (e.g., `OLLAMA_HOST` vs `OLLAMA_API_BASE`) so users don’t have to guess.
-    - Fail with a clear error when Ollama isn’t reachable (connection refused, wrong host, missing model, etc.).
+    - Embeddings: `PAPERPIPE_EMBEDDING_MODEL=ollama/<embed-model>`
+  - Make Ollama base URL configuration "just work":
+    - Detect/normalize common env var names (`OLLAMA_HOST` vs `OLLAMA_API_BASE`).
+    - Fail with a clear error when Ollama isn't reachable.
 - **PaperQA2 via `papi ask`**
-  - Ensure `papi ask --pqa-llm ... --pqa-embedding ...` works cleanly with Ollama identifiers.
-  - Add docs/examples for local-only `papi ask` (including an embedding model choice).
+  - Ensure `--pqa-llm` / `--pqa-embedding` work cleanly with Ollama identifiers.
+  - Add docs/examples for local-only `papi ask`.
 
 ### 3) `papi ask`: PaperQA2 output stream hygiene
 
-Goal: make `papi ask` output match the rest of paperpipe: quiet by default, high-signal, and debuggable when needed.
+Goal: make `papi ask` output match paperpipe's style.
+
+**Utility: HIGH** — current output is noisy and hard to parse.
+**Complexity: MEDIUM** — stdout/stderr capture, parsing, failure detection.
 
 - **Default behavior**
-  - Suppress PaperQA2’s verbose streaming logs by default.
-  - Print a concise summary aligned with paperpipe’s style:
-    - progress: “Indexing N PDFs…”, “Querying…”
-    - result: final answer text
-    - sources: a short, stable list of cited papers/files (and any missing/failed docs)
+  - Suppress PaperQA2's verbose streaming logs by default.
+  - Print concise output: progress, answer, cited sources.
 - **Debug/verbose mode**
-  - `-v/--verbose` should surface PaperQA2’s raw output for troubleshooting.
-  - Preserve color when possible:
-    - If passthrough to a real TTY preserves color, keep it.
-    - Otherwise accept “no color” and provide an explicit `--pqa-raw` passthrough mode.
+  - `-v/--verbose` surfaces raw output.
+  - `--pqa-raw` for full passthrough.
 - **Failure handling**
-  - Detect common PaperQA2 failure patterns (crash loops, bad PDFs) and show actionable guidance, not walls of logs.
-  - Keep the existing crash triage (identify the crashing document) but present it in a compact, paperpipe-style report.
+  - Detect common failures (crash loops, bad PDFs) and show actionable guidance.
 
 ### 4) `papi attach` (upgrade/attach files)
 
 Goal: let users fix missing/low-quality assets after initial ingest.
 
-- **Command**
-  - `papi attach PAPER --pdf /path/to/better.pdf`
-  - `papi attach PAPER --source /path/to/main.tex`
-- **Behavior**
-  - Replace/attach the specified file(s)
-  - Update `meta.json` (`has_pdf` / `has_source`)
-  - Regeneration policy:
-    - Default: do not regenerate anything (fast + predictable)
-    - `--regen auto`: regenerate only artifacts affected by the attached file(s) (e.g., equations when `--source` changes)
-    - `--regen equations|summary|tags|all`: explicit
-- **Options (TBD)**
-  - `--regen equations|summary|tags|all`
-  - `--backup` (keep `paper.pdf.bak`, `source.tex.bak`, etc.)
+**Utility: MEDIUM** — useful but not blocking for most workflows.
+**Complexity: LOW** — straightforward file operations + meta.json updates.
+
+- `papi attach PAPER --pdf /path/to/better.pdf`
+- `papi attach PAPER --source /path/to/main.tex`
+- Options: `--regen auto|equations|summary|tags|all`, `--backup`
 
 ### 5) `papi bibtex` (export)
 
-Goal: easy citation export that integrates with LaTeX workflows.
+Goal: easy citation export for LaTeX workflows.
 
-- **Command**
-  - `papi bibtex PAPER...`
-- **Output**
-  - Prints BibTeX entries derived from stored metadata.
-- **Behavior details**
-  - Missing fields: emit best-effort entries (always include a stable key + title when available).
-  - Key collisions: deterministic suffixing (`_2`, `_3`, …).
-- **Options (TBD)**
-  - `--to library.bib` (write/append)
-  - `--key-style name|doi|arxiv|slug`
+**Utility: MEDIUM** — nice for academic users.
+**Complexity: LOW** — metadata already stored, just formatting.
 
-### 6) `papi import-bib` (bulk ingest)
+- `papi bibtex PAPER...` → prints BibTeX entries
+- Options: `--to library.bib`, `--key-style name|doi|arxiv|slug`
 
-Goal: bootstrap a library from an existing BibTeX file.
+## Later (lower priority or higher complexity)
 
-- **Command**
-  - `papi import-bib /path/to/library.bib`
-- **Dependency**
-  - Use `bibtexparser` (BibTeX is irregular; avoid hand-rolled parsing). Prefer making this an optional extra.
-- **Behavior (MVP)**
-  - Create metadata-only paper entries (PDF can be attached later with `papi attach`)
-  - Dedup/match order: `doi` > `arxiv_id` > bibtex key
-- **Options (TBD)**
-  - `--dry-run`
-  - `--update-existing`
-  - `--tag TAG` (apply to all imported)
-  - `--name-from key|slug(title)`
+### `papi import-bib` (bulk ingest from BibTeX)
 
-## Later (after the above stabilizes)
+**Utility: MEDIUM** — useful for bootstrapping from existing libraries.
+**Complexity: MEDIUM** — BibTeX parsing is irregular, needs `bibtexparser` dependency.
 
-- `papi rename OLD NEW` (safe rename + index/meta updates)
-- `papi rebuild-index` (recover `index.json` from on-disk state)
-- `papi stats` (tags over time, has_pdf/has_source, storage usage)
-- arXiv version tracking + update checks (`papi check-updates`, `papi update`)
-- `papi diff` (start as text diff; avoid semantic parsing in MVP)
-  - Define diff targets explicitly (e.g., `summary.md` vs regenerated summary, or two papers).
-  - Likely depends on `papi attach --backup`/snapshots to be meaningful.
+- `papi import-bib /path/to/library.bib`
+- Creates metadata-only entries (PDF via `papi attach` later).
+- Dedup order: `doi` > `arxiv_id` > bibtex key.
+- Optional extra: `paperpipe[bibtex]`.
 
-## Out of scope for now (high scope creep)
+### `papi rebuild-index` (recovery)
 
-- Citation graph / related paper discovery across multiple APIs
-- Semantic embedding search with a dedicated local vector index
-- Watch/notifications for new papers
-- Zotero/Mendeley integration
+**Utility: HIGH** (for recovery) — but rare need.
+**Complexity: LOW** — iterate paper dirs, rebuild `index.json`.
+
+- Recover `index.json` from on-disk paper directories.
+- Useful when index is corrupted or manually edited.
+
+### `papi rename OLD NEW`
+
+**Utility: LOW** — users can do this manually.
+**Complexity: LOW** — rename dir + update index.
+
+### Refactor: split `paperpipe.py` into a `src/` package
+
+**Utility: MEDIUM** — maintainability for contributors.
+**Complexity: MEDIUM** — mechanical but tedious, risk of regressions.
+
+Deferred until the single-file approach becomes a real bottleneck. Current size (~3500 lines) is still manageable.
+
+## Reconsidered (moved from "Later")
+
+### `papi stats`
+
+**Utility: LOW** — nice to have, not blocking.
+**Complexity: LOW**.
+
+Moved to "maybe later" — not a priority.
+
+### arXiv version tracking + update checks
+
+**Utility: LOW** — most users don't need this.
+**Complexity: MEDIUM** — needs arXiv API polling, version comparison logic.
+
+Deferred indefinitely. Users can manually re-add papers if needed.
+
+### `papi diff`
+
+**Utility: LOW** — unclear use case.
+**Complexity: MEDIUM** — needs snapshot/backup infrastructure.
+
+Deferred indefinitely. The original motivation (compare regenerated summaries) is better served by just regenerating and using git diff.
+
+## Out of scope (won't do)
+
+### Dedicated local vector index / new vector DB backend
+
+PaperQA2 already provides tantivy + dense + LLM reranking + optional Qdrant.
+LEANN already provides efficient local vector search with metadata filtering.
+Adding Weaviate/Qdrant/Vespa as a paperpipe-native backend would:
+- Duplicate existing functionality
+- Add significant complexity (~500-1000 lines)
+- Require users to run/manage another service
+
+**Instead:** Expose existing backend features (see "Retrieval quality improvements").
+
+### Citation graph / related paper discovery
+
+High complexity, requires multiple API integrations. Out of scope for a local paper database tool.
+
+### Watch/notifications for new papers
+
+Medium complexity, low utility. Users can set up their own arXiv alerts.
+
+### Zotero/Mendeley integration
+
+High complexity. Users can export from Zotero to BibTeX and use `papi import-bib`.
 
 ## Completed
 
 ### Non-arXiv ingestion via `papi add --pdf` (MVP)
 
-Implemented (see `README.md` → “Non-arXiv Papers” for usage and examples).
+Implemented (see README.md → "Non-arXiv Papers").
+
+---
+
+## Appendix: Backend capability reference
+
+This informed the "Retrieval quality improvements" decisions.
+
+### PaperQA2 (verified Jan 2025)
+
+| Feature | Status |
+|---------|--------|
+| Multi-stage pipeline (Search → Evidence → Answer) | ✅ |
+| LiteLLM-compatible models | ✅ |
+| Metadata from Crossref + Semantic Scholar + OpenAlex | ✅ |
+| tantivy for full-text/lexical search | ✅ |
+| LLM-based evidence reranking | ✅ |
+| "Fake" agent mode (deterministic, low-token) | ✅ |
+| Optional Qdrant backend | ✅ (not exposed in paperpipe yet) |
+| Grobid for parsing | ❌ (uses PyPDF/PyMuPDF/Docling/nemotron instead) |
+
+### LEANN (verified Jan 2025)
+
+| Feature | Status |
+|---------|--------|
+| Tiny on-disk footprint (97% reduction) | ✅ |
+| AST-aware code chunking (Python, Java, C#, TS, JS) | ✅ |
+| OpenAI-compatible endpoints (LM Studio, vLLM, Ollama) | ✅ |
+| ANN-internal reranking (approx → exact distance) | ✅ |
+| Metadata filtering (post-search) | ✅ (not exposed in paperpipe) |
+| Grep search (exact text) | ✅ (not exposed in paperpipe) |
+| Hybrid BM25 search | ❌ |
+| Cross-encoder reranking | ❌ |
+| Native MCP server | ✅ |
