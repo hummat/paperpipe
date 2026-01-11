@@ -397,6 +397,11 @@ Or env vars: `PAPERPIPE_LEANN_LLM_PROVIDER`, `PAPERPIPE_LEANN_LLM_MODEL`, `PAPER
 papi index --backend leann
 # or:
 papi leann-index
+
+# Override common LEANN build knobs (maps to `leann build ...`):
+papi index --backend leann --leann-embedding-mode ollama --leann-embedding-model nomic-embed-text
+papi index --backend leann --leann-embedding-mode ollama --leann-embedding-host http://localhost:11434
+papi index --backend leann --leann-doc-chunk-size 350 --leann-doc-chunk-overlap 128
 ```
 
 By default, `papi ask --backend leann` auto-builds the index if missing (disable with `--leann-no-auto-index`).

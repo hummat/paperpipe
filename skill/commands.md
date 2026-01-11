@@ -114,6 +114,8 @@ Notes:
 - `papi index` builds/updates the default retrieval index (PaperQA2 backend `pqa` by default if installed; same `--pqa-*` flags as `papi ask`).
 - `papi index --backend leann` builds/updates the LEANN index (PDF-only) and passes extra args to `leann build` (except
   `--docs` / `--file-types`, which paperpipe controls).
+  - Common LEANN build flags are also exposed as first-class options (e.g., `--leann-embedding-model`, `--leann-embedding-mode`,
+    `--leann-doc-chunk-size`, `--leann-doc-chunk-overlap`, `--leann-num-threads`).
 
 ## LEANN Integration (Local)
 
@@ -125,7 +127,8 @@ Notes:
 | `papi ask "q" --backend leann --leann-provider ollama --leann-model qwen3:8b` | Use local Ollama model |
 
 Defaults:
-- Indexing uses `--embedding-model nomic-embed-text --embedding-mode ollama` unless you override.
+- Indexing defaults come from `config.toml` / env vars (`PAPERPIPE_LEANN_EMBEDDING_MODEL`, `PAPERPIPE_LEANN_EMBEDDING_MODE`)
+  unless you override via `papi index --backend leann --leann-embedding-*` (or pass raw `leann build --embedding-*` args).
 - Asking defaults to `--leann-provider ollama --leann-model olmo-3:7b` unless you override.
 - You can also override LEANN defaults via `config.toml`:
   ```toml

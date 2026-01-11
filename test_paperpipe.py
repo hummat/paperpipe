@@ -881,6 +881,65 @@ class TestCli:
         assert result.exit_code == 0
         assert "paperpipe" in result.output
 
+    def test_index_help_includes_leann_build_flags(self) -> None:
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["index", "--help"])
+        assert result.exit_code == 0
+        assert "--leann-embedding-model" in result.output
+        assert "--leann-embedding-mode" in result.output
+        assert "--leann-doc-chunk-size" in result.output
+        assert "--leann-doc-chunk-overlap" in result.output
+
+    def test_index_leann_build_args_forwarded(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_refresh(*, staging_dir: Path) -> None:
+            return
+
+        def fake_build(*, index_name: str, docs_dir: Path, force: bool, extra_args: list[str]) -> None:
+            captured["index_name"] = index_name
+            captured["docs_dir"] = docs_dir
+            captured["force"] = force
+            captured["extra_args"] = list(extra_args)
+
+        monkeypatch.setattr(paperpipe, "_refresh_pqa_pdf_staging_dir", fake_refresh)
+        monkeypatch.setattr(paperpipe, "_leann_build_index", fake_build)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            paperpipe.cli,
+            [
+                "index",
+                "--backend",
+                "leann",
+                "--leann-index",
+                "papers",
+                "--leann-embedding-model",
+                "nomic-embed-text",
+                "--leann-doc-chunk-size",
+                "350",
+                "--leann-doc-chunk-overlap",
+                "128",
+                "--some-raw-leann-arg",
+                "x",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+
+        assert captured["index_name"] == "papers"
+        assert captured["force"] is False
+        extra_args = captured["extra_args"]
+        assert extra_args == [
+            "--embedding-model",
+            "nomic-embed-text",
+            "--doc-chunk-size",
+            "350",
+            "--doc-chunk-overlap",
+            "128",
+            "--some-raw-leann-arg",
+            "x",
+        ]
+
     def test_list_empty(self, temp_db: Path):
         runner = CliRunner()
         result = runner.invoke(paperpipe.cli, ["list"])

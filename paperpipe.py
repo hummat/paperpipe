@@ -4121,6 +4121,68 @@ def leann_index(ctx: click.Context, index_name: str, force: bool) -> None:
 @click.option("--pqa-retry-failed", is_flag=True, help="Clear PaperQA2 ERROR markers so failed PDFs retry.")
 @click.option("--leann-index", default="papers", show_default=True, help="LEANN index name to build.")
 @click.option("--leann-force", is_flag=True, help="Force LEANN rebuild (passes --force to `leann build`).")
+@click.option(
+    "--leann-backend-name",
+    type=click.Choice(["hnsw", "diskann"], case_sensitive=False),
+    default=None,
+    help="LEANN backend name (maps to `leann build --backend-name`).",
+)
+@click.option(
+    "--leann-embedding-model",
+    default=None,
+    help="LEANN embedding model (maps to `leann build --embedding-model`).",
+)
+@click.option(
+    "--leann-embedding-mode",
+    type=click.Choice(["sentence-transformers", "openai", "mlx", "ollama"], case_sensitive=False),
+    default=None,
+    help="LEANN embedding mode (maps to `leann build --embedding-mode`).",
+)
+@click.option(
+    "--leann-embedding-host",
+    default=None,
+    help="LEANN embedding host (maps to `leann build --embedding-host`).",
+)
+@click.option(
+    "--leann-embedding-api-base",
+    default=None,
+    help="LEANN embedding API base URL (maps to `leann build --embedding-api-base`).",
+)
+@click.option(
+    "--leann-embedding-api-key",
+    default=None,
+    help="LEANN embedding API key (maps to `leann build --embedding-api-key`).",
+)
+@click.option(
+    "--leann-graph-degree",
+    type=int,
+    default=None,
+    help="LEANN build graph degree (maps to `leann build --graph-degree`).",
+)
+@click.option(
+    "--leann-build-complexity",
+    type=int,
+    default=None,
+    help="LEANN build complexity (maps to `leann build --complexity`).",
+)
+@click.option(
+    "--leann-num-threads",
+    type=int,
+    default=None,
+    help="LEANN build thread count (maps to `leann build --num-threads`).",
+)
+@click.option(
+    "--leann-doc-chunk-size",
+    type=int,
+    default=None,
+    help="LEANN PDF chunk size in TOKENS (maps to `leann build --doc-chunk-size`).",
+)
+@click.option(
+    "--leann-doc-chunk-overlap",
+    type=int,
+    default=None,
+    help="LEANN PDF chunk overlap in TOKENS (maps to `leann build --doc-chunk-overlap`).",
+)
 @click.pass_context
 def index_cmd(
     ctx: click.Context,
@@ -4135,6 +4197,17 @@ def index_cmd(
     pqa_retry_failed: bool,
     leann_index: str,
     leann_force: bool,
+    leann_backend_name: Optional[str],
+    leann_embedding_model: Optional[str],
+    leann_embedding_mode: Optional[str],
+    leann_embedding_host: Optional[str],
+    leann_embedding_api_base: Optional[str],
+    leann_embedding_api_key: Optional[str],
+    leann_graph_degree: Optional[int],
+    leann_build_complexity: Optional[int],
+    leann_num_threads: Optional[int],
+    leann_doc_chunk_size: Optional[int],
+    leann_doc_chunk_overlap: Optional[int],
 ) -> None:
     """Build/update the retrieval index for PaperQA2 (default) or LEANN."""
     backend_norm = (backend or "pqa").strip().lower()
@@ -4149,7 +4222,35 @@ def index_cmd(
 
         staging_dir = (PAPER_DB / ".pqa_papers").expanduser()
         _refresh_pqa_pdf_staging_dir(staging_dir=staging_dir)
-        _leann_build_index(index_name=leann_index, docs_dir=staging_dir, force=leann_force, extra_args=list(ctx.args))
+
+        leann_extra_args: list[str] = []
+
+        def _append_str_flag(flag: str, value: Optional[str]) -> None:
+            if value is None:
+                return
+            value = value.strip()
+            if value:
+                leann_extra_args.extend([flag, value])
+
+        def _append_int_flag(flag: str, value: Optional[int]) -> None:
+            if value is None:
+                return
+            leann_extra_args.extend([flag, str(value)])
+
+        _append_str_flag("--backend-name", leann_backend_name)
+        _append_str_flag("--embedding-model", leann_embedding_model)
+        _append_str_flag("--embedding-mode", leann_embedding_mode)
+        _append_str_flag("--embedding-host", leann_embedding_host)
+        _append_str_flag("--embedding-api-base", leann_embedding_api_base)
+        _append_str_flag("--embedding-api-key", leann_embedding_api_key)
+        _append_int_flag("--graph-degree", leann_graph_degree)
+        _append_int_flag("--complexity", leann_build_complexity)
+        _append_int_flag("--num-threads", leann_num_threads)
+        _append_int_flag("--doc-chunk-size", leann_doc_chunk_size)
+        _append_int_flag("--doc-chunk-overlap", leann_doc_chunk_overlap)
+
+        leann_extra_args.extend(list(ctx.args))
+        _leann_build_index(index_name=leann_index, docs_dir=staging_dir, force=leann_force, extra_args=leann_extra_args)
         echo_success(f"Built LEANN index {leann_index!r} under {PAPER_DB / '.leann' / 'indexes' / leann_index}")
         return
 
