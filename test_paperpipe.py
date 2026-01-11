@@ -10,6 +10,7 @@ import types
 import zlib
 from pathlib import Path
 
+import click
 import pytest
 from click.testing import CliRunner
 
@@ -2933,6 +2934,87 @@ class TestAskCommand:
         assert pqa_kwargs.get("cwd") == paperpipe.PAPERS_DIR
         assert (temp_db / ".pqa_papers" / "test-paper.pdf").exists()
 
+    def test_paperqa_ask_evidence_blocks_parses_response(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        class DummySettings:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        class DummyText:
+            name = "paper1"
+            pages = "1-2"
+            section = "sec"
+
+        class DummyContext:
+            text = DummyText()
+            context = "snippet"
+
+        class DummySession:
+            contexts = [DummyContext()]
+
+        class DummyResponse:
+            answer = "answer"
+            session = DummySession()
+
+        def dummy_ask(_query: str, *, settings):
+            assert isinstance(settings, DummySettings)
+            return DummyResponse()
+
+        dummy_mod = types.ModuleType("paperqa")
+        dummy_mod.Settings = DummySettings  # type: ignore[attr-defined]
+        dummy_mod.ask = dummy_ask  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "paperqa", dummy_mod)
+
+        payload = paperpipe._paperqa_ask_evidence_blocks(
+            cmd=[
+                "pqa",
+                "--llm",
+                "my-llm",
+                "--embedding",
+                "my-embed",
+                "--summary_llm",
+                "my-summary",
+                "--temperature",
+                "0.1",
+                "--verbosity",
+                "2",
+                "--parsing.multimodal",
+                "OFF",
+                "--agent.agent_type",
+                "fake",
+                "--agent.timeout",
+                "12",
+                "--agent.rebuild_index",
+                "true",
+                "--agent.index.paper_directory",
+                "/papers",
+                "--agent.index.index_directory",
+                "/index",
+                "--agent.index.name",
+                "idx",
+                "--agent.index.sync_with_paper_directory",
+                "true",
+                "--agent.index.concurrency",
+                "2",
+                "--answer.answer_length",
+                "short",
+                "--answer.evidence_k",
+                "10",
+                "--answer.answer_max_sources",
+                "5",
+            ],
+            query="q",
+        )
+
+        assert payload["backend"] == "pqa"
+        assert payload["question"] == "q"
+        assert payload["answer"] == "answer"
+        evidence = payload["evidence"]
+        assert isinstance(evidence, list) and evidence
+        assert evidence[0]["paper"] == "paper1"
+        assert evidence[0]["page"] == "1-2"
+        assert evidence[0]["section"] == "sec"
+        assert evidence[0]["snippet"] == "snippet"
+
     def test_ask_pqa_agent_type_flag_is_passed(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
         monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
@@ -2983,6 +3065,55 @@ class TestAskCommand:
         assert result.exit_code == 0, result.output
         assert "Answer" in result.output
         assert "New file to index:" in result.output
+
+    def test_ask_evidence_blocks_outputs_json(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
+        monkeypatch.setattr(
+            paperpipe,
+            "_paperqa_ask_evidence_blocks",
+            lambda **kwargs: {"backend": "pqa", "question": "q", "answer": "a", "evidence": []},
+        )
+
+        (temp_db / "papers" / "test-paper").mkdir(parents=True)
+        (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["ask", "query", "--format", "evidence-blocks"])
+        assert result.exit_code == 0, result.output
+        assert '"backend": "pqa"' in result.output
+
+    def test_ask_evidence_blocks_rejects_passthrough_args(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
+
+        (temp_db / "papers" / "test-paper").mkdir(parents=True)
+        (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
+
+        runner = CliRunner()
+        result = runner.invoke(
+            paperpipe.cli,
+            ["ask", "query", "--format", "evidence-blocks", "--agent.search_count", "10"],
+        )
+        assert result.exit_code != 0
+        assert "--format evidence-blocks does not support extra passthrough args" in result.output
+
+    def test_ask_evidence_blocks_reports_errors(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
+
+        def boom(**_kwargs):
+            raise click.ClickException("boom")
+
+        monkeypatch.setattr(paperpipe, "_paperqa_ask_evidence_blocks", boom)
+
+        (temp_db / "papers" / "test-paper").mkdir(parents=True)
+        (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["ask", "query", "--format", "evidence-blocks"])
+        assert result.exit_code != 0
+        assert "Error: boom" in result.output
 
     def test_ask_ollama_models_prepare_env_for_pqa(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)

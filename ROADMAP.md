@@ -28,22 +28,22 @@ Goal: improve RAG quality for paper implementation workflows without adding new 
 - **A) LEANN metadata filtering**
   - LEANN has rich post-search filtering (`==`, `!=`, `<`, `>`, `in`, `contains`, `starts_with`, etc.) that paperpipe doesn't surface.
   - Add `--leann-filter` option to `papi ask --backend leann` (e.g., `--leann-filter "paper_name in ['lora', 'attention']"`).
-  - Low complexity: just pass through to `leann ask --filter ...`.
+  - Status (Jan 2026): LEANN supports filtering in its Python API (`metadata_filters=...`) but the `leann ask` CLI does not expose it yet. Cleanest path: PR to LEANN to add a CLI flag (likely JSON), then paperpipe can pass through.
 
 - **B) LEANN + grep fusion for hybrid-ish retrieval**
   - LEANN has grep search (`use_grep=True`) for exact text matching.
   - For papers, exact string hits matter: hyperparams ("λ=0.1"), symbols ("Eq. 7"), dataset names.
   - Expose via `--leann-grep` or similar; fuse grep + vector results.
-  - Medium complexity: may need result merging logic if LEANN doesn't do it internally.
+  - Status (Jan 2026): LEANN supports grep in its Python API (`use_grep=True`) but the `leann ask` CLI does not expose it yet. Cleanest path: PR to LEANN to add `--use-grep`, then paperpipe can pass through.
 
 - **C) PaperQA2 "fake" agent mode** — ✅ DONE
   - Implemented as `papi ask --pqa-agent-type fake`.
 
-- **D) Better evidence block formatting**
+- **D) Better evidence block formatting** — ✅ DONE
   - The actual hallucination reduction comes from forcing the agent to cite evidence.
   - Add `papi ask --format evidence-blocks` that outputs structured JSON with `{paper, section, page, snippet}`.
   - Useful for agent integrations that want to enforce "no claim without citation".
-  - Medium complexity: parse PaperQA2/LEANN output and reformat.
+  - Status (Jan 2026): implemented for PaperQA2 backend only (`--backend pqa`). LEANN does not currently expose the same citation/evidence structure in paperpipe.
 
 - **E) Optional API reranking for LEANN**
   - LEANN's "reranking" is ANN-internal (approx → exact distance), not cross-encoder.
@@ -113,10 +113,9 @@ Implemented:
 **Implemented:**
 - `--pqa-raw` flag for full passthrough
 - `-v/--verbose` enables raw output
+- Default behavior suppresses PaperQA2 streaming logs and prints the filtered output (answer + citations) on completion
 
 **Remaining:**
-- Default behavior still shows PaperQA2's verbose streaming logs
-- Need to suppress logs by default and print concise output (progress, answer, sources)
 - Failure detection (crash loops, bad PDFs) with actionable guidance
 
 ### 5) `papi attach` (upgrade/attach files)

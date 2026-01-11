@@ -28,7 +28,7 @@ from datetime import datetime
 from difflib import SequenceMatcher, get_close_matches
 from io import StringIO
 from pathlib import Path
-from typing import Any, MutableMapping, Optional
+from typing import Any, MutableMapping, Optional, cast
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
@@ -4364,6 +4364,8 @@ _PQA_NOISY_STREAM_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^Loading\b"),
     re.compile(r"^Using settings\b"),
     re.compile(r"^\d{2}:\d{2}:\d{2}\s+\[(DEBUG|INFO|WARNING|ERROR)\]\s+"),
+    re.compile(r"^\[(DEBUG|INFO|WARNING|ERROR)\]\s+"),
+    re.compile(r"^(DEBUG|INFO|WARNING|ERROR)\s*[:\\-]\s+"),
 )
 
 
@@ -4374,8 +4376,149 @@ def _pqa_is_noisy_stream_line(line: str) -> bool:
     return any(p.search(s) for p in _PQA_NOISY_STREAM_PATTERNS)
 
 
+def _paperqa_ask_evidence_blocks(*, cmd: list[str], query: str) -> dict[str, Any]:
+    try:
+        import paperqa as paperqa_mod
+        from paperqa import Settings
+    except Exception as e:
+        raise click.ClickException(
+            "PaperQA2 Python package is required for --format evidence-blocks. "
+            "Install with: pip install 'paperpipe[paperqa]'"
+        ) from e
+
+    def _bool_flag(names: set[str]) -> bool:
+        return any(arg in names or any(arg.startswith(f"{n}=") for n in names) for arg in cmd)
+
+    def _extract(names: set[str]) -> Optional[str]:
+        return _extract_flag_value(cmd, names=names)
+
+    def _as_int(s: Optional[str]) -> Optional[int]:
+        if s is None:
+            return None
+        try:
+            return int(s)
+        except ValueError:
+            return None
+
+    def _as_float(s: Optional[str]) -> Optional[float]:
+        if s is None:
+            return None
+        try:
+            return float(s)
+        except ValueError:
+            return None
+
+    settings_kwargs: dict[str, Any] = {}
+
+    llm = _extract({"--llm"})
+    if llm:
+        settings_kwargs["llm"] = llm
+
+    embedding = _extract({"--embedding"})
+    if embedding:
+        settings_kwargs["embedding"] = embedding
+
+    summary_llm = _extract({"--summary_llm"})
+    if summary_llm:
+        settings_kwargs["summary_llm"] = summary_llm
+
+    temperature = _as_float(_extract({"--temperature"}))
+    if temperature is not None:
+        settings_kwargs["temperature"] = temperature
+
+    verbosity = _as_int(_extract({"--verbosity"}))
+    if verbosity is not None:
+        settings_kwargs["verbosity"] = verbosity
+
+    parsing_multimodal = _extract({"--parsing.multimodal"})
+    if parsing_multimodal:
+        settings_kwargs["parsing"] = {"multimodal": parsing_multimodal}
+
+    answer: dict[str, Any] = {}
+    answer_length = _extract({"--answer.answer_length", "--answer.answer-length"})
+    if answer_length:
+        answer["answer_length"] = answer_length
+    evidence_k = _as_int(_extract({"--answer.evidence_k", "--answer.evidence-k"}))
+    if evidence_k is not None:
+        answer["evidence_k"] = evidence_k
+    answer_max_sources = _as_int(_extract({"--answer.answer_max_sources", "--answer.answer-max-sources"}))
+    if answer_max_sources is not None:
+        answer["answer_max_sources"] = answer_max_sources
+    if answer:
+        settings_kwargs["answer"] = answer
+
+    agent: dict[str, Any] = {}
+    agent_type = _extract({"--agent.agent_type", "--agent.agent-type"})
+    if agent_type:
+        agent["agent_type"] = agent_type
+    timeout = _as_float(_extract({"--agent.timeout"}))
+    if timeout is not None:
+        agent["timeout"] = timeout
+    if _bool_flag({"--agent.rebuild_index", "--agent.rebuild-index"}):
+        agent["rebuild_index"] = True
+
+    idx: dict[str, Any] = {}
+    paper_directory = _extract({"--agent.index.paper_directory", "--agent.index.paper-directory"})
+    if paper_directory:
+        idx["paper_directory"] = paper_directory
+    index_directory = _extract({"--agent.index.index_directory", "--agent.index.index-directory"})
+    if index_directory:
+        idx["index_directory"] = index_directory
+    index_name = _extract({"--agent.index.name"}) or _extract({"--index", "-i"})
+    if index_name:
+        idx["name"] = index_name
+    sync_with = _extract({"--agent.index.sync_with_paper_directory", "--agent.index.sync-with-paper-directory"})
+    if sync_with is not None:
+        idx["sync_with_paper_directory"] = (sync_with or "").strip().lower() == "true"
+    concurrency = _as_int(_extract({"--agent.index.concurrency"}))
+    if concurrency is not None:
+        idx["concurrency"] = concurrency
+    if idx:
+        agent["index"] = idx
+    if agent:
+        settings_kwargs["agent"] = agent
+
+    settings = Settings(**cast(Any, settings_kwargs))
+    response = paperqa_mod.ask(query, settings=settings)
+
+    answer_text: str = getattr(response, "answer", "") or ""
+    session = getattr(response, "session", None)
+    contexts = getattr(session, "contexts", []) if session is not None else []
+
+    evidence: list[dict[str, Any]] = []
+    for ctx in contexts or []:
+        text_obj = getattr(ctx, "text", None)
+        paper = getattr(text_obj, "name", None) if text_obj is not None else None
+        snippet = getattr(ctx, "context", None) or getattr(ctx, "snippet", None) or ""
+        pages = (
+            getattr(ctx, "pages", None)
+            or (getattr(text_obj, "pages", None) if text_obj is not None else None)
+            or getattr(ctx, "page", None)
+        )
+        section = getattr(ctx, "section", None) or (
+            getattr(text_obj, "section", None) if text_obj is not None else None
+        )
+
+        item: dict[str, Any] = {"paper": paper, "snippet": snippet}
+        if pages is not None:
+            item["page"] = pages
+        if section is not None:
+            item["section"] = section
+        evidence.append(item)
+
+    return {"backend": "pqa", "question": query, "answer": answer_text, "evidence": evidence}
+
+
 @cli.command(context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))
 @click.argument("query")
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["text", "evidence-blocks"], case_sensitive=False),
+    default="text",
+    show_default=True,
+    help="Output format. Use 'evidence-blocks' for structured JSON with answer + cited evidence snippets.",
+)
 @click.option(
     "--pqa-llm",
     "llm",
@@ -4551,6 +4694,7 @@ def _pqa_is_noisy_stream_line(line: str) -> bool:
 def ask(
     ctx,
     query: str,
+    output_format: str,
     llm: Optional[str],
     summary_llm: Optional[str],
     embedding: Optional[str],
@@ -4589,7 +4733,10 @@ def ask(
     are passed directly to PaperQA2 (e.g., --agent.search_count 10).
     """
     backend_norm = (backend or "pqa").strip().lower()
+    output_format_norm = (output_format or "text").strip().lower()
     if backend_norm == "leann":
+        if output_format_norm != "text":
+            raise click.UsageError("--format evidence-blocks is only supported with --backend pqa.")
         if ctx.args:
             raise click.UsageError(
                 "Extra passthrough args are only supported for PaperQA2. For LEANN, use the supported --leann-* flags."
@@ -4625,6 +4772,10 @@ def ask(
         return
 
     if not shutil.which("pqa"):
+        if output_format_norm == "evidence-blocks":
+            raise click.ClickException(
+                "PaperQA2 is required for --format evidence-blocks. Install with: pip install 'paperpipe[paperqa]'"
+            )
         echo_error("PaperQA2 not installed. Install with: pip install paper-qa")
         click.echo("\nFalling back to local search...")
         # Do a simple local search instead
@@ -4916,6 +5067,15 @@ def ask(
 
     cmd.extend(["ask", query])
 
+    if output_format_norm == "evidence-blocks":
+        if ctx.args:
+            raise click.UsageError(
+                "--format evidence-blocks does not support extra passthrough args. "
+                "Use the first-class --pqa-* options instead."
+            )
+        click.echo(json.dumps(_paperqa_ask_evidence_blocks(cmd=cmd, query=query), indent=2))
+        return
+
     root_verbose = bool(ctx.find_root().params.get("verbose"))
     raw_output = bool(
         pqa_raw or root_verbose or (verbosity_source != click.core.ParameterSource.DEFAULT and (verbosity or 0) > 0)
@@ -4930,8 +5090,8 @@ def ask(
             echo_error("Start Ollama (`ollama serve`) or set OLLAMA_HOST / OLLAMA_API_BASE to a reachable server.")
             raise SystemExit(1)
 
-    # Run pqa with real-time output streaming while capturing for crash detection
-    # We merge stderr into stdout so we can stream everything in order
+    # Run pqa while capturing output for crash detection.
+    # We merge stderr into stdout so we can preserve ordering.
     proc = subprocess.Popen(
         cmd,
         cwd=PAPERS_DIR,
@@ -4944,9 +5104,9 @@ def ask(
     captured_output: list[str] = []
     assert proc.stdout is not None  # for type checker
     for line in proc.stdout:
-        if raw_output or not _pqa_is_noisy_stream_line(line):
-            click.echo(line, nl=False)
         captured_output.append(line)
+        if raw_output:
+            click.echo(line, nl=False)
     returncode = proc.wait()
 
     # Handle pqa failures gracefully
@@ -5007,6 +5167,11 @@ def ask(
         # Generic failure message if we can't determine the cause
         echo_error("PaperQA2 failed. Check the output above for details.")
         raise SystemExit(returncode)
+
+    if not raw_output:
+        for line in captured_output:
+            if not _pqa_is_noisy_stream_line(line):
+                click.echo(line, nl=False)
 
 
 @cli.command()

@@ -91,6 +91,7 @@ paperpipe supports two RAG backends for `papi ask`/`papi index`: PaperQA2 (`--ba
 | `papi ask "q" --pqa-summary-llm MODEL` | Use cheaper model for summarization |
 | `papi ask "q" --pqa-verbosity 2 --pqa-evidence-k 15` | More verbose, more evidence |
 | `papi ask "q" --pqa-rebuild-index` | Force full index rebuild |
+| `papi ask "q" --format evidence-blocks` | Output JSON with `{answer, evidence[]}` |
 | `papi models` | Probe which models work with your API keys |
 
 First-class options: `--pqa-llm`, `--pqa-summary-llm`, `--pqa-embedding`, `--pqa-temperature`, `--pqa-verbosity`,

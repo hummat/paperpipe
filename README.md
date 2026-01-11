@@ -330,7 +330,8 @@ The first query builds an index (cached under `.pqa_index/` or `.leann/`). Use `
 | `--pqa-concurrency INT` | Indexing concurrency (default: 1) |
 | `--pqa-rebuild-index` | Force full index rebuild |
 | `--pqa-retry-failed` | Retry previously failed documents |
-| `--pqa-raw` | Disable `papi ask` output filtering (also enabled by global `-v/--verbose`) |
+| `--format evidence-blocks` | Output JSON with `{answer, evidence[]}` (requires PaperQA2 Python package) |
+| `--pqa-raw` | Show raw PaperQA2 output (streaming logs + answer); disables `papi ask` output filtering (also enabled by global `-v/--verbose`) |
 
 Any additional arguments are passed through to `pqa` (e.g., `--agent.search_count 10`).
 

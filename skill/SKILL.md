@@ -81,6 +81,7 @@ papi search --hybrid "query"                # ranked + exact-hit boost (FTS + gr
 papi index               # build/update PaperQA2 index (backend: pqa)
 papi ask "question"      # PaperQA2 RAG (backend: pqa, if installed)
 papi ask "question" --pqa-agent-type fake   # cheaper/deterministic retrieval
+papi ask "question" --format evidence-blocks  # JSON output: answer + cited evidence snippets
 papi ask "question" --pqa-raw               # debugging: show raw PaperQA2 output
 papi index --backend leann
 papi ask "question" --backend leann
