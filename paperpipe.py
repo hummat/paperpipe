@@ -428,6 +428,22 @@ def default_pqa_concurrency() -> int:
     return 1  # Default to 1 for stability
 
 
+def default_search_mode() -> str:
+    """Default `papi search` mode.
+
+    Values:
+    - auto: current behavior (use FTS if `search.db` exists; else scan)
+    - fts: prefer FTS (still falls back to scan if `search.db` missing)
+    - scan: force in-memory scan
+    - hybrid: FTS + grep signal (falls back to non-hybrid if prerequisites missing)
+    """
+    mode = _setting_str(env="PAPERPIPE_SEARCH_MODE", keys=("search", "mode"), default="auto")
+    mode = mode.strip().lower()
+    if mode in {"auto", "fts", "scan", "hybrid"}:
+        return mode
+    return "auto"
+
+
 def default_leann_embedding_model() -> str:
     return _setting_str(
         env="PAPERPIPE_LEANN_EMBEDDING_MODEL",
@@ -2621,6 +2637,17 @@ def list_papers(tag: Optional[str], as_json: bool):
     show_default=True,
     help="Use SQLite FTS5 ranked search if `search.db` exists (falls back to scan). Use --no-fts to force scan.",
 )
+@click.option(
+    "--hybrid/--no-hybrid",
+    default=False,
+    show_default=True,
+    help="Hybrid search: FTS5 ranked search + grep signal boosting papers with exact matches.",
+)
+@click.option(
+    "--show-grep-hits",
+    is_flag=True,
+    help="With --hybrid, show a few grep hit lines under each matching paper.",
+)
 @click.pass_context
 def search(
     ctx: click.Context,
@@ -2635,6 +2662,8 @@ def search(
     fuzzy: bool,
     tex: bool,
     use_fts: bool,
+    hybrid: bool,
+    show_grep_hits: bool,
 ):
     """Search papers by title, tags, metadata, and local content."""
     grep_only_params = ("fixed_strings", "context_lines", "max_matches", "ignore_case", "as_json")
@@ -2654,6 +2683,37 @@ def search(
     if use_grep and ctx.get_parameter_source("use_fts") != click.core.ParameterSource.DEFAULT:
         raise click.UsageError("--fts/--no-fts do not apply with --grep/--rg.")
 
+    if hybrid and use_grep:
+        raise click.UsageError("--hybrid does not apply with --grep/--rg (use one or the other).")
+    if hybrid and not use_fts:
+        raise click.UsageError("--hybrid requires --fts (disable hybrid or drop --no-fts).")
+    if show_grep_hits and not hybrid:
+        raise click.UsageError("--show-grep-hits requires --hybrid.")
+
+    # Default search mode (env/config) only applies when the user didn't explicitly choose.
+    mode = default_search_mode()
+    use_grep_source = ctx.get_parameter_source("use_grep")
+    use_fts_source = ctx.get_parameter_source("use_fts")
+    hybrid_source = ctx.get_parameter_source("hybrid")
+
+    if (
+        use_grep_source == click.core.ParameterSource.DEFAULT
+        and use_fts_source == click.core.ParameterSource.DEFAULT
+        and hybrid_source == click.core.ParameterSource.DEFAULT
+    ):
+        if mode == "scan":
+            use_fts = False
+            hybrid = False
+        elif mode == "fts":
+            use_fts = True
+            hybrid = False
+        elif mode == "hybrid":
+            use_fts = True
+            hybrid = True
+        else:
+            # auto: keep current behavior (fts if db exists, else scan)
+            pass
+
     if use_grep:
         _search_grep(
             query=query,
@@ -2664,6 +2724,81 @@ def search(
             as_json=as_json,
             include_tex=tex,
         )
+        return
+
+    if hybrid:
+        db_path = _search_db_path()
+        if not db_path.exists():
+            # For configured default "hybrid", degrade to normal search rather than erroring.
+            if (
+                default_search_mode() == "hybrid"
+                and ctx.get_parameter_source("hybrid") == click.core.ParameterSource.DEFAULT
+            ):
+                hybrid = False
+            else:
+                raise click.ClickException(
+                    "Hybrid search requires `search.db`. Build it first: `papi search-index --rebuild`."
+                )
+
+        if hybrid:
+            fts_results = _search_fts(query=query, limit=max(limit, 50))
+            grep_matches = _collect_grep_matches(
+                query=query,
+                fixed_strings=True,
+                max_matches=200,
+                ignore_case=True,
+                include_tex=tex,
+            )
+        else:
+            fts_results = []
+            grep_matches = []
+        grep_by_paper: dict[str, list[dict[str, object]]] = {}
+        for m in grep_matches:
+            paper = str(m.get("paper") or "")
+            if paper:
+                grep_by_paper.setdefault(paper, []).append(m)
+
+        fts_by_name = {str(r["name"]): r for r in fts_results}
+        candidates = set(fts_by_name.keys()) | set(grep_by_paper.keys())
+
+        def fts_score(name: str) -> float:
+            raw = (fts_by_name.get(name) or {}).get("score")
+            if isinstance(raw, (int, float)):
+                return float(raw)
+            if isinstance(raw, str):
+                try:
+                    return float(raw)
+                except ValueError:
+                    return 0.0
+            return 0.0
+
+        def sort_key(name: str) -> tuple[int, float, int, str]:
+            grep_count = len(grep_by_paper.get(name, []))
+            score = fts_score(name)
+            return (1 if grep_count > 0 else 0, score, grep_count, name)
+
+        ranked = sorted(candidates, key=sort_key, reverse=True)[:limit]
+        if not ranked:
+            click.echo(f"No papers found matching '{query}'")
+            return
+
+        idx = load_index()
+        for name in ranked:
+            score = fts_score(name)
+            grep_count = len(grep_by_paper.get(name, []))
+            title = str((idx.get(name, {}) or {}).get("title") or fts_by_name.get(name, {}).get("title") or "Unknown")[
+                :80
+            ]
+            if grep_count:
+                click.echo(f"{name} (score: {score:.6g}, grep: {grep_count})")
+            else:
+                click.echo(f"{name} (score: {score:.6g})")
+            if title:
+                click.echo(f"  {title}...")
+            if show_grep_hits and grep_count:
+                for hit in grep_by_paper[name][:3]:
+                    click.echo(f"  {hit.get('path')}:{hit.get('line')}: {str(hit.get('text') or '').strip()}")
+            click.echo()
         return
 
     if use_fts and _search_db_path().exists():
@@ -2929,6 +3064,80 @@ def _parse_grep_matches(text: str) -> list[dict[str, object]]:
             }
         )
     return matches
+
+
+def _collect_grep_matches(
+    *,
+    query: str,
+    fixed_strings: bool,
+    max_matches: int,
+    ignore_case: bool,
+    include_tex: bool,
+) -> list[dict[str, object]]:
+    include_globs = ["*/summary.md", "*/equations.md", "*/notes.md", "*/meta.json"]
+    if include_tex:
+        include_globs.append("*/source.tex")
+
+    if not PAPERS_DIR.exists():
+        return []
+
+    rg = shutil.which("rg")
+    if rg:
+        cmd = [
+            rg,
+            "--color=never",
+            "--no-heading",
+            "--with-filename",
+            "--line-number",
+            "--no-context-separator",
+            "--context",
+            "0",
+            "--max-count",
+            str(max_matches),
+        ]
+        if fixed_strings:
+            cmd.append("--fixed-strings")
+        if ignore_case:
+            cmd.append("--ignore-case")
+        for glob_pat in include_globs:
+            cmd.extend(["--glob", glob_pat])
+        cmd.append(query)
+        cmd.append(str(PAPERS_DIR))
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode == 0:
+            out = _relativize_grep_output(proc.stdout, root_dir=PAPERS_DIR)
+            return _parse_grep_matches(out)
+        if proc.returncode == 1:
+            return []
+        raise click.ClickException((proc.stderr or proc.stdout or "").strip() or "ripgrep failed")
+
+    grep = shutil.which("grep")
+    if grep:
+        cmd = [
+            grep,
+            "-RIn",
+            "--color=never",
+            "-C0",
+            "--binary-files=without-match",
+            "-m",
+            str(max_matches),
+        ]
+        if fixed_strings:
+            cmd.append("-F")
+        if ignore_case:
+            cmd.append("-i")
+        for glob_pat in include_globs:
+            cmd.append(f"--include={Path(glob_pat).name}")
+        cmd.extend([query, str(PAPERS_DIR)])
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode == 0:
+            out = _relativize_grep_output(proc.stdout, root_dir=PAPERS_DIR)
+            return _parse_grep_matches(out)
+        if proc.returncode == 1:
+            return []
+        raise click.ClickException((proc.stderr or proc.stdout or "").strip() or "grep failed")
+
+    return []
 
 
 def _search_db_path() -> Path:

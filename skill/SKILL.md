@@ -77,6 +77,7 @@ export PAPERPIPE_LLM_TEMPERATURE=0.3
 papi search --grep --fixed-strings "query"  # exact text search (fast, no LLM)
 papi search-index --rebuild                 # build/update ranked search index (SQLite FTS5 / BM25)
 papi search --fts "query"                   # ranked search (BM25)
+papi search --hybrid "query"                # ranked + exact-hit boost (FTS + grep)
 papi index               # build/update PaperQA2 index (backend: pqa)
 papi ask "question"      # PaperQA2 RAG (backend: pqa, if installed)
 papi ask "question" --pqa-agent-type fake   # cheaper/deterministic retrieval

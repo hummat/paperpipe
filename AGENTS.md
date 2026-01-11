@@ -94,5 +94,6 @@ Runtime data is stored outside the repo in `~/.paperpipe/` (PDFs, LaTeX, summari
   or cannot use the default `~/.cache/uv`); in that case either re-run with network/permissions or fall back to
   a pre-provisioned venv (`.venv/bin/ruff`, `.venv/bin/pyright`, `.venv/bin/pytest`). If needed, set
   `UV_CACHE_DIR=$PWD/.uv-cache` and `UV_LINK_MODE=copy` to avoid cache/FS issues.
+- For any code change, explicitly check whether any docs/prompts need updating (even if the conclusion is “no doc impact”).
 - When changing CLI surface area (commands/options/output) or user-facing behavior (env vars, database layout),
   update `README.md`, `AGENT_INTEGRATION.md`, `skill/SKILL.md`, and `skill/commands.md` as needed.

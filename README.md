@@ -126,6 +126,13 @@ papi search --fts "surface reconstruction"
 papi search --no-fts "surface reconstruction"
 ```
 
+Hybrid ranked+exact search:
+
+```bash
+papi search --hybrid "surface reconstruction"
+papi search --hybrid --show-grep-hits "surface reconstruction"
+```
+
 ### What are FTS and BM25?
 
 - **FTS** = *Full-Text Search*. Here it means SQLite’s FTS5 extension, which builds an inverted index so searches don’t
@@ -150,6 +157,24 @@ https://en.wikipedia.org/wiki/Okapi_BM25
 - **MCP** = Model Context Protocol: lets tools/agents call into paperpipe’s retrieval helpers (e.g. “retrieve chunks”)
   without copying PDFs into the chat.
 - **Staging dir** (`.pqa_papers/`) = PDF-only mirror used so RAG backends don’t index generated Markdown.
+
+</details>
+
+<details>
+<summary>Config: default search mode</summary>
+
+Set a default for `papi search` (CLI flags still win):
+
+```bash
+export PAPERPIPE_SEARCH_MODE=auto   # auto|fts|scan|hybrid
+```
+
+Or in `config.toml`:
+
+```toml
+[search]
+mode = "auto" # auto|fts|scan|hybrid
+```
 
 </details>
 

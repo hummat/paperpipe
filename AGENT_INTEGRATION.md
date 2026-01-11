@@ -19,6 +19,7 @@ Rules:
 - For “which paper mentions X?”:
   - Exact string hits (fast): `papi search --grep --fixed-strings "X"`
   - Ranked search (BM25): `papi search-index --rebuild` then `papi search --fts "X"`
+  - Hybrid (ranked + exact boost): `papi search --hybrid "X"`
 - If the agent can’t read `~/.paperpipe/`, export context into the repo: `papi export <papers...> --level equations --to ./paper-context/`.
 - Use `papi ask "..."` only when you explicitly want RAG synthesis (PaperQA2 default if installed; optional `--backend leann`).
   - For cheaper/deterministic queries: `papi ask "..." --pqa-agent-type fake`

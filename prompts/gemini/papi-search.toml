@@ -3,6 +3,7 @@ prompt = """
 Search the PaperPipe database for: `{{args}}`
 
 Tip: use `--grep` for exact hits and `--fts` for ranked BM25 search (after `papi search-index --rebuild`).
+Tip: use `--hybrid` for ranked results boosted by exact grep hits.
 
 Search results:
 !{papi search {{args}}}

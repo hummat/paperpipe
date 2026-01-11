@@ -79,18 +79,11 @@ Goal: make `papi search` fast and useful without requiring LLM/embedding APIs.
   - `papi search --fts` (enabled by default) — queries with BM25 ranking
   - `--include-tex` option for indexing LaTeX source
 
+- **C) Hybrid: ripgrep + FTS5 fusion** — ✅ DONE
+
+  Implemented as `papi search --hybrid "query"` (optionally `--show-grep-hits`).
+
 **Remaining:**
-
-- **C) Hybrid: ripgrep + FTS5 fusion**
-
-  **Utility: HIGH** — best of both for paper search.
-  **Complexity: MEDIUM** — need result merging/dedup logic.
-
-  - Exact search (`--grep`): ripgrep for precise matches
-  - Ranked search (default): FTS5 with BM25
-  - Hybrid mode (`--hybrid`): boost exact rg hits, merge with BM25 ranked results
-
-  This mirrors what works for RAG (hybrid lexical + semantic), but without embeddings.
 
 - **D) Optional: reuse PaperQA2's tantivy index**
 

@@ -135,44 +135,7 @@ class TestConfigToml:
         assert paperpipe.normalize_tag("cv") == "computer-vision"
 
 
-class TestOllamaHelpers:
-    def test_normalize_ollama_base_url_adds_scheme_and_strips_v1(self) -> None:
-        assert paperpipe._normalize_ollama_base_url("localhost:11434") == "http://localhost:11434"
-        assert paperpipe._normalize_ollama_base_url("http://localhost:11434/") == "http://localhost:11434"
-        assert paperpipe._normalize_ollama_base_url("http://localhost:11434/v1") == "http://localhost:11434"
-
-    def test_prepare_ollama_env_sets_both_vars(self) -> None:
-        env: dict[str, str] = {}
-        paperpipe._prepare_ollama_env(env)
-        assert env["OLLAMA_API_BASE"] == "http://localhost:11434"
-        assert env["OLLAMA_HOST"] == "http://localhost:11434"
-
-        env2: dict[str, str] = {"OLLAMA_HOST": "localhost:11434"}
-        paperpipe._prepare_ollama_env(env2)
-        assert env2["OLLAMA_API_BASE"] == "http://localhost:11434"
-        assert env2["OLLAMA_HOST"] == "http://localhost:11434"
-
-    def test_ollama_reachability_error_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        class _Resp:
-            status = 200
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, tb):
-                return False
-
-        monkeypatch.setattr(paperpipe, "urlopen", lambda *args, **kwargs: _Resp())
-        assert paperpipe._ollama_reachability_error(api_base="http://localhost:11434") is None
-
-    def test_ollama_reachability_error_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        def boom(*args, **kwargs):
-            raise OSError("connection refused")
-
-        monkeypatch.setattr(paperpipe, "urlopen", boom)
-        err = paperpipe._ollama_reachability_error(api_base="http://localhost:11434")
-        assert err is not None and "not reachable" in err
-
+class TestConfigPrecedence:
     def test_env_overrides_config(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
         (temp_db / "config.toml").write_text(
             "\n".join(
@@ -343,6 +306,122 @@ class TestOllamaHelpers:
         assert paperpipe.default_pqa_max_sources() == 10
         assert paperpipe.default_pqa_timeout() == 600.5
         assert paperpipe.default_pqa_concurrency() == 2
+
+
+class TestOllamaHelpers:
+    def test_normalize_ollama_base_url_adds_scheme_and_strips_v1(self) -> None:
+        assert paperpipe._normalize_ollama_base_url("localhost:11434") == "http://localhost:11434"
+        assert paperpipe._normalize_ollama_base_url("http://localhost:11434/") == "http://localhost:11434"
+        assert paperpipe._normalize_ollama_base_url("http://localhost:11434/v1") == "http://localhost:11434"
+
+    def test_prepare_ollama_env_sets_both_vars(self) -> None:
+        env: dict[str, str] = {}
+        paperpipe._prepare_ollama_env(env)
+        assert env["OLLAMA_API_BASE"] == "http://localhost:11434"
+        assert env["OLLAMA_HOST"] == "http://localhost:11434"
+
+        env2: dict[str, str] = {"OLLAMA_HOST": "localhost:11434"}
+        paperpipe._prepare_ollama_env(env2)
+        assert env2["OLLAMA_API_BASE"] == "http://localhost:11434"
+        assert env2["OLLAMA_HOST"] == "http://localhost:11434"
+
+    def test_ollama_reachability_error_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        class _Resp:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        monkeypatch.setattr(paperpipe, "urlopen", lambda *args, **kwargs: _Resp())
+        assert paperpipe._ollama_reachability_error(api_base="http://localhost:11434") is None
+
+    def test_ollama_reachability_error_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def boom(*args, **kwargs):
+            raise OSError("connection refused")
+
+        monkeypatch.setattr(paperpipe, "urlopen", boom)
+        err = paperpipe._ollama_reachability_error(api_base="http://localhost:11434")
+        assert err is not None and "not reachable" in err
+
+
+class TestGrepCollection:
+    def test_collect_grep_matches_uses_rg_and_parses(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        (temp_db / "papers" / "p").mkdir(parents=True)
+
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/rg" if cmd == "rg" else None)
+
+        calls: list[list[str]] = []
+
+        def fake_run(args: list[str], **kwargs):
+            calls.append(args)
+            return types.SimpleNamespace(returncode=0, stdout="p/summary.md:2:hit\n", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        matches = paperpipe._collect_grep_matches(
+            query="hit",
+            fixed_strings=True,
+            max_matches=10,
+            ignore_case=True,
+            include_tex=False,
+        )
+        assert matches and matches[0]["paper"] == "p"
+        assert matches[0]["path"] == "p/summary.md"
+        assert matches[0]["line"] == 2
+        assert "--context" in calls[0] and "0" in calls[0]
+        assert "--fixed-strings" in calls[0]
+        assert "--ignore-case" in calls[0]
+
+    def test_collect_grep_matches_rg_no_hits_returns_empty(
+        self, temp_db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (temp_db / "papers" / "p").mkdir(parents=True)
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/rg" if cmd == "rg" else None)
+
+        def fake_run(args: list[str], **kwargs):
+            return types.SimpleNamespace(returncode=1, stdout="", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        matches = paperpipe._collect_grep_matches(
+            query="nope",
+            fixed_strings=True,
+            max_matches=10,
+            ignore_case=False,
+            include_tex=False,
+        )
+        assert matches == []
+
+    def test_collect_grep_matches_falls_back_to_grep(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        (temp_db / "papers" / "p").mkdir(parents=True)
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/bin/grep" if cmd == "grep" else None)
+
+        def fake_run(args: list[str], **kwargs):
+            return types.SimpleNamespace(returncode=0, stdout="p/notes.md:5:hit\n", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        matches = paperpipe._collect_grep_matches(
+            query="hit",
+            fixed_strings=False,
+            max_matches=10,
+            ignore_case=True,
+            include_tex=False,
+        )
+        assert matches and matches[0]["path"] == "p/notes.md"
+
+    def test_collect_grep_matches_no_tools_returns_empty(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        (temp_db / "papers").mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(shutil, "which", lambda cmd: None)
+        matches = paperpipe._collect_grep_matches(
+            query="x",
+            fixed_strings=True,
+            max_matches=10,
+            ignore_case=False,
+            include_tex=False,
+        )
+        assert matches == []
 
 
 class TestPqaIndexNaming:
@@ -927,6 +1006,104 @@ class TestCli:
         result = runner.invoke(paperpipe.cli, ["search", "--fts", "surface"])
         assert result.exit_code == 0, result.output
         assert "geom-paper" in result.output
+
+    def test_search_hybrid_boosts_grep_hits(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        if not fts5_available():
+            pytest.skip("SQLite FTS5 not available")
+
+        # Paper A: only in FTS (title match)
+        paper_a = temp_db / "papers" / "paper-a"
+        paper_a.mkdir(parents=True)
+        (paper_a / "meta.json").write_text(json.dumps({"title": "Surface Reconstruction A", "authors": [], "tags": []}))
+        (paper_a / "summary.md").write_text("Nothing.\n")
+
+        # Paper B: has an exact grep hit
+        paper_b = temp_db / "papers" / "paper-b"
+        paper_b.mkdir(parents=True)
+        (paper_b / "meta.json").write_text(json.dumps({"title": "Unrelated", "authors": [], "tags": []}))
+        (paper_b / "summary.md").write_text("surface reconstruction\n")
+
+        paperpipe.save_index(
+            {
+                "paper-a": {"arxiv_id": None, "title": "Surface Reconstruction A", "tags": []},
+                "paper-b": {"arxiv_id": None, "title": "Unrelated", "tags": []},
+            }
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["search-index", "--rebuild"])
+        assert result.exit_code == 0, result.output
+
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/rg" if cmd == "rg" else None)
+
+        def fake_run(args: list[str], **kwargs):
+            # Simulate ripgrep returning a hit in paper-b only.
+            return types.SimpleNamespace(
+                returncode=0, stdout="paper-b/summary.md:1:surface reconstruction\n", stderr=""
+            )
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        result = runner.invoke(paperpipe.cli, ["search", "--hybrid", "surface reconstruction"])
+        assert result.exit_code == 0, result.output
+        # Hybrid should annotate grep hits.
+        assert "paper-b" in result.output
+        assert "grep:" in result.output
+
+    def test_search_hybrid_show_grep_hits_prints_lines(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        if not fts5_available():
+            pytest.skip("SQLite FTS5 not available")
+
+        paper_b = temp_db / "papers" / "paper-b"
+        paper_b.mkdir(parents=True)
+        (paper_b / "meta.json").write_text(json.dumps({"title": "Unrelated", "authors": [], "tags": []}))
+        (paper_b / "summary.md").write_text("surface reconstruction\n")
+
+        paperpipe.save_index({"paper-b": {"arxiv_id": None, "title": "Unrelated", "tags": []}})
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["search-index", "--rebuild"])
+        assert result.exit_code == 0, result.output
+
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/rg" if cmd == "rg" else None)
+
+        def fake_run(args: list[str], **kwargs):
+            return types.SimpleNamespace(
+                returncode=0, stdout="paper-b/summary.md:1:surface reconstruction\n", stderr=""
+            )
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        result = runner.invoke(paperpipe.cli, ["search", "--hybrid", "--show-grep-hits", "surface reconstruction"])
+        assert result.exit_code == 0, result.output
+        assert "paper-b/summary.md:1:" in result.output
+
+    def test_search_hybrid_requires_search_db(self, temp_db: Path) -> None:
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["search", "--hybrid", "x"])
+        assert result.exit_code != 0
+        assert "search-index" in result.output
+
+    def test_search_mode_env_scan_forces_scan(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        if not fts5_available():
+            pytest.skip("SQLite FTS5 not available")
+
+        paper_dir = temp_db / "papers" / "p"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "meta.json").write_text(json.dumps({"title": "Surface Reconstruction", "authors": [], "tags": []}))
+        (paper_dir / "summary.md").write_text("surface reconstruction\n")
+        (paper_dir / "equations.md").write_text("surface reconstruction\n")
+        (paper_dir / "notes.md").write_text("surface reconstruction\n")
+
+        paperpipe.save_index({"p": {"arxiv_id": None, "title": "Surface Reconstruction", "tags": ["tag"]}})
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["search-index", "--rebuild"])
+        assert result.exit_code == 0, result.output
+
+        monkeypatch.setenv("PAPERPIPE_SEARCH_MODE", "scan")
+        result = runner.invoke(paperpipe.cli, ["search", "surface reconstruction"])
+        assert result.exit_code == 0, result.output
+        assert "Matches:" in result.output
 
     def test_search_fts_schema_mismatch_prompts_rebuild(self, temp_db: Path) -> None:
         if not fts5_available():

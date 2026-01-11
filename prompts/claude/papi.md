@@ -7,7 +7,7 @@ Task: Given the user's question/context: $ARGUMENTS
 Output the exact shell command(s) to run next, choosing the cheapest thing that can answer.
 
 Rules:
-- Prefer: `papi search` (use `--grep --fixed-strings` for exact hits; use `--fts` after `papi search-index --rebuild` for ranked BM25)
+- Prefer: `papi search` (use `--grep --fixed-strings` for exact hits; use `--fts` after `papi search-index --rebuild` for ranked BM25; use `--hybrid` for ranked+exact)
   / `papi list` / `papi show ... --level eq|tex|summary` / `papi notes` / `papi export`.
 - Recommend `papi ask` only if the user explicitly asked for RAG/synthesis OR `search/show` cannot answer.
 - If network/LLM should be avoided, include `--no-llm` where relevant and avoid `papi ask`.

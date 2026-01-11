@@ -12,6 +12,7 @@
 | `papi search --grep QUERY` | Exact text search (ripgrep/grep) |
 | `papi search-index --rebuild` | Build ranked search index (`search.db`) |
 | `papi search --fts "query"` | Ranked search (SQLite FTS5 / BM25; requires `search.db`) |
+| `papi search --hybrid "query"` | Ranked search with exact-hit boost (FTS + grep) |
 | `papi show <papers...>` | Show paper details or print stored content |
 | `papi notes <paper>` | Open or print per-paper implementation notes |
 | `papi install [components...]` | Install integrations (components: `skill`, `prompts`, `mcp`) |
