@@ -93,7 +93,8 @@ pip install -e ".[all]"
 | `papi add <arxiv-id-or-url>` | Add a paper (downloads PDF + LaTeX, generates summary/equations) |
 | `papi add --pdf file.pdf --title "..."` | Add a local PDF |
 | `papi list` | List papers (filter with `--tag`) |
-| `papi search "query"` | Search across titles, tags, summaries, equations (use `--tex` to include LaTeX) |
+| `papi search "query"` | Search across titles, tags, summaries, equations (`--grep` exact, `--fts` ranked BM25) |
+| `papi search-index` | Build/update ranked search index (`search.db`) |
 | `papi show <paper> --level eq` | Print equations (best for agent sessions) |
 | `papi show <paper> --level tex` | Print LaTeX source |
 | `papi show <paper> --level summary` | Print summary |
@@ -107,6 +108,50 @@ pip install -e ".[all]"
 | `papi path` | Print database location |
 
 Run `papi --help` or `papi <command> --help` for full options.
+
+Exact text search (fast, no LLM required):
+
+```bash
+papi search --grep "AdamW"
+papi search --grep "Eq\\. 7"          # regex mode (escape if needed)
+papi search --grep --fixed-strings "λ=0.1"
+```
+
+Ranked search (BM25 via SQLite FTS5, no LLM required):
+
+```bash
+papi search-index --rebuild           # builds <paper_db>/search.db
+papi search --fts "surface reconstruction"
+# Force the old in-memory scan (slower, no sqlite):
+papi search --no-fts "surface reconstruction"
+```
+
+### What are FTS and BM25?
+
+- **FTS** = *Full-Text Search*. Here it means SQLite’s FTS5 extension, which builds an inverted index so searches don’t
+  have to rescan every file on every query.
+- **BM25** = *Okapi BM25*, a standard relevance-ranking function used by many search engines. It ranks results based on
+  term frequency, inverse document frequency, and document length normalization.
+
+References (external):
+```text
+https://sqlite.org/fts5.html
+https://en.wikipedia.org/wiki/Okapi_BM25
+```
+
+<details>
+<summary>Glossary (RAG, embeddings, MCP, LiteLLM)</summary>
+
+- **RAG** = retrieval‑augmented generation: retrieve relevant paper passages first, then generate an answer grounded in
+  those passages.
+- **Embedding model** = turns text into vectors for semantic search; changing it usually requires rebuilding an index.
+- **LiteLLM model id** = the model string you pass to LiteLLM (provider/model routing), e.g. `gpt-4o`, `gemini/...`,
+  `ollama/...`.
+- **MCP** = Model Context Protocol: lets tools/agents call into paperpipe’s retrieval helpers (e.g. “retrieve chunks”)
+  without copying PDFs into the chat.
+- **Staging dir** (`.pqa_papers/`) = PDF-only mirror used so RAG backends don’t index generated Markdown.
+
+</details>
 
 ## Agent integration
 
@@ -252,6 +297,7 @@ The first query builds an index (cached under `.pqa_index/` or `.leann/`). Use `
 | `--pqa-embedding MODEL` | Embedding model for text chunks |
 | `--pqa-temperature FLOAT` | LLM temperature (0.0-1.0) |
 | `--pqa-verbosity INT` | Logging level (0-3; 3 = log all LLM calls) |
+| `--pqa-agent-type TEXT` | Agent type (e.g., `fake` for deterministic low-token retrieval) |
 | `--pqa-answer-length TEXT` | Target answer length (e.g., "about 200 words") |
 | `--pqa-evidence-k INT` | Number of evidence pieces to retrieve (default: 10) |
 | `--pqa-max-sources INT` | Max sources to cite in answer (default: 5) |
@@ -259,6 +305,7 @@ The first query builds an index (cached under `.pqa_index/` or `.leann/`). Use `
 | `--pqa-concurrency INT` | Indexing concurrency (default: 1) |
 | `--pqa-rebuild-index` | Force full index rebuild |
 | `--pqa-retry-failed` | Retry previously failed documents |
+| `--pqa-raw` | Disable `papi ask` output filtering (also enabled by global `-v/--verbose`) |
 
 Any additional arguments are passed through to `pqa` (e.g., `--agent.search_count 10`).
 
@@ -345,6 +392,17 @@ export OPENROUTER_API_KEY=...   # 200+ models
 # Override the default model
 export PAPERPIPE_LLM_MODEL=gpt-4o
 export PAPERPIPE_LLM_TEMPERATURE=0.3  # default: 0.3
+```
+
+### Local-only via Ollama
+
+```bash
+export PAPERPIPE_LLM_MODEL=ollama/qwen3:8b
+export PAPERPIPE_EMBEDDING_MODEL=ollama/nomic-embed-text
+
+# Either env var name works (paperpipe normalizes both):
+export OLLAMA_HOST=http://localhost:11434
+# export OLLAMA_API_BASE=http://localhost:11434
 ```
 
 Check which models work with your keys:

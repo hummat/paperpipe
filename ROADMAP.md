@@ -36,10 +36,8 @@ Goal: improve RAG quality for paper implementation workflows without adding new 
   - Expose via `--leann-grep` or similar; fuse grep + vector results.
   - Medium complexity: may need result merging logic if LEANN doesn't do it internally.
 
-- **C) PaperQA2 "fake" agent mode**
-  - PaperQA2 has `agent_type = "fake"` for deterministic, low-token retrieval (search → gather → answer, no LLM agent loop).
-  - Expose via `papi ask --pqa-agent-type fake` for faster/cheaper queries.
-  - Low complexity: just pass `--agent.agent_type fake` to `pqa`.
+- **C) PaperQA2 "fake" agent mode** — ✅ DONE
+  - Implemented as `papi ask --pqa-agent-type fake`.
 
 - **D) Better evidence block formatting**
   - The actual hallucination reduction comes from forcing the agent to cite evidence.
@@ -57,42 +55,78 @@ Goal: improve RAG quality for paper implementation workflows without adding new 
 - Adding Weaviate/Qdrant/Vespa as backends (duplicates PaperQA2's Qdrant option, high complexity).
 - Building a custom vector index (PaperQA2 and LEANN already exist).
 
-### 2) Local LLM via Ollama (core + `papi ask`)
+### 2) Non-LLM search improvements (`papi search`)
 
-Goal: make a zero-cloud setup the default happy path.
+Goal: make `papi search` fast and useful without requiring LLM/embedding APIs.
 
-**Utility: HIGH** — aligns with local-first principle, requested often.
-**Complexity: LOW-MEDIUM** — mostly config/docs, some error handling.
+**Completed:**
 
-- **Core paperpipe generation**
-  - Support LiteLLM Ollama model ids.
-  - Document a working baseline:
-    - LLM: `PAPERPIPE_LLM_MODEL=ollama/<chat-model>`
-    - Embeddings: `PAPERPIPE_EMBEDDING_MODEL=ollama/<embed-model>`
-  - Make Ollama base URL configuration "just work":
-    - Detect/normalize common env var names (`OLLAMA_HOST` vs `OLLAMA_API_BASE`).
-    - Fail with a clear error when Ollama isn't reachable.
-- **PaperQA2 via `papi ask`**
-  - Ensure `--pqa-llm` / `--pqa-embedding` work cleanly with Ollama identifiers.
-  - Add docs/examples for local-only `papi ask`.
+- **A) ripgrep (rg) for exact text search** — ✅ DONE
 
-### 3) `papi ask`: PaperQA2 output stream hygiene
+  Implemented as `papi search --grep "pattern"` with options:
+  - `--fixed-strings` / `--regex` (literal vs regex)
+  - `--context N` (context lines)
+  - `--ignore-case` / `--case-sensitive`
+  - `--max-matches N`
+  - `--json` (machine-readable output)
 
-Goal: make `papi ask` output match paperpipe's style.
+  Falls back to `grep` if `rg` not installed.
 
-**Utility: HIGH** — current output is noisy and hard to parse.
-**Complexity: MEDIUM** — stdout/stderr capture, parsing, failure detection.
+- **B) SQLite FTS5 for ranked search (BM25)** — ✅ DONE
 
-- **Default behavior**
-  - Suppress PaperQA2's verbose streaming logs by default.
-  - Print concise output: progress, answer, cited sources.
-- **Debug/verbose mode**
-  - `-v/--verbose` surfaces raw output.
-  - `--pqa-raw` for full passthrough.
-- **Failure handling**
-  - Detect common failures (crash loops, bad PDFs) and show actionable guidance.
+  Implemented as:
+  - `papi search-index` — builds/updates `~/.paperpipe/search.db`
+  - `papi search --fts` (enabled by default) — queries with BM25 ranking
+  - `--include-tex` option for indexing LaTeX source
 
-### 4) `papi attach` (upgrade/attach files)
+**Remaining:**
+
+- **C) Hybrid: ripgrep + FTS5 fusion**
+
+  **Utility: HIGH** — best of both for paper search.
+  **Complexity: MEDIUM** — need result merging/dedup logic.
+
+  - Exact search (`--grep`): ripgrep for precise matches
+  - Ranked search (default): FTS5 with BM25
+  - Hybrid mode (`--hybrid`): boost exact rg hits, merge with BM25 ranked results
+
+  This mirrors what works for RAG (hybrid lexical + semantic), but without embeddings.
+
+- **D) Optional: reuse PaperQA2's tantivy index**
+
+  **Utility: MEDIUM** — avoids duplicate indexing if user already ran `papi ask`.
+  **Complexity: MEDIUM** — need to understand PaperQA2's index format.
+  **Deps:** `paperqa` must be installed.
+
+  [tantivy-py](https://github.com/quickwit-oss/tantivy-py) is what PaperQA2 uses internally. If the index exists at `~/.paperpipe/.pqa_index/`, we could query it directly for `papi search`.
+
+  Deferred until FTS5 is implemented — may not be worth the complexity.
+
+**Not doing:**
+- Adding tantivy as a standalone dep for `papi search` (FTS5 is good enough, no new deps).
+
+### 3) Local LLM via Ollama (core + `papi ask`) — ✅ DONE
+
+Implemented:
+- Detects `ollama/` model IDs and normalizes env vars (`OLLAMA_HOST`, `OLLAMA_API_BASE`, `OLLAMA_BASE_URL`, `OLLAMA_API_BASE_URL`)
+- Reachability check with clear error message: "Start Ollama (`ollama serve`) or set OLLAMA_HOST..."
+- Works for both core generation (`papi add/regenerate`) and RAG (`papi ask --pqa-llm ollama/...`)
+- LEANN defaults to Ollama (`DEFAULT_LEANN_EMBEDDING_MODE = "ollama"`)
+
+**Remaining:** Documentation/examples for local-only workflows.
+
+### 4) `papi ask`: PaperQA2 output stream hygiene — PARTIAL
+
+**Implemented:**
+- `--pqa-raw` flag for full passthrough
+- `-v/--verbose` enables raw output
+
+**Remaining:**
+- Default behavior still shows PaperQA2's verbose streaming logs
+- Need to suppress logs by default and print concise output (progress, answer, sources)
+- Failure detection (crash loops, bad PDFs) with actionable guidance
+
+### 5) `papi attach` (upgrade/attach files)
 
 Goal: let users fix missing/low-quality assets after initial ingest.
 
@@ -103,7 +137,7 @@ Goal: let users fix missing/low-quality assets after initial ingest.
 - `papi attach PAPER --source /path/to/main.tex`
 - Options: `--regen auto|equations|summary|tags|all`, `--backup`
 
-### 5) `papi bibtex` (export)
+### 6) `papi bibtex` (export)
 
 Goal: easy citation export for LaTeX workflows.
 
@@ -198,6 +232,22 @@ High complexity. Users can export from Zotero to BibTeX and use `papi import-bib
 ### Non-arXiv ingestion via `papi add --pdf` (MVP)
 
 Implemented (see README.md → "Non-arXiv Papers").
+
+### ripgrep exact text search (`papi search --grep`)
+
+Implemented with full option support: `--fixed-strings`, `--context`, `--ignore-case`, `--max-matches`, `--json`. Falls back to `grep` if `rg` not installed.
+
+### SQLite FTS5 ranked search (`papi search --fts`, `papi search-index`)
+
+Implemented with BM25 ranking, field weighting, porter stemmer. Index stored at `~/.paperpipe/search.db`.
+
+### Local LLM via Ollama
+
+Implemented with env var normalization (`OLLAMA_HOST`, etc.), reachability checks, clear error messages. Works for core generation and `papi ask`.
+
+### PaperQA2 "fake" agent mode (`papi ask --pqa-agent-type`)
+
+Implemented — passes through to `pqa --agent.agent_type`.
 
 ---
 

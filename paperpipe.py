@@ -16,6 +16,7 @@ import os
 import pickle
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tarfile
@@ -27,8 +28,9 @@ from datetime import datetime
 from difflib import SequenceMatcher, get_close_matches
 from io import StringIO
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, MutableMapping, Optional
 from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 import click
 
@@ -117,6 +119,50 @@ DEFAULT_LEANN_LLM_MODEL = "olmo-3:7b"
 
 
 _CONFIG_CACHE: Optional[tuple[Path, Optional[float], dict[str, Any]]] = None
+_SEARCH_DB_SCHEMA_VERSION = "1"
+
+
+def _is_ollama_model_id(model_id: Optional[str]) -> bool:
+    return bool(model_id) and model_id.strip().lower().startswith("ollama/")
+
+
+def _normalize_ollama_base_url(raw: str) -> str:
+    base = (raw or "").strip()
+    if not base:
+        return "http://localhost:11434"
+    if not base.startswith(("http://", "https://")):
+        base = f"http://{base}"
+    base = base.rstrip("/")
+    if base.endswith("/v1"):
+        base = base[: -len("/v1")]
+    return base
+
+
+def _prepare_ollama_env(env: MutableMapping[str, str]) -> MutableMapping[str, str]:
+    raw = (
+        env.get("OLLAMA_API_BASE")
+        or env.get("OLLAMA_API_BASE_URL")
+        or env.get("OLLAMA_BASE_URL")
+        or env.get("OLLAMA_HOST")
+    )
+    base = _normalize_ollama_base_url(raw or "http://localhost:11434")
+    env["OLLAMA_API_BASE"] = base
+    env["OLLAMA_HOST"] = base
+    return env
+
+
+def _ollama_reachability_error(*, api_base: str, timeout_sec: float = 1.5) -> Optional[str]:
+    api_base = _normalize_ollama_base_url(api_base)
+    url = f"{api_base}/api/version"
+    try:
+        req = Request(url, method="GET")
+        with urlopen(req, timeout=timeout_sec) as resp:
+            if 200 <= int(getattr(resp, "status", 200)) < 400:
+                return None
+        return f"Ollama returned non-OK status when probing {url!r}."
+    except Exception as e:
+        msg = str(e).split("\n")[0][:160]
+        return f"Ollama not reachable at {api_base!r} ({type(e).__name__}: {msg})."
 
 
 def _config_path() -> Path:
@@ -1478,6 +1524,13 @@ def _run_llm(prompt: str, *, purpose: str) -> Optional[str]:
         return None
 
     model = default_llm_model()
+    if _is_ollama_model_id(model):
+        _prepare_ollama_env(os.environ)
+        err = _ollama_reachability_error(api_base=os.environ["OLLAMA_API_BASE"])
+        if err:
+            echo_error(err)
+            echo_error("Start Ollama (`ollama serve`) or set OLLAMA_HOST / OLLAMA_API_BASE to a reachable server.")
+            return None
     echo_progress(f"  LLM ({model}): generating {purpose}...")
 
     try:
@@ -2032,7 +2085,7 @@ def add(
             raise click.UsageError("Missing required option: --title (required with --pdf).")
         if duplicate or update:
             raise click.UsageError("--duplicate/--update are only supported for arXiv ingestion.")
-        success, _ = _add_local_pdf(
+        success, paper_name = _add_local_pdf(
             pdf=pdf,
             title=title,
             name=name,
@@ -2047,6 +2100,8 @@ def add(
         )
         if not success:
             raise SystemExit(1)
+        if paper_name:
+            _maybe_update_search_index(name=paper_name)
         return
 
     if not arxiv_ids:
@@ -2072,7 +2127,7 @@ def add(
         else:
             echo_progress(f"Adding paper: {arxiv_id}")
 
-        success, _, action = _add_single_paper(
+        success, paper_name, action = _add_single_paper(
             arxiv_id,
             name,
             tags,
@@ -2086,8 +2141,12 @@ def add(
         if success:
             if action == "added":
                 added += 1
+                if paper_name:
+                    _maybe_update_search_index(name=paper_name)
             elif action == "updated":
                 updated += 1
+                if paper_name:
+                    _maybe_update_search_index(name=paper_name)
             elif action == "skipped":
                 skipped += 1
         else:
@@ -2255,6 +2314,8 @@ def _regenerate_one_paper(
         index_entry["tags"] = meta.get("tags", [])
         index[current_name] = index_entry
         save_index(index)
+
+    _maybe_update_search_index(name=current_name, old_name=name if new_name else None)
 
     echo_success("  Done")
     return True, new_name
@@ -2500,6 +2561,48 @@ def list_papers(tag: Optional[str], as_json: bool):
     help="Maximum number of results to show.",
 )
 @click.option(
+    "--grep/--no-grep",
+    "--rg/--no-rg",
+    "use_grep",
+    default=False,
+    show_default=True,
+    help="Use ripgrep/grep for fast exact-match search (shows file:line hits).",
+)
+@click.option(
+    "--fixed-strings/--regex",
+    "fixed_strings",
+    default=False,
+    show_default=True,
+    help="In --grep mode, treat QUERY as a literal string instead of a regex.",
+)
+@click.option(
+    "--context",
+    "context_lines",
+    type=int,
+    default=2,
+    show_default=True,
+    help="In --grep mode, number of context lines around each match.",
+)
+@click.option(
+    "--max-matches",
+    type=int,
+    default=200,
+    show_default=True,
+    help="In --grep mode, stop after this many matches (approx; tool-dependent; effectively per-file for grep).",
+)
+@click.option(
+    "--ignore-case/--case-sensitive",
+    default=False,
+    show_default=True,
+    help="In --grep mode, ignore case when matching QUERY.",
+)
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help="In --grep mode, output machine-readable JSON (forces --context 0).",
+)
+@click.option(
     "--fuzzy/--exact",
     default=True,
     show_default=True,
@@ -2511,8 +2614,70 @@ def list_papers(tag: Optional[str], as_json: bool):
     show_default=True,
     help="Also search within LaTeX source (can be slower).",
 )
-def search(query: str, limit: int, fuzzy: bool, tex: bool):
+@click.option(
+    "--fts/--no-fts",
+    "use_fts",
+    default=True,
+    show_default=True,
+    help="Use SQLite FTS5 ranked search if `search.db` exists (falls back to scan). Use --no-fts to force scan.",
+)
+@click.pass_context
+def search(
+    ctx: click.Context,
+    query: str,
+    limit: int,
+    use_grep: bool,
+    fixed_strings: bool,
+    context_lines: int,
+    max_matches: int,
+    ignore_case: bool,
+    as_json: bool,
+    fuzzy: bool,
+    tex: bool,
+    use_fts: bool,
+):
     """Search papers by title, tags, metadata, and local content."""
+    grep_only_params = ("fixed_strings", "context_lines", "max_matches", "ignore_case", "as_json")
+    if not use_grep:
+        flag_text = {
+            "fixed_strings": "--fixed-strings/--regex",
+            "context_lines": "--context",
+            "max_matches": "--max-matches",
+            "ignore_case": "--ignore-case/--case-sensitive",
+            "as_json": "--json",
+        }
+        used = [p for p in grep_only_params if ctx.get_parameter_source(p) != click.core.ParameterSource.DEFAULT]
+        if used:
+            flags = ", ".join(flag_text.get(p, f"--{p.replace('_', '-')}") for p in used)
+            raise click.UsageError(f"{flags} only apply with --grep/--rg.")
+
+    if use_grep and ctx.get_parameter_source("use_fts") != click.core.ParameterSource.DEFAULT:
+        raise click.UsageError("--fts/--no-fts do not apply with --grep/--rg.")
+
+    if use_grep:
+        _search_grep(
+            query=query,
+            fixed_strings=fixed_strings,
+            context_lines=context_lines,
+            max_matches=max_matches,
+            ignore_case=ignore_case,
+            as_json=as_json,
+            include_tex=tex,
+        )
+        return
+
+    if use_fts and _search_db_path().exists():
+        fts_results = _search_fts(query=query, limit=limit)
+
+        if fts_results:
+            for r in fts_results:
+                click.echo(f"{r['name']} (score: {r['score']:.6g})")
+                title = str(r.get("title") or "Unknown")[:80]
+                if title:
+                    click.echo(f"  {title}...")
+                click.echo()
+            return
+
     index = load_index()
 
     def collect_results(*, fuzzy_mode: bool) -> list[tuple[str, dict, int, list[str]]]:
@@ -2579,6 +2744,407 @@ def search(query: str, limit: int, fuzzy: bool, tex: bool):
         if matched_fields:
             click.echo(f"  Matches: {', '.join(matched_fields[:6])}")
         click.echo()
+
+
+@cli.command("search-index")
+@click.option("--rebuild", is_flag=True, help="Rebuild the SQLite FTS search index from scratch.")
+@click.option(
+    "--include-tex/--no-include-tex",
+    default=False,
+    show_default=True,
+    help="Index `source.tex` contents into the FTS index (larger DB; slower build).",
+)
+def search_index(rebuild: bool, include_tex: bool) -> None:
+    """Build/update the local SQLite FTS5 search index (no LLM required)."""
+    if not rebuild and include_tex:
+        raise click.UsageError("--include-tex only applies with --rebuild")
+
+    db_path = _search_db_path()
+    if rebuild or not db_path.exists():
+        count = _search_index_rebuild(include_tex=include_tex)
+        echo_success(f"Built search index for {count} paper(s) at {db_path}")
+        return
+
+    with _sqlite_connect(db_path) as conn:
+        _ensure_search_index_schema(conn)
+        idx = load_index()
+        count = 0
+        for name in sorted(idx.keys()):
+            _search_index_upsert(conn, name=name, index=idx)
+            count += 1
+        echo_success(f"Updated search index for {count} paper(s) at {db_path}")
+
+
+def _search_grep(
+    *,
+    query: str,
+    fixed_strings: bool,
+    context_lines: int,
+    max_matches: int,
+    ignore_case: bool,
+    as_json: bool,
+    include_tex: bool,
+) -> None:
+    """Search using ripgrep/grep for exact hits + line numbers + context."""
+    if context_lines < 0:
+        raise click.UsageError("--context must be >= 0")
+    if max_matches < 1:
+        raise click.UsageError("--max-matches must be >= 1")
+
+    include_globs = ["*/summary.md", "*/equations.md", "*/notes.md", "*/meta.json"]
+    if include_tex:
+        include_globs.append("*/source.tex")
+
+    if not PAPERS_DIR.exists():
+        click.echo("No papers directory found.")
+        return
+
+    effective_context_lines = 0 if as_json else context_lines
+
+    rg = shutil.which("rg")
+    if rg:
+        cmd = [
+            rg,
+            "--color=never",
+            "--no-heading",
+            "--with-filename",
+            "--line-number",
+            "--context",
+            str(effective_context_lines),
+            "--max-count",
+            str(max_matches),
+        ]
+        if fixed_strings:
+            cmd.append("--fixed-strings")
+        if ignore_case:
+            cmd.append("--ignore-case")
+        if as_json:
+            cmd.append("--no-context-separator")
+        for glob_pat in include_globs:
+            cmd.extend(["--glob", glob_pat])
+        cmd.append(query)
+        cmd.append(str(PAPERS_DIR))
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode == 0:
+            out = _relativize_grep_output(proc.stdout, root_dir=PAPERS_DIR)
+            if as_json:
+                click.echo(json.dumps(_parse_grep_matches(out), indent=2))
+            else:
+                click.echo(out.rstrip("\n"))
+            return
+        if proc.returncode == 1:
+            if as_json:
+                click.echo("[]")
+            else:
+                click.echo(f"No matches for '{query}'")
+            return
+        raise click.ClickException((proc.stderr or proc.stdout or "").strip() or "ripgrep failed")
+
+    grep = shutil.which("grep")
+    if grep:
+        cmd = [
+            grep,
+            "-RIn",
+            "--color=never",
+            f"-C{effective_context_lines}",
+            "--binary-files=without-match",
+            "-m",
+            str(max_matches),
+        ]
+        if fixed_strings:
+            cmd.append("-F")
+        if ignore_case:
+            cmd.append("-i")
+        for glob_pat in include_globs:
+            cmd.append(f"--include={Path(glob_pat).name}")
+        cmd.extend([query, str(PAPERS_DIR)])
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode == 0:
+            out = _relativize_grep_output(proc.stdout, root_dir=PAPERS_DIR)
+            if as_json:
+                click.echo(json.dumps(_parse_grep_matches(out), indent=2))
+            else:
+                click.echo(out.rstrip("\n"))
+            return
+        if proc.returncode == 1:
+            if as_json:
+                click.echo("[]")
+            else:
+                click.echo(f"No matches for '{query}'")
+            return
+        raise click.ClickException((proc.stderr or proc.stdout or "").strip() or "grep failed")
+
+    echo_warning("Neither `rg` nor `grep` found; falling back to in-memory scan.")
+    ctx = click.get_current_context()
+    ctx.invoke(
+        search,
+        query=query,
+        limit=5,
+        use_grep=False,
+        fixed_strings=False,
+        context_lines=2,
+        max_matches=200,
+        ignore_case=False,
+        as_json=False,
+        fuzzy=True,
+        tex=include_tex,
+        use_fts=False,
+    )
+
+
+def _relativize_grep_output(text: str, *, root_dir: Path) -> str:
+    root = str(root_dir.resolve())
+    prefix = root + os.sep
+    out_lines: list[str] = []
+    for line in (text or "").splitlines(keepends=True):
+        if line.startswith(prefix):
+            out_lines.append(line[len(prefix) :])
+        else:
+            out_lines.append(line)
+    return "".join(out_lines)
+
+
+def _parse_grep_matches(text: str) -> list[dict[str, object]]:
+    """Parse grep-style lines like: paper/file:line:... (context lines ignored)."""
+    matches: list[dict[str, object]] = []
+    for raw in (text or "").splitlines():
+        if raw == "--":
+            continue
+        if ":" not in raw:
+            continue
+        parts = raw.split(":", 2)
+        if len(parts) < 3:
+            continue
+        path_part, line_part, content = parts
+        if not line_part.isdigit():
+            continue
+        rel_path = path_part.strip()
+        paper = rel_path.split("/", 1)[0] if rel_path else ""
+        matches.append(
+            {
+                "paper": paper,
+                "path": rel_path,
+                "line": int(line_part),
+                "text": content,
+            }
+        )
+    return matches
+
+
+def _search_db_path() -> Path:
+    return PAPER_DB / "search.db"
+
+
+def _sqlite_connect(path: Path) -> sqlite3.Connection:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path))
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _sqlite_fts5_available(conn: sqlite3.Connection) -> bool:
+    try:
+        conn.execute("CREATE VIRTUAL TABLE temp.__fts5_test USING fts5(x)")
+        conn.execute("DROP TABLE temp.__fts5_test")
+        return True
+    except sqlite3.OperationalError:
+        return False
+
+
+def _ensure_search_index_schema(conn: sqlite3.Connection) -> None:
+    conn.execute("CREATE TABLE IF NOT EXISTS search_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    row = conn.execute("SELECT value FROM search_meta WHERE key='schema_version'").fetchone()
+    if row is not None:
+        existing = str(row["value"])
+        if existing != _SEARCH_DB_SCHEMA_VERSION:
+            raise click.ClickException(
+                f"Search index schema version mismatch (have {existing}, need {_SEARCH_DB_SCHEMA_VERSION}). "
+                "Run `papi search-index --rebuild` (or delete `search.db`)."
+            )
+    else:
+        conn.execute("INSERT INTO search_meta(key, value) VALUES ('schema_version', ?)", (_SEARCH_DB_SCHEMA_VERSION,))
+
+    if not _sqlite_fts5_available(conn):
+        raise click.ClickException("SQLite FTS5 not available in this Python/SQLite build.")
+
+    conn.execute(
+        """
+        CREATE VIRTUAL TABLE IF NOT EXISTS papers_fts USING fts5(
+          name UNINDEXED,
+          title,
+          authors,
+          tags,
+          abstract,
+          summary,
+          equations,
+          notes,
+          tex,
+          tokenize='porter'
+        )
+        """
+    )
+    conn.commit()
+
+
+def _set_search_index_meta(conn: sqlite3.Connection, *, include_tex: bool) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO search_meta(key, value) VALUES ('include_tex', ?)",
+        ("1" if include_tex else "0",),
+    )
+    conn.commit()
+
+
+def _get_search_index_include_tex(conn: sqlite3.Connection) -> bool:
+    row = conn.execute("SELECT value FROM search_meta WHERE key='include_tex'").fetchone()
+    return bool(row and str(row["value"]).strip() == "1")
+
+
+def _search_index_delete(conn: sqlite3.Connection, *, name: str) -> None:
+    conn.execute("DELETE FROM papers_fts WHERE name = ?", (name,))
+    conn.commit()
+
+
+def _search_index_upsert(conn: sqlite3.Connection, *, name: str, index: Optional[dict[str, Any]] = None) -> None:
+    paper_dir = PAPERS_DIR / name
+    meta_path = paper_dir / "meta.json"
+    if not paper_dir.exists() or not meta_path.exists():
+        return
+
+    try:
+        meta = json.loads(meta_path.read_text())
+    except Exception:
+        meta = {}
+
+    info = (index or {}).get(name, {})
+
+    title = str(meta.get("title") or info.get("title") or "")
+
+    authors_list = meta.get("authors") or []
+    if isinstance(authors_list, list):
+        authors = " ".join(str(a) for a in authors_list)
+    else:
+        authors = str(authors_list)
+
+    tags_list = meta.get("tags") or info.get("tags") or []
+    if isinstance(tags_list, list):
+        tags = " ".join(str(t) for t in tags_list)
+    else:
+        tags = str(tags_list)
+
+    abstract = str(meta.get("abstract") or "")
+    summary = (
+        _read_text_limited(paper_dir / "summary.md", max_chars=200_000) if (paper_dir / "summary.md").exists() else ""
+    )
+    equations = (
+        _read_text_limited(paper_dir / "equations.md", max_chars=200_000)
+        if (paper_dir / "equations.md").exists()
+        else ""
+    )
+    notes = _read_text_limited(paper_dir / "notes.md", max_chars=200_000) if (paper_dir / "notes.md").exists() else ""
+
+    include_tex = _get_search_index_include_tex(conn)
+    tex = ""
+    if include_tex and (paper_dir / "source.tex").exists():
+        tex = _read_text_limited(paper_dir / "source.tex", max_chars=400_000)
+
+    conn.execute("DELETE FROM papers_fts WHERE name = ?", (name,))
+    conn.execute(
+        """
+        INSERT INTO papers_fts(name, title, authors, tags, abstract, summary, equations, notes, tex)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (name, title, authors, tags, abstract, summary, equations, notes, tex),
+    )
+    conn.commit()
+
+
+def _search_index_rebuild(*, include_tex: bool) -> int:
+    db_path = _search_db_path()
+    with _sqlite_connect(db_path) as conn:
+        _ensure_search_index_schema(conn)
+        _set_search_index_meta(conn, include_tex=include_tex)
+        conn.execute("DELETE FROM papers_fts")
+        idx = load_index()
+        count = 0
+        for name in sorted(idx.keys()):
+            _search_index_upsert(conn, name=name, index=idx)
+            count += 1
+        return count
+
+
+def _search_fts(*, query: str, limit: int) -> list[dict[str, object]]:
+    db_path = _search_db_path()
+    if not db_path.exists():
+        return []
+
+    with _sqlite_connect(db_path) as conn:
+        _ensure_search_index_schema(conn)
+
+        def run(match_query: str) -> list[sqlite3.Row]:
+            return conn.execute(
+                """
+                SELECT
+                  name,
+                  title,
+                  bm25(papers_fts, 0.0, 10.0, 3.0, 5.0, 2.0, 1.0, 1.0, 0.5, 0.2) AS bm25
+                FROM papers_fts
+                WHERE papers_fts MATCH ?
+                ORDER BY bm25
+                LIMIT ?
+                """,
+                (match_query, limit),
+            ).fetchall()
+
+        try:
+            rows = run(query)
+        except sqlite3.OperationalError:
+            # If the user query contains FTS5 special syntax characters, retry with a quoted literal.
+            quoted = _fts5_quote_literal(query)
+            try:
+                rows = run(quoted)
+            except sqlite3.OperationalError as exc:
+                raise click.ClickException(
+                    f"FTS query failed. Try a simpler query or use `papi search --grep --fixed-strings ...`. ({exc})"
+                ) from exc
+
+        results: list[dict[str, object]] = []
+        for r in rows:
+            raw = float(r["bm25"])
+            # SQLite FTS5 bm25() returns "more negative = better". Display a positive score for UX.
+            results.append({"name": r["name"], "title": r["title"], "score": -raw})
+        return results
+
+
+def _fts5_quote_literal(query: str) -> str:
+    return '"' + (query or "").replace('"', '""') + '"'
+
+
+def _maybe_update_search_index(*, name: str, old_name: Optional[str] = None) -> None:
+    db_path = _search_db_path()
+    if not db_path.exists():
+        return
+    try:
+        with _sqlite_connect(db_path) as conn:
+            _ensure_search_index_schema(conn)
+            if old_name and old_name != name:
+                _search_index_delete(conn, name=old_name)
+            _search_index_upsert(conn, name=name, index=load_index())
+    except Exception as exc:
+        debug("Search index update failed for %s: %s", name, str(exc))
+
+
+def _maybe_delete_from_search_index(*, name: str) -> None:
+    db_path = _search_db_path()
+    if not db_path.exists():
+        return
+    try:
+        with _sqlite_connect(db_path) as conn:
+            _ensure_search_index_schema(conn)
+            _search_index_delete(conn, name=name)
+    except Exception as exc:
+        debug("Search index delete failed for %s: %s", name, str(exc))
 
 
 _AUDIT_EQUATIONS_TITLE_RE = re.compile(r'paper\s+\*\*["“](.+?)["”]\*\*', flags=re.IGNORECASE)
@@ -3556,13 +4122,47 @@ def index_cmd(
 
     cmd.extend(["index", str(paper_dir)])
 
-    proc = subprocess.Popen(cmd, cwd=PAPERS_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    env = os.environ.copy()
+    if _is_ollama_model_id(llm_for_pqa) or _is_ollama_model_id(embedding_for_pqa):
+        _prepare_ollama_env(env)
+        err = _ollama_reachability_error(api_base=env["OLLAMA_API_BASE"])
+        if err:
+            echo_error(err)
+            echo_error("Start Ollama (`ollama serve`) or set OLLAMA_HOST / OLLAMA_API_BASE to a reachable server.")
+            raise SystemExit(1)
+
+    proc = subprocess.Popen(
+        cmd,
+        cwd=PAPERS_DIR,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
     assert proc.stdout is not None
     for line in proc.stdout:
         click.echo(line, nl=False)
     returncode = proc.wait()
     if returncode != 0:
         raise SystemExit(returncode)
+
+
+_PQA_NOISY_STREAM_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^New file to index:\s+"),
+    re.compile(r"^Indexing\b"),
+    re.compile(r"^Building\b"),
+    re.compile(r"^Loading\b"),
+    re.compile(r"^Using settings\b"),
+    re.compile(r"^\d{2}:\d{2}:\d{2}\s+\[(DEBUG|INFO|WARNING|ERROR)\]\s+"),
+)
+
+
+def _pqa_is_noisy_stream_line(line: str) -> bool:
+    s = (line or "").rstrip("\n")
+    if not s:
+        return False
+    return any(p.search(s) for p in _PQA_NOISY_STREAM_PATTERNS)
 
 
 @cli.command(context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))
@@ -3603,6 +4203,13 @@ def index_cmd(
     default=None,
     show_default=False,
     help="Logging verbosity level (0-3). 3 = log all LLM/embedding calls.",
+)
+@click.option(
+    "--pqa-agent-type",
+    "agent_type",
+    default=None,
+    show_default=False,
+    help="PaperQA2 agent type (e.g., 'fake' for deterministic low-token retrieval).",
 )
 @click.option(
     "--pqa-answer-length",
@@ -3655,6 +4262,11 @@ def index_cmd(
     "retry_failed",
     is_flag=True,
     help="Retry docs previously marked failed (clears ERROR markers in the index).",
+)
+@click.option(
+    "--pqa-raw",
+    is_flag=True,
+    help="Pass through PaperQA2 output without filtering (also enabled by global -v/--verbose).",
 )
 @click.option(
     "--backend",
@@ -3735,6 +4347,7 @@ def ask(
     embedding: Optional[str],
     temperature: Optional[float],
     verbosity: Optional[int],
+    agent_type: Optional[str],
     answer_length: Optional[str],
     evidence_k: Optional[int],
     max_sources: Optional[int],
@@ -3742,6 +4355,7 @@ def ask(
     concurrency: Optional[int],
     rebuild_index: bool,
     retry_failed: bool,
+    pqa_raw: bool,
     backend: str,
     leann_index: str,
     leann_provider: Optional[str],
@@ -3965,6 +4579,20 @@ def ask(
         if verbosity_default is not None:
             cmd.extend(["--verbosity", str(verbosity_default)])
 
+    # agent_type -> --agent.agent_type
+    agent_type_source = ctx.get_parameter_source("agent_type")
+    has_agent_type_passthrough = any(
+        arg in {"--agent.agent_type", "--agent.agent-type"}
+        or arg.startswith(("--agent.agent_type=", "--agent.agent-type="))
+        for arg in ctx.args
+    )
+    if agent_type_source != click.core.ParameterSource.DEFAULT:
+        if agent_type:
+            cmd.extend(["--agent.agent_type", agent_type])
+    elif not has_agent_type_passthrough:
+        # No default; only set when explicitly requested.
+        pass
+
     # answer_length -> --answer.answer_length
     answer_length_source = ctx.get_parameter_source("answer_length")
     has_answer_length_passthrough = any(
@@ -4079,13 +4707,36 @@ def ask(
 
     cmd.extend(["ask", query])
 
+    root_verbose = bool(ctx.find_root().params.get("verbose"))
+    raw_output = bool(
+        pqa_raw or root_verbose or (verbosity_source != click.core.ParameterSource.DEFAULT and (verbosity or 0) > 0)
+    )
+
+    env = os.environ.copy()
+    if _is_ollama_model_id(llm_for_pqa) or _is_ollama_model_id(embedding_for_pqa):
+        _prepare_ollama_env(env)
+        err = _ollama_reachability_error(api_base=env["OLLAMA_API_BASE"])
+        if err:
+            echo_error(err)
+            echo_error("Start Ollama (`ollama serve`) or set OLLAMA_HOST / OLLAMA_API_BASE to a reachable server.")
+            raise SystemExit(1)
+
     # Run pqa with real-time output streaming while capturing for crash detection
     # We merge stderr into stdout so we can stream everything in order
-    proc = subprocess.Popen(cmd, cwd=PAPERS_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    proc = subprocess.Popen(
+        cmd,
+        cwd=PAPERS_DIR,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
     captured_output: list[str] = []
     assert proc.stdout is not None  # for type checker
     for line in proc.stdout:
-        click.echo(line, nl=False)
+        if raw_output or not _pqa_is_noisy_stream_line(line):
+            click.echo(line, nl=False)
         captured_output.append(line)
     returncode = proc.wait()
 
@@ -4253,6 +4904,11 @@ def models(
     enabled_providers = {p for p in ("openai", "gemini", "anthropic", "voyage", "openrouter") if provider_has_key(p)}
 
     def probe_one(kind_name: str, model: str):
+        if _is_ollama_model_id(model):
+            _prepare_ollama_env(os.environ)
+            err = _ollama_reachability_error(api_base=os.environ["OLLAMA_API_BASE"])
+            if err:
+                raise RuntimeError(err)
         if kind_name == "completion":
             llm_completion(
                 model=model,
@@ -4727,6 +5383,8 @@ def remove(papers: tuple[str, ...]):
         if name in index:
             del index[name]
             save_index(index)
+
+        _maybe_delete_from_search_index(name=name)
 
         echo_success(f"Removed: {name}")
         successes += 1

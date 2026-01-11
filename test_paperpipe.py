@@ -36,6 +36,21 @@ def pqa_available() -> bool:
     return shutil.which("pqa") is not None
 
 
+def fts5_available() -> bool:
+    """Check if SQLite FTS5 is available in this Python/SQLite build."""
+    import sqlite3
+
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.execute("CREATE VIRTUAL TABLE temp.__fts5_test USING fts5(x)")
+        conn.execute("DROP TABLE temp.__fts5_test")
+        return True
+    except sqlite3.OperationalError:
+        return False
+    finally:
+        conn.close()
+
+
 @pytest.fixture
 def temp_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Set up a temporary paper database."""
@@ -118,6 +133,45 @@ class TestConfigToml:
         assert paperpipe.default_embedding_model() == "text-embedding-3-small"
         assert paperpipe.default_llm_temperature() == 0.42
         assert paperpipe.normalize_tag("cv") == "computer-vision"
+
+
+class TestOllamaHelpers:
+    def test_normalize_ollama_base_url_adds_scheme_and_strips_v1(self) -> None:
+        assert paperpipe._normalize_ollama_base_url("localhost:11434") == "http://localhost:11434"
+        assert paperpipe._normalize_ollama_base_url("http://localhost:11434/") == "http://localhost:11434"
+        assert paperpipe._normalize_ollama_base_url("http://localhost:11434/v1") == "http://localhost:11434"
+
+    def test_prepare_ollama_env_sets_both_vars(self) -> None:
+        env: dict[str, str] = {}
+        paperpipe._prepare_ollama_env(env)
+        assert env["OLLAMA_API_BASE"] == "http://localhost:11434"
+        assert env["OLLAMA_HOST"] == "http://localhost:11434"
+
+        env2: dict[str, str] = {"OLLAMA_HOST": "localhost:11434"}
+        paperpipe._prepare_ollama_env(env2)
+        assert env2["OLLAMA_API_BASE"] == "http://localhost:11434"
+        assert env2["OLLAMA_HOST"] == "http://localhost:11434"
+
+    def test_ollama_reachability_error_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        class _Resp:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        monkeypatch.setattr(paperpipe, "urlopen", lambda *args, **kwargs: _Resp())
+        assert paperpipe._ollama_reachability_error(api_base="http://localhost:11434") is None
+
+    def test_ollama_reachability_error_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def boom(*args, **kwargs):
+            raise OSError("connection refused")
+
+        monkeypatch.setattr(paperpipe, "urlopen", boom)
+        err = paperpipe._ollama_reachability_error(api_base="http://localhost:11434")
+        assert err is not None and "not reachable" in err
 
     def test_env_overrides_config(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
         (temp_db / "config.toml").write_text(
@@ -758,6 +812,139 @@ class TestCli:
         result = runner.invoke(paperpipe.cli, ["search", "nonexistent"])
         assert result.exit_code == 0
         assert "No papers found" in result.output
+
+    def test_search_grep_uses_ripgrep(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/rg" if cmd == "rg" else None)
+
+        calls: list[list[str]] = []
+
+        def fake_run(args: list[str], **kwargs):
+            calls.append(args)
+            return types.SimpleNamespace(returncode=0, stdout="papers/x/summary.md:1:AdamW\n", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["search", "--grep", "AdamW"])
+        assert result.exit_code == 0, result.output
+        assert "AdamW" in result.output
+
+        cmd = calls[0]
+        assert cmd[0] == "/usr/bin/rg"
+        assert "--context" in cmd and "2" in cmd
+        assert "--max-count" in cmd and "200" in cmd
+        assert "--glob" in cmd and "*/summary.md" in cmd
+        assert "*/source.tex" not in cmd
+
+    def test_search_grep_falls_back_to_grep(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/bin/grep" if cmd == "grep" else None)
+
+        calls: list[list[str]] = []
+
+        def fake_run(args: list[str], **kwargs):
+            calls.append(args)
+            return types.SimpleNamespace(returncode=0, stdout="papers/x/equations.md:10:Eq. 7\n", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["search", "--grep", "Eq. 7"])
+        assert result.exit_code == 0, result.output
+        assert "Eq. 7" in result.output
+
+        cmd = calls[0]
+        assert cmd[0] == "/bin/grep"
+        assert "-RIn" in cmd
+        assert "-C2" in cmd
+        assert "-m" in cmd and "200" in cmd
+
+    def test_search_grep_no_matches(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/rg" if cmd == "rg" else None)
+
+        def fake_run(args: list[str], **kwargs):
+            return types.SimpleNamespace(returncode=1, stdout="", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["search", "--grep", "nope"])
+        assert result.exit_code == 0, result.output
+        assert "No matches" in result.output
+
+    def test_search_rg_alias_works(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/rg" if cmd == "rg" else None)
+
+        def fake_run(args: list[str], **kwargs):
+            return types.SimpleNamespace(returncode=0, stdout="x/summary.md:1:hit\n", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["search", "--rg", "hit"])
+        assert result.exit_code == 0, result.output
+        assert "hit" in result.output
+
+    def test_search_regex_flag_requires_grep(self, temp_db: Path) -> None:
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["search", "--regex", "x"])
+        assert result.exit_code != 0
+        assert "only apply with --grep" in result.output
+
+    def test_search_grep_json_output(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/rg" if cmd == "rg" else None)
+
+        def fake_run(args: list[str], **kwargs):
+            return types.SimpleNamespace(returncode=0, stdout="x/summary.md:12:AdamW\n", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["search", "--grep", "--json", "AdamW"])
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        assert payload[0]["paper"] == "x"
+        assert payload[0]["path"] == "x/summary.md"
+        assert payload[0]["line"] == 12
+
+    def test_search_index_builds_db_and_search_fts_uses_it(self, temp_db: Path) -> None:
+        if not fts5_available():
+            pytest.skip("SQLite FTS5 not available")
+
+        paper_dir = temp_db / "papers" / "geom-paper"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "meta.json").write_text(json.dumps({"title": "Surface Reconstruction", "authors": [], "tags": []}))
+        (paper_dir / "summary.md").write_text("We propose surface reconstruction from sparse points.\n")
+        (paper_dir / "equations.md").write_text("No equations.\n")
+        (paper_dir / "notes.md").write_text("Note.\n")
+
+        paperpipe.save_index({"geom-paper": {"arxiv_id": None, "title": "Surface Reconstruction", "tags": []}})
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["search-index", "--rebuild"])
+        assert result.exit_code == 0, result.output
+        assert (temp_db / "search.db").exists()
+
+        result = runner.invoke(paperpipe.cli, ["search", "--fts", "surface"])
+        assert result.exit_code == 0, result.output
+        assert "geom-paper" in result.output
+
+    def test_search_fts_schema_mismatch_prompts_rebuild(self, temp_db: Path) -> None:
+        if not fts5_available():
+            pytest.skip("SQLite FTS5 not available")
+
+        import sqlite3
+
+        db_path = temp_db / "search.db"
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.execute("CREATE TABLE search_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            conn.execute("INSERT INTO search_meta(key, value) VALUES ('schema_version', '0')")
+            conn.commit()
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["search", "--fts", "x"])
+        assert result.exit_code != 0
+        assert "schema version mismatch" in result.output.lower()
+        assert "search-index --rebuild" in result.output
 
     def test_show_nonexistent(self, temp_db: Path):
         runner = CliRunner()
@@ -2569,6 +2756,79 @@ class TestAskCommand:
         assert pqa_kwargs.get("cwd") == paperpipe.PAPERS_DIR
         assert (temp_db / ".pqa_papers" / "test-paper.pdf").exists()
 
+    def test_ask_pqa_agent_type_flag_is_passed(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
+
+        mock_popen = MockPopen(returncode=0, stdout="Answer\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+
+        (temp_db / "papers" / "test-paper").mkdir(parents=True)
+        (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["ask", "query", "--pqa-agent-type", "fake"])
+        assert result.exit_code == 0, result.output
+
+        pqa_call, _ = next(c for c in mock_popen.calls if c[0][0] == "pqa")
+        assert "--agent.agent_type" in pqa_call
+        idx = pqa_call.index("--agent.agent_type") + 1
+        assert pqa_call[idx] == "fake"
+
+    def test_ask_filters_noisy_pqa_output_by_default(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
+
+        mock_popen = MockPopen(returncode=0, stdout="New file to index: test-paper.pdf...\nAnswer\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+
+        (temp_db / "papers" / "test-paper").mkdir(parents=True)
+        (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["ask", "query"])
+        assert result.exit_code == 0, result.output
+        assert "Answer" in result.output
+        assert "New file to index:" not in result.output
+
+    def test_ask_pqa_raw_disables_output_filtering(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
+
+        mock_popen = MockPopen(returncode=0, stdout="New file to index: test-paper.pdf...\nAnswer\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+
+        (temp_db / "papers" / "test-paper").mkdir(parents=True)
+        (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["ask", "query", "--pqa-raw"])
+        assert result.exit_code == 0, result.output
+        assert "Answer" in result.output
+        assert "New file to index:" in result.output
+
+    def test_ask_ollama_models_prepare_env_for_pqa(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
+        monkeypatch.setattr(paperpipe, "_ollama_reachability_error", lambda **kwargs: None)
+        monkeypatch.delenv("OLLAMA_HOST", raising=False)
+        monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
+
+        mock_popen = MockPopen(returncode=0, stdout="Answer\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+
+        (temp_db / "papers" / "test-paper").mkdir(parents=True)
+        (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["ask", "query", "--pqa-llm", "ollama/qwen3:8b"])
+        assert result.exit_code == 0, result.output
+
+        _, pqa_kwargs = next(c for c in mock_popen.calls if c[0][0] == "pqa")
+        env = pqa_kwargs.get("env") or {}
+        assert env.get("OLLAMA_API_BASE") == "http://localhost:11434"
+        assert env.get("OLLAMA_HOST") == "http://localhost:11434"
+
     def test_ask_retry_failed_index_clears_error_markers(self, temp_db: Path, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
         monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
@@ -2951,6 +3211,28 @@ class TestIndexCommand:
         assert "--agent.index.paper_directory" in pqa_call
         assert "--index" in pqa_call and "paperpipe_my-embed" in pqa_call
         assert (temp_db / ".pqa_papers" / "test-paper.pdf").exists()
+
+    def test_index_backend_pqa_ollama_models_prepare_env(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: False)
+        monkeypatch.setattr(paperpipe, "_ollama_reachability_error", lambda **kwargs: None)
+        monkeypatch.delenv("OLLAMA_HOST", raising=False)
+        monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
+
+        mock_popen = MockPopen(returncode=0, stdout="Indexed\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+
+        (temp_db / "papers" / "test-paper").mkdir(parents=True)
+        (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["index", "--pqa-llm", "ollama/qwen3:8b"])
+        assert result.exit_code == 0, result.output
+
+        _, pqa_kwargs = next(c for c in mock_popen.calls if c[0][0] == "pqa")
+        env = pqa_kwargs.get("env") or {}
+        assert env.get("OLLAMA_API_BASE") == "http://localhost:11434"
+        assert env.get("OLLAMA_HOST") == "http://localhost:11434"
 
     def test_index_backend_leann_runs_leann_build(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann" if cmd == "leann" else None)

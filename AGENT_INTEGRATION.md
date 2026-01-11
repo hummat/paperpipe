@@ -16,7 +16,20 @@ This repo implements methods from scientific papers. Papers are managed via `pap
 
 Rules:
 - For “does this match the paper?”, use `papi show <paper> -l eq` / `-l tex` and compare symbols step-by-step.
-- For “which paper mentions X?”, run `papi search "X"`.
+- For “which paper mentions X?”:
+  - Exact string hits (fast): `papi search --grep --fixed-strings "X"`
+  - Ranked search (BM25): `papi search-index --rebuild` then `papi search --fts "X"`
 - If the agent can’t read `~/.paperpipe/`, export context into the repo: `papi export <papers...> --level equations --to ./paper-context/`.
 - Use `papi ask "..."` only when you explicitly want RAG synthesis (PaperQA2 default if installed; optional `--backend leann`).
+  - For cheaper/deterministic queries: `papi ask "..." --pqa-agent-type fake`
+  - For debugging PaperQA2 output: `papi ask "..." --pqa-raw`
 ```
+
+<details>
+<summary>Glossary (optional)</summary>
+
+- **RAG** = retrieval‑augmented generation: retrieve passages first, then generate an answer grounded in those passages.
+- **Embeddings** = vector representations used for semantic retrieval; changing the embedding model implies a new index.
+- **MCP** = Model Context Protocol: agent/tool integration for retrieval without pasting PDFs into chat.
+
+</details>

@@ -2,6 +2,8 @@ description = "Search papers by title/tag/content via `papi search`."
 prompt = """
 Search the PaperPipe database for: `{{args}}`
 
+Tip: use `--grep` for exact hits and `--fts` for ranked BM25 search (after `papi search-index --rebuild`).
+
 Search results:
-!{papi search \"{{args}}\"}
+!{papi search {{args}}}
 """
