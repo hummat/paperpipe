@@ -117,6 +117,10 @@ Notes:
   - Common LEANN build flags are also exposed as first-class options (e.g., `--leann-embedding-model`, `--leann-embedding-mode`,
     `--leann-doc-chunk-size`, `--leann-doc-chunk-overlap`, `--leann-num-threads`).
 
+### Model combinations (practical examples)
+
+See `README.md` → “PaperQA2 configuration” → “Model combinations” for copy/paste-ready examples.
+
 ## LEANN Integration (Local)
 
 | Command | Description |
@@ -126,10 +130,19 @@ Notes:
 | `papi ask "q" --backend leann` | Ask using LEANN RAG |
 | `papi ask "q" --backend leann --leann-provider ollama --leann-model qwen3:8b` | Use local Ollama model |
 
+Notes:
+- If you use `--leann-provider anthropic`, your `leann` install must include the `anthropic` Python package
+  (`pip install anthropic` in the same environment that runs `leann`).
+
 Defaults:
 - Indexing defaults come from `config.toml` / env vars (`PAPERPIPE_LEANN_EMBEDDING_MODEL`, `PAPERPIPE_LEANN_EMBEDDING_MODE`)
   unless you override via `papi index --backend leann --leann-embedding-*` (or pass raw `leann build --embedding-*` args).
-- Asking defaults to `--leann-provider ollama --leann-model olmo-3:7b` unless you override.
+- If `PAPERPIPE_LEANN_*` / `[leann]` are unset, paperpipe derives `--leann-provider/--leann-model` and
+  `--leann-embedding-mode/--leann-embedding-model` from your global `[llm]` / `[embedding]` model settings when compatible
+  (Ollama `ollama/...`, OpenAI `gpt-*`/`text-embedding-*`).
+  Gemini `gemini/...` is supported for `--leann-provider/--leann-model` via OpenAI-compatible endpoint, but is not mapped
+  for embeddings by default due to Gemini's 100-items-per-request embedding batch limit vs LEANN's current OpenAI batch size.
+  If not compatible, it falls back to `ollama` + `olmo-3:7b` and `nomic-embed-text`.
 - You can also override LEANN defaults via `config.toml`:
   ```toml
   [leann]
@@ -141,13 +154,17 @@ Defaults:
 - Env vars (override `config.toml`): `PAPERPIPE_LEANN_LLM_PROVIDER`, `PAPERPIPE_LEANN_LLM_MODEL`,
   `PAPERPIPE_LEANN_EMBEDDING_MODEL`, `PAPERPIPE_LEANN_EMBEDDING_MODE`
 
-Common LEANN ask flags (no passthrough args are supported when `--backend leann`):
+Common LEANN ask flags:
 - `--leann-index`, `--leann-provider`, `--leann-model`
 - `--leann-host` (Ollama), `--leann-api-base`/`--leann-api-key` (OpenAI-compatible)
 - Retrieval tuning: `--leann-top-k`, `--leann-complexity`, `--leann-beam-width`, `--leann-prune-ratio`,
   `--leann-recompute/--leann-no-recompute`, `--leann-pruning-strategy`, `--leann-thinking-budget`,
   `--leann-interactive`
 - Indexing behavior: `--leann-auto-index/--leann-no-auto-index` (default: auto-build index if missing)
+- Passthrough: add `-- <leann args...>` to forward extra flags directly to `leann` (useful for debugging)
+
+Embedding provider examples (indexing):
+See `README.md` → “LEANN configuration” → “Embedding provider examples”.
 
 ## Per-Paper Files
 

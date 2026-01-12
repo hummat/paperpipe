@@ -230,6 +230,99 @@ class TestConfigPrecedence:
 
         assert paperpipe.default_leann_llm_model() == "env-model"
 
+    def test_leann_defaults_derive_from_gemini_models(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        for env_var in [
+            "PAPERPIPE_LLM_MODEL",
+            "PAPERPIPE_EMBEDDING_MODEL",
+            "PAPERPIPE_LEANN_LLM_PROVIDER",
+            "PAPERPIPE_LEANN_LLM_MODEL",
+            "PAPERPIPE_LEANN_EMBEDDING_MODEL",
+            "PAPERPIPE_LEANN_EMBEDDING_MODE",
+        ]:
+            monkeypatch.delenv(env_var, raising=False)
+
+        (temp_db / "config.toml").write_text(
+            "\n".join(
+                [
+                    "[llm]",
+                    'model = "gemini/gemini-3-flash-preview"',
+                    "",
+                    "[embedding]",
+                    'model = "gemini/gemini-embedding-001"',
+                    "",
+                ]
+            )
+        )
+        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+
+        # LEANN supports Gemini via OpenAI-compatible endpoint (so provider/mode are "openai").
+        assert paperpipe.default_leann_llm_provider() == "openai"
+        assert paperpipe.default_leann_llm_model() == "gemini-3-flash-preview"
+        # Gemini embeddings via OpenAI-compat currently break with LEANN CLI due to batch-size limits (max 100).
+        # Keep LEANN embedding defaults unless explicitly overridden.
+        assert paperpipe.default_leann_embedding_mode() == "ollama"
+        assert paperpipe.default_leann_embedding_model() == "nomic-embed-text"
+
+    def test_leann_defaults_derive_from_project_models(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        for env_var in [
+            "PAPERPIPE_LLM_MODEL",
+            "PAPERPIPE_EMBEDDING_MODEL",
+            "PAPERPIPE_LEANN_LLM_PROVIDER",
+            "PAPERPIPE_LEANN_LLM_MODEL",
+            "PAPERPIPE_LEANN_EMBEDDING_MODEL",
+            "PAPERPIPE_LEANN_EMBEDDING_MODE",
+        ]:
+            monkeypatch.delenv(env_var, raising=False)
+
+        (temp_db / "config.toml").write_text(
+            "\n".join(
+                [
+                    "[llm]",
+                    'model = "gpt-4o-mini"',
+                    "",
+                    "[embedding]",
+                    'model = "text-embedding-3-small"',
+                    "",
+                ]
+            )
+        )
+        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+
+        assert paperpipe.default_leann_llm_provider() == "openai"
+        assert paperpipe.default_leann_llm_model() == "gpt-4o-mini"
+        assert paperpipe.default_leann_embedding_mode() == "openai"
+        assert paperpipe.default_leann_embedding_model() == "text-embedding-3-small"
+
+    def test_leann_defaults_derive_from_ollama_prefixed_models(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        for env_var in [
+            "PAPERPIPE_LLM_MODEL",
+            "PAPERPIPE_EMBEDDING_MODEL",
+            "PAPERPIPE_LEANN_LLM_PROVIDER",
+            "PAPERPIPE_LEANN_LLM_MODEL",
+            "PAPERPIPE_LEANN_EMBEDDING_MODEL",
+            "PAPERPIPE_LEANN_EMBEDDING_MODE",
+        ]:
+            monkeypatch.delenv(env_var, raising=False)
+
+        (temp_db / "config.toml").write_text(
+            "\n".join(
+                [
+                    "[llm]",
+                    'model = "ollama/qwen3:8b"',
+                    "",
+                    "[embedding]",
+                    'model = "ollama/nomic-embed-text"',
+                    "",
+                ]
+            )
+        )
+        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+
+        assert paperpipe.default_leann_llm_provider() == "ollama"
+        assert paperpipe.default_leann_llm_model() == "qwen3:8b"
+        assert paperpipe.default_leann_embedding_mode() == "ollama"
+        assert paperpipe.default_leann_embedding_model() == "nomic-embed-text"
+
     def test_pqa_config_env_overrides_toml(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
         (temp_db / "config.toml").write_text(
             "\n".join(
@@ -280,6 +373,7 @@ class TestConfigPrecedence:
         monkeypatch.setenv("PAPERPIPE_PQA_MAX_SOURCES", "all")
         monkeypatch.setenv("PAPERPIPE_PQA_TIMEOUT", "forever")
         monkeypatch.setenv("PAPERPIPE_PQA_CONCURRENCY", "max")
+        monkeypatch.setenv("PAPERPIPE_PQA_OLLAMA_TIMEOUT", "slow")
 
         # Should fall back to None (no config) or default
         assert paperpipe.default_pqa_temperature() is None
@@ -288,6 +382,44 @@ class TestConfigPrecedence:
         assert paperpipe.default_pqa_max_sources() is None
         assert paperpipe.default_pqa_timeout() is None
         assert paperpipe.default_pqa_concurrency() == 1  # Falls back to default
+        assert paperpipe.default_pqa_ollama_timeout() == 300.0
+
+    def test_pqa_ollama_timeout_env_zero_falls_back(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        monkeypatch.setenv("PAPERPIPE_PQA_OLLAMA_TIMEOUT", "0")
+        assert paperpipe.default_pqa_ollama_timeout() == 300.0
+
+    def test_pqa_concurrency_env_zero_clamps_to_one(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        monkeypatch.setenv("PAPERPIPE_PQA_CONCURRENCY", "0")
+        assert paperpipe.default_pqa_concurrency() == 1
+
+    def test_leann_index_by_embedding_default_on(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        monkeypatch.delenv("PAPERPIPE_LEANN_INDEX_BY_EMBEDDING", raising=False)
+        assert paperpipe.default_leann_index_name() == "papers_ollama_nomic-embed-text"
+
+    def test_leann_index_by_embedding_env_off_uses_plain_index(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        monkeypatch.setenv("PAPERPIPE_LEANN_INDEX_BY_EMBEDDING", "0")
+        assert paperpipe.default_leann_index_name() == "papers"
+
+    def test_leann_index_by_embedding_uses_mode_and_model(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        (temp_db / "config.toml").write_text(
+            "\n".join(
+                [
+                    "[leann]",
+                    "index_by_embedding = true",
+                    'embedding_mode = "openai"',
+                    'embedding_model = "text-embedding-3-small"',
+                    "",
+                ]
+            )
+        )
+        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        monkeypatch.delenv("PAPERPIPE_LEANN_INDEX_BY_EMBEDDING", raising=False)
+
+        assert paperpipe.default_leann_index_name() == "papers_openai_text-embedding-3-small"
 
     def test_pqa_config_env_vars_direct(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
         """Test env vars are read correctly without config file."""
@@ -310,6 +442,17 @@ class TestConfigPrecedence:
 
 
 class TestOllamaHelpers:
+    def test_strip_ollama_prefix_handles_none_and_whitespace(self) -> None:
+        assert paperpipe._strip_ollama_prefix(None) is None
+        assert paperpipe._strip_ollama_prefix("") is None
+        assert paperpipe._strip_ollama_prefix("   ") is None
+        assert paperpipe._strip_ollama_prefix("ollama/") is None
+
+    def test_strip_ollama_prefix_strips_prefix(self) -> None:
+        assert paperpipe._strip_ollama_prefix("ollama/nomic-embed-text") == "nomic-embed-text"
+        assert paperpipe._strip_ollama_prefix("  OLLAMA/nomic-embed-text  ") == "nomic-embed-text"
+        assert paperpipe._strip_ollama_prefix("nomic-embed-text") == "nomic-embed-text"
+
     def test_normalize_ollama_base_url_adds_scheme_and_strips_v1(self) -> None:
         assert paperpipe._normalize_ollama_base_url("localhost:11434") == "http://localhost:11434"
         assert paperpipe._normalize_ollama_base_url("http://localhost:11434/") == "http://localhost:11434"
@@ -338,6 +481,30 @@ class TestOllamaHelpers:
 
         monkeypatch.setattr(paperpipe, "urlopen", lambda *args, **kwargs: _Resp())
         assert paperpipe._ollama_reachability_error(api_base="http://localhost:11434") is None
+
+
+class TestModelIdHelpers:
+    def test_split_model_id_edge_cases(self) -> None:
+        assert paperpipe._split_model_id("") == (None, "")
+        assert paperpipe._split_model_id("   ") == (None, "")
+        assert paperpipe._split_model_id("model") == (None, "model")
+        assert paperpipe._split_model_id("/model") == (None, "/model")
+        assert paperpipe._split_model_id("provider/") == (None, "provider/")
+        assert paperpipe._split_model_id("provider/model") == ("provider", "model")
+
+
+class TestPqaOutputFiltering:
+    def test_pqa_failure_output_falls_back_to_raw_when_all_noisy(self, capsys: pytest.CaptureFixture[str]) -> None:
+        # Ensure we print something useful even if every line is filtered as "noisy".
+        captured_output = [
+            "/home/user/site-packages/pydantic/main.py:464: UserWarning: Pydantic serializer warnings:\n",
+            "  PydanticSerializationUnexpectedValue(Expected 10 fields but got 7: ...)\n",
+            "  return self.__pydantic_serializer__.to_python(\n",
+        ]
+        paperpipe._pqa_print_filtered_output_on_failure(captured_output=captured_output, max_lines=200)
+        out = capsys.readouterr().out
+        assert "raw PaperQA2 output" in out
+        assert "Pydantic serializer warnings" in out
 
     def test_ollama_reachability_error_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def boom(*args, **kwargs):
@@ -889,6 +1056,7 @@ class TestCli:
         assert "--leann-embedding-mode" in result.output
         assert "--leann-doc-chunk-size" in result.output
         assert "--leann-doc-chunk-overlap" in result.output
+        assert "--pqa-raw" in result.output
 
     def test_index_leann_build_args_forwarded(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         captured: dict[str, object] = {}
@@ -2993,6 +3161,128 @@ class TestAskCommand:
         assert pqa_kwargs.get("cwd") == paperpipe.PAPERS_DIR
         assert (temp_db / ".pqa_papers" / "test-paper.pdf").exists()
 
+    def test_ask_injects_ollama_timeout_config_by_default(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: False)
+
+        def fake_prepare_ollama_env(env: dict[str, str]) -> None:
+            env["OLLAMA_API_BASE"] = "http://127.0.0.1:11434"
+
+        monkeypatch.setattr(paperpipe, "_prepare_ollama_env", fake_prepare_ollama_env)
+        monkeypatch.setattr(paperpipe, "_ollama_reachability_error", lambda api_base: None)
+        monkeypatch.setenv("PAPERPIPE_PQA_OLLAMA_TIMEOUT", "123")
+
+        mock_popen = MockPopen(returncode=0, stdout="Answer\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+
+        (temp_db / "papers" / "test-paper").mkdir(parents=True)
+        (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
+
+        runner = CliRunner()
+        result = runner.invoke(
+            paperpipe.cli,
+            [
+                "ask",
+                "query",
+                "--pqa-llm",
+                "ollama/olmo-3:7b",
+                "--pqa-embedding",
+                "voyage/voyage-3.5",
+            ],
+        )
+        assert result.exit_code == 0
+
+        pqa_call, pqa_kwargs = next(c for c in mock_popen.calls if c[0][0] == "pqa")
+        assert "--llm_config" in pqa_call
+        assert "--summary_llm_config" in pqa_call
+        assert "--parsing.enrichment_llm_config" in pqa_call
+
+        llm_cfg = pqa_call[pqa_call.index("--llm_config") + 1]
+        assert '"timeout": 123.0' in llm_cfg
+
+        env = pqa_kwargs.get("env") or {}
+        assert env.get("PQA_LITELLM_MAX_CALLBACKS") == "1000"
+        assert env.get("LMI_LITELLM_MAX_CALLBACKS") == "1000"
+        assert env.get("OLLAMA_API_BASE") == "http://127.0.0.1:11434"
+
+    def test_ask_does_not_override_user_llm_config(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: False)
+
+        def fake_prepare_ollama_env(env: dict[str, str]) -> None:
+            env["OLLAMA_API_BASE"] = "http://127.0.0.1:11434"
+
+        monkeypatch.setattr(paperpipe, "_prepare_ollama_env", fake_prepare_ollama_env)
+        monkeypatch.setattr(paperpipe, "_ollama_reachability_error", lambda api_base: None)
+
+        mock_popen = MockPopen(returncode=0, stdout="Answer\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+
+        (temp_db / "papers" / "test-paper").mkdir(parents=True)
+        (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
+
+        runner = CliRunner()
+        result = runner.invoke(
+            paperpipe.cli,
+            [
+                "ask",
+                "query",
+                "--pqa-llm",
+                "ollama/olmo-3:7b",
+                "--pqa-embedding",
+                "voyage/voyage-3.5",
+                # Prevent summary/enrichment defaults from being ollama, so we only exercise llm_config behavior.
+                "--pqa-summary-llm",
+                "gpt-4o-mini",
+                "--parsing.enrichment_llm",
+                "gpt-4o-mini",
+                "--llm_config",
+                '{"router_kwargs":{"timeout":999}}',
+            ],
+        )
+        assert result.exit_code == 0
+
+        pqa_call, _ = next(c for c in mock_popen.calls if c[0][0] == "pqa")
+        assert pqa_call.count("--llm_config") == 1
+        assert pqa_call[pqa_call.index("--llm_config") + 1] == '{"router_kwargs":{"timeout":999}}'
+        assert "--summary_llm_config" not in pqa_call
+        assert "--parsing.enrichment_llm_config" not in pqa_call
+
+    def test_ask_backend_leann_allows_passthrough_args(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann" if cmd == "leann" else None)
+
+        meta = temp_db / ".leann" / "indexes" / "papers" / "documents.leann.meta.json"
+        meta.parent.mkdir(parents=True)
+        meta.write_text("{}")
+
+        mock_popen = MockPopen(returncode=0, stdout="Answer\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            paperpipe.cli,
+            [
+                "ask",
+                "query",
+                "--backend",
+                "leann",
+                "--leann-index",
+                "papers",
+                "--leann-no-auto-index",
+                "--leann-provider",
+                "openai",
+                "--leann-model",
+                "gpt-5.2",
+                "--",
+                "--verbose",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+
+        leann_call, _ = next(c for c in mock_popen.calls if c[0][0] == "leann")
+        assert leann_call[:3] == ["leann", "ask", "papers"]
+        assert "--verbose" in leann_call
+
     def test_paperqa_ask_evidence_blocks_parses_response(self, monkeypatch: pytest.MonkeyPatch) -> None:
         class DummySettings:
             def __init__(self, **kwargs):
@@ -3466,13 +3756,49 @@ class TestLeannCommands:
 
         cmd, kwargs = calls[0]
         assert cmd[:2] == ["leann", "build"]
-        assert "papers" in cmd
+        assert "papers_ollama_nomic-embed-text" in cmd
         assert "--docs" in cmd and str(temp_db / ".pqa_papers") in cmd
         assert "--file-types" in cmd and ".pdf" in cmd
         assert "--embedding-model" in cmd and "nomic-embed-text" in cmd
         assert "--embedding-mode" in cmd and "ollama" in cmd
         assert kwargs.get("cwd") == temp_db
         assert (temp_db / ".pqa_papers" / "test-paper.pdf").exists()
+
+    def test_leann_index_can_derive_name_from_embedding(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann" if cmd == "leann" else None)
+
+        (temp_db / "config.toml").write_text(
+            "\n".join(
+                [
+                    "[leann]",
+                    "index_by_embedding = true",
+                    'embedding_mode = "openai"',
+                    'embedding_model = "text-embedding-3-small"',
+                    "",
+                ]
+            )
+        )
+        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+
+        calls: list[tuple[list[str], dict]] = []
+
+        def fake_run(args: list[str], **kwargs):
+            calls.append((args, kwargs))
+            return types.SimpleNamespace(returncode=0)
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        (temp_db / "papers" / "test-paper").mkdir(parents=True)
+        (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["leann-index"])
+        assert result.exit_code == 0, result.output
+
+        cmd, kwargs = calls[0]
+        assert cmd[:2] == ["leann", "build"]
+        assert "papers_openai_text-embedding-3-small" in cmd
+        assert kwargs.get("cwd") == temp_db
 
     def test_leann_index_rejects_file_types_override(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann" if cmd == "leann" else None)
@@ -3485,7 +3811,7 @@ class TestLeannCommands:
     def test_ask_backend_leann_runs_leann_ask(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann" if cmd == "leann" else None)
 
-        meta = temp_db / ".leann" / "indexes" / "papers" / "documents.leann.meta.json"
+        meta = temp_db / ".leann" / "indexes" / "papers_ollama_nomic-embed-text" / "documents.leann.meta.json"
         meta.parent.mkdir(parents=True)
         meta.write_text("{}")
 
@@ -3513,13 +3839,36 @@ class TestLeannCommands:
         assert "OUT" in result.output
 
         cmd, kwargs = mock_popen.calls[0]
-        assert cmd[:3] == ["leann", "ask", "papers"]
+        assert cmd[:3] == ["leann", "ask", "papers_ollama_nomic-embed-text"]
         assert "what is x" in cmd
         assert "--llm" in cmd and "ollama" in cmd
         assert "--model" in cmd and "qwen3:8b" in cmd
         assert "--top-k" in cmd and "3" in cmd
         assert "--no-recompute" in cmd
         assert kwargs.get("cwd") == temp_db
+
+    def test_ask_backend_leann_defaults_to_gemini_openai_compat(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann" if cmd == "leann" else None)
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+        meta = temp_db / ".leann" / "indexes" / "papers_ollama_nomic-embed-text" / "documents.leann.meta.json"
+        meta.parent.mkdir(parents=True)
+        meta.write_text("{}")
+
+        mock_popen = MockPopen(returncode=0, stdout="OUT\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["ask", "what is x", "--backend", "leann", "--leann-no-auto-index"])
+        assert result.exit_code == 0, result.output
+        assert "OUT" in result.output
+
+        cmd, _ = mock_popen.calls[0]
+        assert cmd[:3] == ["leann", "ask", "papers_ollama_nomic-embed-text"]
+        assert "--llm" in cmd and "openai" in cmd
+        assert "--model" in cmd and "gemini-3-flash-preview" in cmd
+        assert "--api-base" in cmd and paperpipe.GEMINI_OPENAI_COMPAT_BASE_URL in cmd
+        assert "--api-key" in cmd and "test-key" in cmd
 
     def test_ask_backend_leann_requires_index(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann" if cmd == "leann" else None)
@@ -3532,7 +3881,7 @@ class TestLeannCommands:
         def fake_run(args: list[str], **kwargs):
             build_calls.append((args, kwargs))
             # Simulate that `leann build` created the index metadata file.
-            meta = temp_db / ".leann" / "indexes" / "papers" / "documents.leann.meta.json"
+            meta = temp_db / ".leann" / "indexes" / "papers_ollama_nomic-embed-text" / "documents.leann.meta.json"
             meta.parent.mkdir(parents=True, exist_ok=True)
             meta.write_text('{"backend_name":"hnsw"}')
             return types.SimpleNamespace(returncode=0)
@@ -3562,7 +3911,12 @@ class TestIndexCommand:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
         monkeypatch.setattr(paperpipe, "_pillow_available", lambda: False)
 
-        mock_popen = MockPopen(returncode=0, stdout="Indexed\n")
+        noisy = (
+            "/home/x/pydantic/main.py:464: UserWarning: Pydantic serializer warnings:\n"
+            "  PydanticSerializationUnexpectedValue(Expected 10 fields but got 7)\n"
+            "  return self.__pydantic_serializer__.to_python(\n"
+        )
+        mock_popen = MockPopen(returncode=0, stdout=f"{noisy}Indexed\n")
         monkeypatch.setattr(subprocess, "Popen", mock_popen)
 
         (temp_db / "papers" / "test-paper").mkdir(parents=True)
@@ -3571,6 +3925,8 @@ class TestIndexCommand:
         runner = CliRunner()
         result = runner.invoke(paperpipe.cli, ["index", "--pqa-embedding", "my-embed"])
         assert result.exit_code == 0, result.output
+        assert "Indexed" in result.output
+        assert "PydanticSerializationUnexpectedValue" not in result.output
 
         pqa_call, _ = next(c for c in mock_popen.calls if c[0][0] == "pqa")
         assert "index" in pqa_call
@@ -3578,6 +3934,56 @@ class TestIndexCommand:
         assert "--agent.index.paper_directory" in pqa_call
         assert "--index" in pqa_call and "paperpipe_my-embed" in pqa_call
         assert (temp_db / ".pqa_papers" / "test-paper.pdf").exists()
+
+    def test_index_backend_pqa_ollama_embedding_strips_prefix_and_forces_provider(
+        self, temp_db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: False)
+        monkeypatch.setattr(paperpipe, "_ollama_reachability_error", lambda **kwargs: None)
+        monkeypatch.delenv("OLLAMA_HOST", raising=False)
+        monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
+
+        mock_popen = MockPopen(returncode=0, stdout="Indexed\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+
+        (temp_db / "papers" / "test-paper").mkdir(parents=True)
+        (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["index", "--pqa-embedding", "ollama/nomic-embed-text"])
+        assert result.exit_code == 0, result.output
+
+        pqa_call, _ = next(c for c in mock_popen.calls if c[0][0] == "pqa")
+        assert "--index" in pqa_call
+        assert "paperpipe_ollama_nomic-embed-text" in pqa_call
+        assert "--embedding" in pqa_call
+        assert pqa_call[pqa_call.index("--embedding") + 1] == "nomic-embed-text"
+        assert "--embedding_config" in pqa_call
+        cfg = pqa_call[pqa_call.index("--embedding_config") + 1]
+        assert '"custom_llm_provider":"ollama"' in cfg
+
+    def test_index_backend_pqa_pqa_raw_prints_noisy_output(
+        self, temp_db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: False)
+
+        noisy = (
+            "/home/x/pydantic/main.py:464: UserWarning: Pydantic serializer warnings:\n"
+            "  PydanticSerializationUnexpectedValue(Expected 10 fields but got 7)\n"
+            "  return self.__pydantic_serializer__.to_python(\n"
+        )
+        mock_popen = MockPopen(returncode=0, stdout=f"{noisy}Indexed\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+
+        (temp_db / "papers" / "test-paper").mkdir(parents=True)
+        (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["index", "--pqa-embedding", "my-embed", "--pqa-raw"])
+        assert result.exit_code == 0, result.output
+        assert "PydanticSerializationUnexpectedValue" in result.output
 
     def test_index_backend_pqa_ollama_models_prepare_env(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
@@ -3601,6 +4007,17 @@ class TestIndexCommand:
         assert env.get("OLLAMA_API_BASE") == "http://localhost:11434"
         assert env.get("OLLAMA_HOST") == "http://localhost:11434"
 
+    def test_index_rejects_pqa_concurrency_zero(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
+        mock_popen = MockPopen(returncode=0, stdout="Indexed\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+
+        runner = CliRunner()
+        result = runner.invoke(paperpipe.cli, ["index", "--pqa-concurrency", "0"])
+        assert result.exit_code != 0
+        assert "--pqa-concurrency must be >= 1" in result.output
+
     def test_index_backend_leann_runs_leann_build(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann" if cmd == "leann" else None)
 
@@ -3621,7 +4038,7 @@ class TestIndexCommand:
 
         cmd, kwargs = calls[0]
         assert cmd[:2] == ["leann", "build"]
-        assert "papers" in cmd
+        assert "papers_ollama_nomic-embed-text" in cmd
         assert "--docs" in cmd and str(temp_db / ".pqa_papers") in cmd
         assert "--embedding-model" in cmd and "nomic-embed-text" in cmd
         assert "--embedding-mode" in cmd and "ollama" in cmd

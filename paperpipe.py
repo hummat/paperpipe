@@ -15,6 +15,7 @@ import math
 import os
 import pickle
 import re
+import shlex
 import shutil
 import sqlite3
 import subprocess
@@ -28,7 +29,7 @@ from datetime import datetime
 from difflib import SequenceMatcher, get_close_matches
 from io import StringIO
 from pathlib import Path
-from typing import Any, MutableMapping, Optional, cast
+from typing import Any, MutableMapping, Optional, Sequence, cast
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
@@ -116,6 +117,8 @@ DEFAULT_LEANN_EMBEDDING_MODEL = "nomic-embed-text"
 DEFAULT_LEANN_EMBEDDING_MODE = "ollama"
 DEFAULT_LEANN_LLM_PROVIDER = "ollama"
 DEFAULT_LEANN_LLM_MODEL = "olmo-3:7b"
+DEFAULT_LEANN_INDEX_NAME = "papers"
+GEMINI_OPENAI_COMPAT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
 
 _CONFIG_CACHE: Optional[tuple[Path, Optional[float], dict[str, Any]]] = None
@@ -311,6 +314,45 @@ def pqa_index_name_for_embedding(embedding_model: str) -> str:
     return f"paperpipe_{safe_name}"
 
 
+def default_pqa_ollama_timeout() -> float:
+    """
+    Per-request timeout (seconds) for PaperQA2 LiteLLM router calls when using `ollama/...`.
+
+    Ollama can take a while to load a model / produce first token. LiteLLM's default timeout
+    is often too low (commonly 60s), causing spurious failures.
+    """
+
+    configured = os.environ.get("PAPERPIPE_PQA_OLLAMA_TIMEOUT")
+    if configured and configured.strip():
+        try:
+            v = float(configured.strip())
+            if v > 0:
+                return v
+            debug(
+                "Ignoring PAPERPIPE_PQA_OLLAMA_TIMEOUT=%r (must be > 0); falling back to config/default.",
+                configured,
+            )
+        except ValueError:
+            debug(
+                "Ignoring PAPERPIPE_PQA_OLLAMA_TIMEOUT=%r (must be a number); falling back to config/default.",
+                configured,
+            )
+    cfg = load_config()
+    raw = _config_get(cfg, ("paperqa", "ollama_timeout"))
+    if isinstance(raw, (int, float)) and float(raw) > 0:
+        return float(raw)
+    return 300.0
+
+
+def _strip_ollama_prefix(model: Optional[str]) -> Optional[str]:
+    if not model:
+        return None
+    model = model.strip()
+    if model.lower().startswith("ollama/"):
+        return model.split("/", 1)[1].strip() or None
+    return model or None
+
+
 def default_pqa_summary_llm(fallback: Optional[str]) -> Optional[str]:
     configured = os.environ.get("PAPERPIPE_PQA_SUMMARY_LLM")
     if configured and configured.strip():
@@ -418,13 +460,13 @@ def default_pqa_concurrency() -> int:
     configured = os.environ.get("PAPERPIPE_PQA_CONCURRENCY")
     if configured and configured.strip():
         try:
-            return int(configured.strip())
+            return max(1, int(configured.strip()))
         except ValueError:
             pass
     cfg = load_config()
     raw = _config_get(cfg, ("paperqa", "concurrency"))
     if isinstance(raw, int):
-        return raw
+        return max(1, raw)
     return 1  # Default to 1 for stability
 
 
@@ -444,11 +486,105 @@ def default_search_mode() -> str:
     return "auto"
 
 
+def _gemini_api_key() -> Optional[str]:
+    return (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or "").strip() or None
+
+
+def _split_model_id(model_id: str) -> tuple[Optional[str], str]:
+    model_id = (model_id or "").strip()
+    if not model_id:
+        return None, ""
+    if "/" not in model_id:
+        return None, model_id
+    prefix, rest = model_id.split("/", 1)
+    prefix = prefix.strip().lower()
+    rest = rest.strip()
+    if not prefix or not rest:
+        return None, model_id
+    return prefix, rest
+
+
+def _infer_leann_llm_provider_from_litellm_id(model_id: str) -> Optional[str]:
+    provider, model = _split_model_id(model_id)
+    if provider == "gemini":
+        # Gemini is supported by LEANN via OpenAI-compatible endpoint.
+        return "openai"
+    if provider in {"ollama", "openai"}:
+        return provider
+    if provider is not None:
+        return None
+    if model.startswith("gpt-") or model.startswith("text-embedding-"):
+        return "openai"
+    return None
+
+
+def _infer_leann_embedding_mode_from_litellm_id(model_id: str) -> Optional[str]:
+    provider, model = _split_model_id(model_id)
+    if provider in {"ollama", "openai"}:
+        return provider
+    if provider is not None:
+        # Gemini embeddings via OpenAI-compat currently break with LEANN CLI due to batch-size limits.
+        return None
+    if model.startswith("text-embedding-"):
+        return "openai"
+    return None
+
+
+def _default_leann_llm_provider_fallback() -> str:
+    model_id = default_llm_model()
+    inferred = _infer_leann_llm_provider_from_litellm_id(model_id)
+    if inferred is None:
+        debug(
+            "Could not infer LEANN LLM provider from default_llm_model=%r; falling back to %r.",
+            model_id,
+            DEFAULT_LEANN_LLM_PROVIDER,
+        )
+    return inferred or DEFAULT_LEANN_LLM_PROVIDER
+
+
+def _default_leann_llm_model_fallback() -> str:
+    model_id = default_llm_model()
+    _, model = _split_model_id(model_id)
+    if _infer_leann_llm_provider_from_litellm_id(model_id) is not None:
+        return model
+    debug(
+        "Could not infer LEANN LLM model from default_llm_model=%r; falling back to %r.",
+        model_id,
+        DEFAULT_LEANN_LLM_MODEL,
+    )
+    return DEFAULT_LEANN_LLM_MODEL
+
+
+def _default_leann_embedding_mode_fallback() -> str:
+    model_id = default_embedding_model()
+    inferred = _infer_leann_embedding_mode_from_litellm_id(model_id)
+    if inferred is None:
+        debug(
+            "Could not infer LEANN embedding mode from default_embedding_model=%r; falling back to %r.",
+            model_id,
+            DEFAULT_LEANN_EMBEDDING_MODE,
+        )
+    return inferred or DEFAULT_LEANN_EMBEDDING_MODE
+
+
+def _default_leann_embedding_model_fallback() -> str:
+    model_id = default_embedding_model()
+    _, model = _split_model_id(model_id)
+    if _infer_leann_embedding_mode_from_litellm_id(model_id) is not None:
+        return model
+    debug(
+        "Could not infer LEANN embedding model from default_embedding_model=%r; falling back to %r.",
+        model_id,
+        DEFAULT_LEANN_EMBEDDING_MODEL,
+    )
+    return DEFAULT_LEANN_EMBEDDING_MODEL
+
+
 def default_leann_embedding_model() -> str:
     return _setting_str(
         env="PAPERPIPE_LEANN_EMBEDDING_MODEL",
         keys=("leann", "embedding_model"),
-        default=DEFAULT_LEANN_EMBEDDING_MODEL,
+        default=_default_leann_embedding_model_fallback(),
     )
 
 
@@ -456,7 +592,7 @@ def default_leann_embedding_mode() -> str:
     return _setting_str(
         env="PAPERPIPE_LEANN_EMBEDDING_MODE",
         keys=("leann", "embedding_mode"),
-        default=DEFAULT_LEANN_EMBEDDING_MODE,
+        default=_default_leann_embedding_mode_fallback(),
     )
 
 
@@ -464,7 +600,7 @@ def default_leann_llm_provider() -> str:
     return _setting_str(
         env="PAPERPIPE_LEANN_LLM_PROVIDER",
         keys=("leann", "llm_provider"),
-        default=DEFAULT_LEANN_LLM_PROVIDER,
+        default=_default_leann_llm_provider_fallback(),
     )
 
 
@@ -472,8 +608,58 @@ def default_leann_llm_model() -> str:
     return _setting_str(
         env="PAPERPIPE_LEANN_LLM_MODEL",
         keys=("leann", "llm_model"),
-        default=DEFAULT_LEANN_LLM_MODEL,
+        default=_default_leann_llm_model_fallback(),
     )
+
+
+def leann_index_by_embedding() -> bool:
+    """Whether to derive the default LEANN index name from the embedding model/mode."""
+    configured = (os.environ.get("PAPERPIPE_LEANN_INDEX_BY_EMBEDDING") or "").strip().lower()
+    if configured in {"1", "true", "yes", "on"}:
+        return True
+    if configured in {"0", "false", "no", "off"}:
+        return False
+    cfg = load_config()
+    raw = _config_get(cfg, ("leann", "index_by_embedding"))
+    if isinstance(raw, bool):
+        return raw
+    return True
+
+
+def leann_index_name_for_embedding(*, embedding_mode: str, embedding_model: str) -> str:
+    mode = (embedding_mode or "").strip().lower()
+    model = (embedding_model or "").strip()
+    safe_mode = mode.replace("/", "_").replace(":", "_").strip() or "default"
+    safe_model = model.replace("/", "_").replace(":", "_").strip() or "default"
+    return f"{DEFAULT_LEANN_INDEX_NAME}_{safe_mode}_{safe_model}"
+
+
+def default_leann_index_name(*, embedding_mode: Optional[str] = None, embedding_model: Optional[str] = None) -> str:
+    if not leann_index_by_embedding():
+        return DEFAULT_LEANN_INDEX_NAME
+    effective_mode = (embedding_mode or "").strip() or default_leann_embedding_mode()
+    effective_model = (embedding_model or "").strip() or default_leann_embedding_model()
+    return leann_index_name_for_embedding(embedding_mode=effective_mode, embedding_model=effective_model)
+
+
+def _effective_leann_index_name(
+    *,
+    ctx: click.Context,
+    param_name: str,
+    raw_index_name: str,
+    embedding_mode: Optional[str] = None,
+    embedding_model: Optional[str] = None,
+) -> str:
+    # Honor explicit index overrides, even if they match the default string.
+    if ctx.get_parameter_source(param_name) != click.core.ParameterSource.DEFAULT:
+        name = (raw_index_name or "").strip()
+        return name or DEFAULT_LEANN_INDEX_NAME
+
+    name = (raw_index_name or "").strip() or DEFAULT_LEANN_INDEX_NAME
+    if name != DEFAULT_LEANN_INDEX_NAME:
+        return name
+
+    return default_leann_index_name(embedding_mode=embedding_mode, embedding_model=embedding_model)
 
 
 def tag_aliases() -> dict[str, str]:
@@ -1664,7 +1850,7 @@ Abstract: {abstract[:800]}"""
 
 
 @click.group()
-@click.version_option(version="0.6.0")
+@click.version_option(version="0.7.0")
 @click.option("--quiet", "-q", is_flag=True, help="Suppress progress messages.")
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug output.")
 def cli(quiet: bool = False, verbose: bool = False):
@@ -3987,8 +4173,10 @@ def _leann_build_index(*, index_name: str, docs_dir: Path, force: bool, extra_ar
         cmd.extend(["--embedding-mode", default_leann_embedding_mode()])
 
     cmd.extend(extra_args)
+    debug("Running LEANN: %s", shlex.join(cmd))
     proc = subprocess.run(cmd, cwd=PAPER_DB)
     if proc.returncode != 0:
+        echo_error(f"LEANN command failed (exit code {proc.returncode}).")
         raise SystemExit(proc.returncode)
 
 
@@ -4018,7 +4206,7 @@ def _ask_leann(
     provider = (provider or "").strip() or default_leann_llm_provider()
     model = (model or "").strip() or default_leann_llm_model()
 
-    index_name = (index_name or "").strip() or "papers"
+    index_name = (index_name or "").strip() or DEFAULT_LEANN_INDEX_NAME
     meta_path = _leann_index_meta_path(index_name)
     if not meta_path.exists():
         echo_error(f"LEANN index {index_name!r} not found at {meta_path}")
@@ -4028,6 +4216,15 @@ def _ask_leann(
     cmd: list[str] = ["leann", "ask", index_name, query]
     cmd.extend(["--llm", provider])
     cmd.extend(["--model", model])
+    if not api_base and provider.lower() == "openai" and model.lower().startswith("gemini-"):
+        api_base = GEMINI_OPENAI_COMPAT_BASE_URL
+    if not api_key and provider.lower() == "openai" and model.lower().startswith("gemini-"):
+        api_key = _gemini_api_key()
+        if not api_key:
+            echo_warning(
+                "LEANN is configured for Gemini via OpenAI-compatible endpoint but GEMINI_API_KEY/GOOGLE_API_KEY "
+                "is not set; the request will likely fail."
+            )
     if host:
         cmd.extend(["--host", host])
     if api_base:
@@ -4052,10 +4249,12 @@ def _ask_leann(
         cmd.extend(["--thinking-budget", thinking_budget])
 
     cmd.extend(extra_args)
+    debug("Running LEANN: %s", shlex.join(cmd))
 
     if interactive:
         proc = subprocess.run(cmd, cwd=PAPER_DB)
         if proc.returncode != 0:
+            echo_error(f"LEANN command failed (exit code {proc.returncode}).")
             raise SystemExit(proc.returncode)
         return
 
@@ -4065,6 +4264,7 @@ def _ask_leann(
         click.echo(line, nl=False)
     returncode = proc.wait()
     if returncode != 0:
+        echo_error(f"LEANN command failed (exit code {returncode}).")
         raise SystemExit(returncode)
 
 
@@ -4074,7 +4274,7 @@ def _ask_leann(
 @click.pass_context
 def leann_index(ctx: click.Context, index_name: str, force: bool) -> None:
     """Build/update a LEANN index over your paper PDFs (PDF-only)."""
-    index_name = (index_name or "").strip()
+    index_name = _effective_leann_index_name(ctx=ctx, param_name="index_name", raw_index_name=index_name)
     if not index_name:
         raise click.UsageError("--index must be non-empty")
 
@@ -4119,6 +4319,11 @@ def leann_index(ctx: click.Context, index_name: str, force: bool) -> None:
 @click.option("--pqa-concurrency", type=int, default=None, show_default=False, help="PaperQA2 indexing concurrency.")
 @click.option("--pqa-rebuild-index", is_flag=True, help="Force PaperQA2 rebuild (equivalent to --agent.rebuild_index).")
 @click.option("--pqa-retry-failed", is_flag=True, help="Clear PaperQA2 ERROR markers so failed PDFs retry.")
+@click.option(
+    "--pqa-raw",
+    is_flag=True,
+    help="Pass through PaperQA2 output without filtering (also enabled by global -v/--verbose).",
+)
 @click.option("--leann-index", default="papers", show_default=True, help="LEANN index name to build.")
 @click.option("--leann-force", is_flag=True, help="Force LEANN rebuild (passes --force to `leann build`).")
 @click.option(
@@ -4195,6 +4400,7 @@ def index_cmd(
     pqa_concurrency: Optional[int],
     pqa_rebuild_index: bool,
     pqa_retry_failed: bool,
+    pqa_raw: bool,
     leann_index: str,
     leann_force: bool,
     leann_backend_name: Optional[str],
@@ -4212,13 +4418,18 @@ def index_cmd(
     """Build/update the retrieval index for PaperQA2 (default) or LEANN."""
     backend_norm = (backend or "pqa").strip().lower()
     if backend_norm == "leann":
+        leann_index = _effective_leann_index_name(
+            ctx=ctx,
+            param_name="leann_index",
+            raw_index_name=leann_index,
+            embedding_mode=leann_embedding_mode,
+            embedding_model=leann_embedding_model,
+        )
         PAPER_DB.mkdir(parents=True, exist_ok=True)
         PAPERS_DIR.mkdir(parents=True, exist_ok=True)
 
         if any(arg == "--docs" or arg.startswith("--docs=") for arg in ctx.args):
             raise click.UsageError("paperpipe controls LEANN --docs; do not pass --docs.")
-        if any(arg.startswith(("--agent.", "--answer.", "--parsing.")) for arg in ctx.args):
-            raise click.UsageError("PaperQA2 passthrough args are not supported with --backend leann.")
 
         staging_dir = (PAPER_DB / ".pqa_papers").expanduser()
         _refresh_pqa_pdf_staging_dir(staging_dir=staging_dir)
@@ -4257,6 +4468,9 @@ def index_cmd(
     if backend_norm != "pqa":
         raise click.UsageError(f"Unknown --backend: {backend}")
 
+    if pqa_concurrency is not None and pqa_concurrency < 1:
+        raise click.UsageError("--pqa-concurrency must be >= 1")
+
     if not shutil.which("pqa"):
         echo_error("PaperQA2 not installed. Install with: pip install 'paperpipe[paperqa]' (Python 3.11+).")
         raise SystemExit(1)
@@ -4281,6 +4495,7 @@ def index_cmd(
 
     llm_for_pqa: Optional[str] = None
     embedding_for_pqa: Optional[str] = None
+    embedding_for_pqa_cmd: Optional[str] = None
 
     if pqa_llm_source != click.core.ParameterSource.DEFAULT:
         llm_for_pqa = pqa_llm
@@ -4292,10 +4507,18 @@ def index_cmd(
     elif not has_settings_flag:
         embedding_for_pqa = default_pqa_embedding_model()
 
+    embedding_for_pqa_cmd = embedding_for_pqa
+    embedding_for_pqa_stripped = _strip_ollama_prefix(embedding_for_pqa)
+    if embedding_for_pqa_stripped and embedding_for_pqa_stripped != embedding_for_pqa:
+        # Work around a LiteLLM bug where `ollama/...` isn't stripped before calling Ollama's /api/embed.
+        # PaperQA2/LMI calls litellm.aembedding(model=<embedding>), so we pass the bare model name and
+        # force the provider via embedding_config kwargs.
+        embedding_for_pqa_cmd = embedding_for_pqa_stripped
+
     if llm_for_pqa:
         cmd.extend(["--llm", llm_for_pqa])
-    if embedding_for_pqa:
-        cmd.extend(["--embedding", embedding_for_pqa])
+    if embedding_for_pqa_cmd:
+        cmd.extend(["--embedding", embedding_for_pqa_cmd])
 
     # Persist index under paper DB unless overridden
     has_index_dir_override = any(
@@ -4415,6 +4638,26 @@ def index_cmd(
     ):
         cmd.extend(["--agent.rebuild_index", "true"])
 
+    # If the embedding is an Ollama model id, inject an embedding_config that forces the provider
+    # while keeping the user-friendly `ollama/...` id for index naming.
+    #
+    # Note: `--embedding_config` is a *global* pqa flag and must come before the `index` subcommand.
+    if (
+        embedding_for_pqa
+        and _is_ollama_model_id(embedding_for_pqa)
+        and not _pqa_has_flag(ctx.args, names={"--embedding_config", "--embedding-config"})
+    ):
+        ollama_timeout = default_pqa_ollama_timeout()
+        cmd.extend(
+            [
+                "--embedding_config",
+                json.dumps(
+                    {"kwargs": {"custom_llm_provider": "ollama", "timeout": ollama_timeout}},
+                    separators=(",", ":"),
+                ),
+            ]
+        )
+
     cmd.extend(ctx.args)
 
     # Clear ERROR markers if requested (PaperQA2 won't retry failed docs otherwise)
@@ -4433,6 +4676,9 @@ def index_cmd(
     cmd.extend(["index", str(paper_dir)])
 
     env = os.environ.copy()
+    env.setdefault("PQA_LITELLM_MAX_CALLBACKS", "1000")
+    env.setdefault("LMI_LITELLM_MAX_CALLBACKS", "1000")
+
     if _is_ollama_model_id(llm_for_pqa) or _is_ollama_model_id(embedding_for_pqa):
         _prepare_ollama_env(env)
         err = _ollama_reachability_error(api_base=env["OLLAMA_API_BASE"])
@@ -4450,11 +4696,27 @@ def index_cmd(
         text=True,
         bufsize=1,
     )
+    root_verbose = bool(ctx.find_root().params.get("verbose"))
+    passthrough_verbose = any(arg in {"--verbose", "-v"} for arg in ctx.args)
+    raw_output = bool(
+        pqa_raw
+        or root_verbose
+        or passthrough_verbose
+        or (pqa_verbosity_source != click.core.ParameterSource.DEFAULT and (pqa_verbosity or 0) > 0)
+    )
+
+    captured_output: list[str] = []
     assert proc.stdout is not None
     for line in proc.stdout:
-        click.echo(line, nl=False)
+        captured_output.append(line)
+        if raw_output:
+            click.echo(line, nl=False)
+        elif not _pqa_is_noisy_index_line(line):
+            click.echo(line, nl=False)
     returncode = proc.wait()
     if returncode != 0:
+        if not raw_output:
+            _pqa_print_filtered_index_output_on_failure(captured_output=captured_output)
         raise SystemExit(returncode)
 
 
@@ -4464,9 +4726,21 @@ _PQA_NOISY_STREAM_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^Building\b"),
     re.compile(r"^Loading\b"),
     re.compile(r"^Using settings\b"),
+    re.compile(r"^Cannot add callback - would exceed MAX_CALLBACKS limit of\b"),
+    re.compile(r"^/.*pydantic/main\.py:\d+:\s+UserWarning:\s+Pydantic serializer warnings:\s*$"),
+    re.compile(r"^\s+PydanticSerializationUnexpectedValue\("),
+    re.compile(r"^\s+return self\.__pydantic_serializer__\.to_python\("),
     re.compile(r"^\d{2}:\d{2}:\d{2}\s+\[(DEBUG|INFO|WARNING|ERROR)\]\s+"),
     re.compile(r"^\[(DEBUG|INFO|WARNING|ERROR)\]\s+"),
     re.compile(r"^(DEBUG|INFO|WARNING|ERROR)\s*[:\\-]\s+"),
+)
+
+
+_PQA_INDEX_NOISY_STREAM_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^Cannot add callback - would exceed MAX_CALLBACKS limit of\b"),
+    re.compile(r"^/.*pydantic/main\.py:\d+:\s+UserWarning:\s+Pydantic serializer warnings:\s*$"),
+    re.compile(r"^\s+PydanticSerializationUnexpectedValue\("),
+    re.compile(r"^\s+return self\.__pydantic_serializer__\.to_python\("),
 )
 
 
@@ -4475,6 +4749,65 @@ def _pqa_is_noisy_stream_line(line: str) -> bool:
     if not s:
         return False
     return any(p.search(s) for p in _PQA_NOISY_STREAM_PATTERNS)
+
+
+def _pqa_is_noisy_index_line(line: str) -> bool:
+    s = (line or "").rstrip("\n")
+    if not s:
+        return False
+    return any(p.search(s) for p in _PQA_INDEX_NOISY_STREAM_PATTERNS)
+
+
+def _pqa_has_flag(args: Sequence[str], *, names: set[str]) -> bool:
+    for arg in args:
+        if arg in names:
+            return True
+        for n in names:
+            if arg.startswith(f"{n}="):
+                return True
+    return False
+
+
+def _pqa_print_filtered_output_on_failure(
+    captured_output: list[str],
+    *,
+    max_lines: int = 200,
+) -> None:
+    filtered = [line for line in captured_output if not _pqa_is_noisy_stream_line(line)]
+    if not filtered:
+        tail = captured_output[-max_lines:] if max_lines > 0 else captured_output
+        if not tail:
+            return
+        click.echo(f"[paperpipe] Showing last {len(tail)} raw PaperQA2 output lines:", err=False)
+        for line in tail:
+            click.echo(line, nl=False, err=False)
+        return
+    tail = filtered[-max_lines:] if max_lines > 0 else filtered
+    if len(filtered) > len(tail):
+        click.echo(f"[paperpipe] Showing last {len(tail)} filtered PaperQA2 output lines:", err=False)
+    for line in tail:
+        click.echo(line, nl=False, err=False)
+
+
+def _pqa_print_filtered_index_output_on_failure(
+    captured_output: list[str],
+    *,
+    max_lines: int = 200,
+) -> None:
+    filtered = [line for line in captured_output if not _pqa_is_noisy_index_line(line)]
+    if not filtered:
+        tail = captured_output[-max_lines:] if max_lines > 0 else captured_output
+        if not tail:
+            return
+        click.echo(f"[paperpipe] Showing last {len(tail)} raw PaperQA2 output lines:", err=False)
+        for line in tail:
+            click.echo(line, nl=False, err=False)
+        return
+    tail = filtered[-max_lines:] if max_lines > 0 else filtered
+    if len(filtered) > len(tail):
+        click.echo(f"[paperpipe] Showing last {len(tail)} filtered PaperQA2 output lines:", err=False)
+    for line in tail:
+        click.echo(line, nl=False, err=False)
 
 
 def _paperqa_ask_evidence_blocks(*, cmd: list[str], query: str) -> dict[str, Any]:
@@ -4836,16 +5169,13 @@ def ask(
     backend_norm = (backend or "pqa").strip().lower()
     output_format_norm = (output_format or "text").strip().lower()
     if backend_norm == "leann":
+        leann_index = _effective_leann_index_name(ctx=ctx, param_name="leann_index", raw_index_name=leann_index)
         if output_format_norm != "text":
             raise click.UsageError("--format evidence-blocks is only supported with --backend pqa.")
-        if ctx.args:
-            raise click.UsageError(
-                "Extra passthrough args are only supported for PaperQA2. For LEANN, use the supported --leann-* flags."
-            )
         PAPER_DB.mkdir(parents=True, exist_ok=True)
         PAPERS_DIR.mkdir(parents=True, exist_ok=True)
         if leann_auto_index:
-            index_name = (leann_index or "").strip() or "papers"
+            index_name = (leann_index or "").strip() or DEFAULT_LEANN_INDEX_NAME
             meta_path = _leann_index_meta_path(index_name)
             if not meta_path.exists():
                 echo_progress(f"LEANN index {index_name!r} not found; building it now...")
@@ -4922,8 +5252,17 @@ def ask(
 
     if llm_for_pqa:
         cmd.extend(["--llm", llm_for_pqa])
-    if embedding_for_pqa:
-        cmd.extend(["--embedding", embedding_for_pqa])
+
+    embedding_for_pqa_cmd = embedding_for_pqa
+    embedding_for_pqa_stripped = _strip_ollama_prefix(embedding_for_pqa)
+    if embedding_for_pqa_stripped and embedding_for_pqa_stripped != embedding_for_pqa:
+        # Work around a LiteLLM bug where `ollama/...` isn't stripped before calling Ollama's /api/embed.
+        # PaperQA2/LMI calls litellm.aembedding(model=<embedding>), so we pass the bare model name and
+        # force the provider via embedding_config kwargs.
+        embedding_for_pqa_cmd = embedding_for_pqa_stripped
+
+    if embedding_for_pqa_cmd:
+        cmd.extend(["--embedding", embedding_for_pqa_cmd])
 
     # Persist the PaperQA index under the paper DB by default so repeated queries reuse embeddings.
     # Users can override via explicit pqa args.
@@ -4998,16 +5337,21 @@ def ask(
 
     # --- Handle first-class options (with fallback to config/env defaults) ---
 
+    summary_llm_for_pqa: Optional[str] = None
+    enrichment_llm_for_pqa: Optional[str] = None
+
     # summary_llm: first-class option takes precedence, then config, then falls back to llm_for_pqa
     summary_llm_source = ctx.get_parameter_source("summary_llm")
     if summary_llm_source != click.core.ParameterSource.DEFAULT:
         # Explicit CLI --pqa-summary-llm takes precedence
         if summary_llm:
             cmd.extend(["--summary_llm", summary_llm])
+            summary_llm_for_pqa = summary_llm
     else:
         summary_llm_default = default_pqa_summary_llm(llm_for_pqa)
         if summary_llm_default:
             cmd.extend(["--summary_llm", summary_llm_default])
+            summary_llm_for_pqa = summary_llm_default
 
     # enrichment_llm: config/env default only (no first-class option)
     enrichment_llm_default = default_pqa_enrichment_llm(llm_for_pqa)
@@ -5019,6 +5363,44 @@ def ask(
     )
     if enrichment_llm_default and not has_enrichment_llm_override:
         cmd.extend(["--parsing.enrichment_llm", enrichment_llm_default])
+        enrichment_llm_for_pqa = enrichment_llm_default
+
+    # Ollama can have long cold-start / first-token latency. If the user didn't provide explicit
+    # per-provider configs, inject a larger LiteLLM router timeout to avoid spurious 60s timeouts.
+    if (
+        _is_ollama_model_id(llm_for_pqa)
+        or _is_ollama_model_id(summary_llm_for_pqa)
+        or _is_ollama_model_id(enrichment_llm_for_pqa)
+        or _is_ollama_model_id(embedding_for_pqa)
+    ):
+        ollama_timeout = default_pqa_ollama_timeout()
+        timeout_config = json.dumps({"router_kwargs": {"timeout": ollama_timeout}})
+
+        if _is_ollama_model_id(llm_for_pqa) and not _pqa_has_flag(ctx.args, names={"--llm_config", "--llm-config"}):
+            cmd.extend(["--llm_config", timeout_config])
+        if _is_ollama_model_id(summary_llm_for_pqa) and not _pqa_has_flag(
+            ctx.args, names={"--summary_llm_config", "--summary-llm-config"}
+        ):
+            cmd.extend(["--summary_llm_config", timeout_config])
+        if _is_ollama_model_id(enrichment_llm_for_pqa) and not _pqa_has_flag(
+            ctx.args,
+            names={
+                "--parsing.enrichment_llm_config",
+                "--parsing.enrichment-llm-config",
+            },
+        ):
+            cmd.extend(["--parsing.enrichment_llm_config", timeout_config])
+        if _is_ollama_model_id(embedding_for_pqa) and not _pqa_has_flag(
+            ctx.args, names={"--embedding_config", "--embedding-config"}
+        ):
+            # For embeddings, LMI uses PassThroughRouter (no model_list), so router_kwargs doesn't help.
+            # Also work around a LiteLLM bug where `ollama/...` isn't stripped before calling /api/embed.
+            cmd.extend(
+                [
+                    "--embedding_config",
+                    json.dumps({"kwargs": {"custom_llm_provider": "ollama", "timeout": ollama_timeout}}),
+                ]
+            )
 
     # temperature
     temperature_source = ctx.get_parameter_source("temperature")
@@ -5178,11 +5560,20 @@ def ask(
         return
 
     root_verbose = bool(ctx.find_root().params.get("verbose"))
+    passthrough_verbose = any(arg in {"--verbose", "-v"} for arg in ctx.args)
     raw_output = bool(
-        pqa_raw or root_verbose or (verbosity_source != click.core.ParameterSource.DEFAULT and (verbosity or 0) > 0)
+        pqa_raw
+        or root_verbose
+        or passthrough_verbose
+        or (verbosity_source != click.core.ParameterSource.DEFAULT and (verbosity or 0) > 0)
     )
 
     env = os.environ.copy()
+    # PaperQA2/LiteLLM can register a lot of callbacks during long runs and emit noisy warnings
+    # once it reaches the default cap (30). Allow raising this cap via env, and set a higher
+    # default to avoid spam when users haven't configured anything.
+    env.setdefault("PQA_LITELLM_MAX_CALLBACKS", "1000")
+    env.setdefault("LMI_LITELLM_MAX_CALLBACKS", "1000")
     if _is_ollama_model_id(llm_for_pqa) or _is_ollama_model_id(embedding_for_pqa):
         _prepare_ollama_env(env)
         err = _ollama_reachability_error(api_base=env["OLLAMA_API_BASE"])
@@ -5212,6 +5603,9 @@ def ask(
 
     # Handle pqa failures gracefully
     if returncode != 0:
+        if not raw_output:
+            _pqa_print_filtered_output_on_failure(captured_output=captured_output)
+
         # Try to identify the crashing document from pqa's output
         # pqa prints "New file to index: <filename>..." before processing each file
         crashing_doc: Optional[str] = None
@@ -5266,7 +5660,7 @@ def ask(
                     echo_warning(f"Failed documents: {', '.join(Path(f).stem for f in failed_docs)}")
                 raise SystemExit(1)
         # Generic failure message if we can't determine the cause
-        echo_error("PaperQA2 failed. Check the output above for details.")
+        echo_error("PaperQA2 failed. Re-run with --pqa-raw or 'papi -v ask ...' for full output.")
         raise SystemExit(returncode)
 
     if not raw_output:

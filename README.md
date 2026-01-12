@@ -339,15 +339,42 @@ Any additional arguments are passed through to `pqa` (e.g., `--agent.search_coun
 
 ### Model combinations
 
+<details>
+<summary><strong>Model combination examples</strong></summary>
+
 ```bash
+# Ollama (local) + Ollama embeddings
+export OLLAMA_HOST=http://127.0.0.1:11434
+export OLLAMA_API_BASE=http://127.0.0.1:11434
+papi ask "How is NeuS different from NeRF?" \
+  --pqa-llm ollama/olmo-3:7b \
+  --pqa-embedding ollama/nomic-embed-text
+
 # Gemini + Google Embeddings
-papi ask "Explain the architecture" --pqa-llm "gemini/gemini-2.5-flash" --pqa-embedding "gemini/gemini-embedding-001"
+export GEMINI_API_KEY=...
+papi ask "How is NeuS different from NeRF?" \
+  --pqa-llm gemini/gemini-3-flash-preview \
+  --pqa-embedding gemini/gemini-embedding-001
 
 # Claude + Voyage Embeddings
-papi ask "Compare the loss functions" --pqa-llm "claude-sonnet-4-5" --pqa-embedding "voyage/voyage-3-large"
+export OPENROUTER_API_KEY=...
+export VOYAGE_API_KEY=...
+papi ask "How is NeuS different from NeRF?" \
+  --pqa-llm openrouter/anthropic/claude-sonnet-4.5 \
+  --pqa-embedding voyage/voyage-3.5
+
+# Native Anthropic (no OpenRouter) + Voyage Embeddings
+export ANTHROPIC_API_KEY=...
+export VOYAGE_API_KEY=...
+papi ask "How is NeuS different from NeRF?" \
+  --pqa-llm claude-sonnet-4-5 \
+  --pqa-embedding voyage/voyage-3.5
 
 # GPT + OpenAI Embeddings
-papi ask "How to implement eq 4?" --pqa-llm "gpt-4o" --pqa-embedding "text-embedding-3-large"
+export OPENAI_API_KEY=...
+papi ask "How is NeuS different from NeRF?" \
+  --pqa-llm gpt-5.2 \
+  --pqa-embedding text-embedding-3-small
 
 # OpenRouter (200+ models)
 papi ask "Explain the method" --pqa-llm "openrouter/anthropic/claude-sonnet-4" --pqa-embedding "openrouter/openai/text-embedding-3-large"
@@ -355,6 +382,45 @@ papi ask "Explain the method" --pqa-llm "openrouter/anthropic/claude-sonnet-4" -
 # Cheaper summarization model
 papi ask "Compare methods" --pqa-llm gpt-4o --pqa-summary-llm gpt-4o-mini
 ```
+
+</details>
+
+<details>
+<summary><strong>Embedding provider examples (indexing)</strong></summary>
+
+#### OpenAI
+
+```bash
+export OPENAI_API_KEY=...
+papi index --backend pqa --pqa-embedding text-embedding-3-small
+```
+
+#### Gemini (native LiteLLM id)
+
+```bash
+export GEMINI_API_KEY=...
+papi index --backend pqa --pqa-embedding gemini/gemini-embedding-001
+```
+
+#### Voyage (native LiteLLM id)
+
+```bash
+export VOYAGE_API_KEY=...
+papi index --backend pqa --pqa-embedding voyage/voyage-3.5
+```
+
+#### OpenAI-compatible endpoints (advanced)
+
+If you want to hit an OpenAI-compatible endpoint directly (instead of a native LiteLLM provider id), set
+`OPENAI_API_BASE` and `OPENAI_API_KEY` and use an `openai/...` embedding id.
+
+```bash
+export OPENAI_API_BASE=https://api.voyageai.com/v1
+export OPENAI_API_KEY="$VOYAGE_API_KEY"
+papi index --backend pqa --pqa-embedding openai/voyage-3.5
+```
+
+</details>
 
 ### Index/caching notes
 
@@ -378,9 +444,161 @@ papi ask "..." --backend leann --leann-host http://localhost:11434
 papi ask "..." --backend leann --leann-top-k 12 --leann-complexity 64
 ```
 
+Notes:
+- If you use `--leann-provider anthropic`, your `leann` install must include the `anthropic` Python package
+  (`pip install anthropic` in the same environment that runs `leann`).
+- You can pass through extra `leann` CLI flags after `--` (useful for debugging), e.g.:
+  `papi -v ask "..." --backend leann -- ...`
+
+### Model combinations
+
+<details>
+<summary><strong>Model combination examples</strong></summary>
+
+```bash
+# Ollama (local) + Ollama embeddings
+export OLLAMA_HOST=http://127.0.0.1:11434
+papi index --backend leann \
+  --leann-embedding-mode ollama \
+  --leann-embedding-model nomic-embed-text
+papi ask "How is NeuS different from NeRF?" --backend leann \
+  --leann-provider ollama \
+  --leann-model olmo-3:7b \
+  --leann-host http://127.0.0.1:11434
+
+# Gemini + Gemini embeddings (OpenAI-compatible)
+export GEMINI_API_KEY=...
+papi index --backend leann \
+  --leann-embedding-mode openai \
+  --leann-embedding-model gemini-embedding-001 \
+  --leann-embedding-api-base https://generativelanguage.googleapis.com/v1beta/openai/ \
+  --leann-embedding-api-key "$GEMINI_API_KEY"
+papi ask "How is NeuS different from NeRF?" --backend leann \
+  --leann-provider openai \
+  --leann-model gemini-3-flash-preview \
+  --leann-api-base https://generativelanguage.googleapis.com/v1beta/openai/ \
+  --leann-api-key "$GEMINI_API_KEY"
+
+# OpenAI + OpenAI embeddings
+export OPENAI_API_KEY=...
+papi index --backend leann \
+  --leann-embedding-mode openai \
+  --leann-embedding-model text-embedding-3-small \
+  --leann-embedding-api-key "$OPENAI_API_KEY"
+papi ask "How is NeuS different from NeRF?" --backend leann \
+  --leann-provider openai \
+  --leann-model gpt-5.2 \
+  --leann-api-key "$OPENAI_API_KEY"
+
+# Anthropic + Voyage embeddings
+export ANTHROPIC_API_KEY=...
+export VOYAGE_API_KEY=...
+papi index --backend leann \
+  --leann-embedding-mode openai \
+  --leann-embedding-model voyage-3.5 \
+  --leann-embedding-api-base https://api.voyageai.com/v1 \
+  --leann-embedding-api-key "$VOYAGE_API_KEY"
+papi ask "How is NeuS different from NeRF?" --backend leann \
+  --leann-provider anthropic \
+  --leann-model claude-sonnet-4-5 \
+  --leann-api-key "$ANTHROPIC_API_KEY"
+```
+
+</details>
+
+<details>
+<summary><strong>Embedding provider examples</strong></summary>
+
+Notes:
+- For `--leann-embedding-mode openai`, LEANN defaults the API key to `OPENAI_API_KEY` unless you pass
+  `--leann-embedding-api-key`.
+
+#### OpenAI
+
+```bash
+export OPENAI_API_KEY=...
+papi index --backend leann \
+  --leann-embedding-mode openai \
+  --leann-embedding-model text-embedding-3-small
+```
+
+#### GitHub Copilot embeddings (OpenAI-compatible)
+
+```bash
+export GITHUB_TOKEN=...
+papi index --backend leann \
+  --leann-embedding-mode openai \
+  --leann-embedding-model text-embedding-3-small \
+  --leann-embedding-api-base https://api.githubcopilot.com \
+  --leann-embedding-api-key "$GITHUB_TOKEN"
+```
+
+#### Voyage (OpenAI-compatible)
+
+```bash
+export VOYAGE_API_KEY=...
+papi index --backend leann \
+  --leann-embedding-mode openai \
+  --leann-embedding-model voyage-3.5 \
+  --leann-embedding-api-base https://api.voyageai.com/v1 \
+  --leann-embedding-api-key "$VOYAGE_API_KEY"
+```
+
+#### Gemini embeddings (OpenAI-compatible)
+
+```bash
+export GEMINI_API_KEY=...
+papi index --backend leann \
+  --leann-embedding-mode openai \
+  --leann-embedding-model gemini-embedding-001 \
+  --leann-embedding-api-base https://generativelanguage.googleapis.com/v1beta/openai/ \
+  --leann-embedding-api-key "$GEMINI_API_KEY"
+```
+
+Notes:
+- Gemini embeddings may hit quota/rate limits (HTTP 429). Retry after the suggested delay.
+- Some LEANN versions batch too many inputs per embeddings request for Gemini (hard limit: 100 inputs/request) and will
+  fail with HTTP 400; update LEANN or reduce chunk counts (e.g. larger `--leann-doc-chunk-size`) as a mitigation.
+
+</details>
+
 ### Defaults
 
-LEANN defaults to `ollama` with `olmo-3:7b` for answering and `nomic-embed-text` for embeddings.
+By default, paperpipe derives LEANN's defaults from your global `[llm]` / `[embedding]` model settings when they are
+LEANN-compatible:
+- `ollama/...` → `--llm ollama` / `--embedding-mode ollama`
+- `gpt-*` / `text-embedding-*` → `--llm openai` / `--embedding-mode openai`
+- `gemini/...` → `--llm openai` (Gemini OpenAI-compatible endpoint)
+
+For Gemini, paperpipe defaults `--leann-api-base` to `https://generativelanguage.googleapis.com/v1beta/openai/` and uses
+`GEMINI_API_KEY`/`GOOGLE_API_KEY` if set.
+
+Note: LEANN's current CLI batches OpenAI-compatible embeddings in chunks of up to ~500-800 texts per request; Gemini's
+embedding endpoint hard-limits batches to 100, so paperpipe does *not* auto-map `gemini/...` embeddings to LEANN by
+default. Use `PAPERPIPE_LEANN_EMBEDDING_*` / `[leann]` to override (and expect to tune batch behavior upstream in LEANN).
+
+### Multiple indices
+
+LEANN supports multiple index names under `<paper_db>/.leann/indexes/`.
+
+By default, paperpipe auto-derives the LEANN index name from the embedding mode/model (similar to PaperQA2).
+
+This is a behavior change: if you previously built a LEANN index named `papers`, either disable this setting or rebuild
+under the derived name.
+
+To disable and always use a single LEANN index named `papers`, set:
+
+```toml
+[leann]
+index_by_embedding = false
+```
+
+or `export PAPERPIPE_LEANN_INDEX_BY_EMBEDDING=0`.
+
+When enabled, the default LEANN index name becomes `papers_<mode>_<model>` (with `/` and `:` replaced by `_`).
+
+If model ids are not recognized as compatible, it falls back to `ollama` with `olmo-3:7b` (LLM) and `nomic-embed-text`
+(embeddings).
 
 Override via `config.toml`:
 ```toml
@@ -483,9 +701,12 @@ index_dir = "~/.paperpipe/.pqa_index"
 summary_llm = "gpt-4o-mini"
 enrichment_llm = "gpt-4o-mini"
 
+# Optional: override LEANN separately (otherwise it follows [llm]/[embedding] for openai/ollama model ids)
 [leann]
 llm_provider = "ollama"
 llm_model = "qwen3:8b"
+embedding_model = "nomic-embed-text"
+embedding_mode = "ollama"
 
 [tags.aliases]
 cv = "computer-vision"
