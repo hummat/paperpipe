@@ -47,23 +47,6 @@ sys.stdout.write(data["project"]["version"])
 PY
 }
 
-verify_version_synced() {
-  local expected="$1"
-  local click_ver
-  click_ver="$(python - <<'PY'
-import re
-from pathlib import Path
-
-text = Path("paperpipe/cli.py").read_text(encoding="utf-8")
-m = re.search(r"@click\.version_option\(\s*version\s*=\s*['\"]([^'\"]+)['\"]\s*\)", text)
-print(m.group(1) if m else "")
-PY
-)"
-  if [[ -z "$click_ver" || "$click_ver" != "$expected" ]]; then
-    echo "Version mismatch: pyproject.toml=$expected, paperpipe/cli.py=$click_ver" >&2
-    exit 2
-  fi
-}
 
 require_cmd git
 require_cmd python
@@ -82,7 +65,7 @@ if [[ -n "$VERSION_ARG" && "$VERSION_ARG" != "$VERSION" ]]; then
   exit 2
 fi
 
-verify_version_synced "$VERSION"
+# Single source of truth is pyproject.toml; CLI version is derived from package metadata.
 
 TAG="v$VERSION"
 

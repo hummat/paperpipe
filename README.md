@@ -583,9 +583,6 @@ LEANN supports multiple index names under `<paper_db>/.leann/indexes/`.
 
 By default, paperpipe auto-derives the LEANN index name from the embedding mode/model (similar to PaperQA2).
 
-This is a behavior change: if you previously built a LEANN index named `papers`, either disable this setting or rebuild
-under the derived name.
-
 To disable and always use a single LEANN index named `papers`, set:
 
 ```toml
@@ -729,7 +726,7 @@ make check                            # format + lint + typecheck + test
 This repo publishes to PyPI when a GitHub Release is published (see `.github/workflows/publish.yml`).
 
 ```bash
-# Bump versions first (pyproject.toml + paperpipe/cli.py), then:
+# Bump version in pyproject.toml, then:
 make release
 ```
 

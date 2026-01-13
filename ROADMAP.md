@@ -14,6 +14,19 @@ It is not a commitment to specific timelines.
 
 ## Planned (next)
 
+### 0) TL;DR summaries on `papi add` (Semantic Scholar style)
+
+Goal: auto-generate a short, one-paragraph TL;DR when adding a paper (ideally using metadata + abstract, optionally LLM).
+
+Ideas:
+- Add `--tldr/--no-tldr` flag on `papi add` (default on).
+- Store as `tldr.md` alongside `summary.md` and `equations.md`.
+- If LLM available, ask for a 2–3 sentence TL;DR; otherwise fall back to a heuristic (title + abstract sentence).
+- Expose in `papi show` output (optional).
+- Provide a lightweight update path that detects missing artifacts (e.g., TL;DR) and backfills them without full regenerate.
+
+Status: planned.
+
 ### 1) Retrieval quality improvements (expose existing backend features)
 
 Goal: improve RAG quality for paper implementation workflows without adding new vector DBs.
