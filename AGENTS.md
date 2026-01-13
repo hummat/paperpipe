@@ -11,7 +11,7 @@ This file is the single source of truth for agent instructions in this repo.
 
 ## Architecture & Runtime Data Layout
 
-Single-file Click CLI (`paperpipe.py`). Runtime state lives in `~/.paperpipe/` (do not commit generated data):
+Package-based Click CLI (`paperpipe/`). Runtime state lives in `~/.paperpipe/` (do not commit generated data):
 
 - `~/.paperpipe/index.json`: quick lookup index mapping paper name → metadata
 - `~/.paperpipe/papers/{name}/`: per-paper directory (PDF, LaTeX, summary, equations, metadata)
@@ -26,7 +26,7 @@ Key flows:
 
 ## Project Structure & Module Organization
 
-- `paperpipe.py`: single-file Python module containing the core logic and the Click CLI (installed as `papi`).
+- `paperpipe/`: package containing the core logic and the Click CLI (installed as `papi`).
 - `test_paperpipe.py`: pytest suite (unit tests + optional integration checks).
 - `pyproject.toml`: packaging (Hatchling), dependencies, and tool configuration (pytest markers, Ruff).
 - `README.md`: end-user documentation and CLI examples.
@@ -73,6 +73,8 @@ Runtime data is stored outside the repo in `~/.paperpipe/` (PDFs, LaTeX, summari
 - Prefer unit tests that use `tmp_path`/`monkeypatch` to avoid touching `~/.paperpipe/`.
 - Mark network/external-tool tests with `@pytest.mark.integration` (and `@pytest.mark.slow` when appropriate).
 - New functionality should include a focused test covering success + a common failure mode.
+- Versioning (pre-1.0): treat minor as breaking/behavior changes and patch as bugfix/internal/no behavior change.
+- Pre-1.0 stability: no backward compatibility guarantees unless explicitly requested.
 
 ## Test Markers
 

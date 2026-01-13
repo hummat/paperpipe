@@ -729,7 +729,7 @@ make check                            # format + lint + typecheck + test
 This repo publishes to PyPI when a GitHub Release is published (see `.github/workflows/publish.yml`).
 
 ```bash
-# Bump versions first (pyproject.toml + paperpipe.py), then:
+# Bump versions first (pyproject.toml + paperpipe/cli.py), then:
 make release
 ```
 

@@ -54,13 +54,13 @@ verify_version_synced() {
 import re
 from pathlib import Path
 
-text = Path("paperpipe.py").read_text(encoding="utf-8")
+text = Path("paperpipe/cli.py").read_text(encoding="utf-8")
 m = re.search(r"@click\.version_option\(\s*version\s*=\s*['\"]([^'\"]+)['\"]\s*\)", text)
 print(m.group(1) if m else "")
 PY
 )"
   if [[ -z "$click_ver" || "$click_ver" != "$expected" ]]; then
-    echo "Version mismatch: pyproject.toml=$expected, paperpipe.py=$click_ver" >&2
+    echo "Version mismatch: pyproject.toml=$expected, paperpipe/cli.py=$click_ver" >&2
     exit 2
   fi
 }

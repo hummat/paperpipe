@@ -1,5 +1,6 @@
 """Tests for paperpipe."""
 
+import ast
 import json
 import os
 import pickle
@@ -8,13 +9,23 @@ import subprocess
 import sys
 import types
 import zlib
+from importlib import import_module, util
 from pathlib import Path
+from typing import Optional
 
 import click
 import pytest
 from click.testing import CliRunner
 
 import paperpipe
+import paperpipe.config as config
+import paperpipe.core as core
+import paperpipe.paper as paper_mod
+import paperpipe.paperqa as paperqa
+import paperpipe.search as search_mod
+
+# Import the CLI module explicitly (avoid resolving to the package's cli function).
+cli_mod = import_module("paperpipe.cli")
 
 # Well-known paper for integration tests: "Attention Is All You Need"
 TEST_ARXIV_ID = "1706.03762"
@@ -56,9 +67,9 @@ def fts5_available() -> bool:
 def temp_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Set up a temporary paper database."""
     db_path = tmp_path / ".paperpipe"
-    monkeypatch.setattr(paperpipe, "PAPER_DB", db_path)
-    monkeypatch.setattr(paperpipe, "PAPERS_DIR", db_path / "papers")
-    monkeypatch.setattr(paperpipe, "INDEX_FILE", db_path / "index.json")
+    monkeypatch.setattr(config, "PAPER_DB", db_path)
+    monkeypatch.setattr(config, "PAPERS_DIR", db_path / "papers")
+    monkeypatch.setattr(config, "INDEX_FILE", db_path / "index.json")
     paperpipe.ensure_db()
     return db_path
 
@@ -106,6 +117,65 @@ class TestEnsureDb:
         assert temp_db.exists()
 
 
+class TestPublicApi:
+    def test_internal_imports_have_no_cycles(self) -> None:
+        modules = [
+            "paperpipe.cli",
+            "paperpipe.config",
+            "paperpipe.core",
+            "paperpipe.install",
+            "paperpipe.leann",
+            "paperpipe.output",
+            "paperpipe.paper",
+            "paperpipe.paperqa",
+            "paperpipe.search",
+        ]
+
+        graph = {name: set() for name in modules}
+        for name in modules:
+            spec = util.find_spec(name)
+            assert spec is not None and spec.origin, f"Could not resolve module {name}"
+            if not spec.origin.endswith(".py"):
+                continue
+            tree = ast.parse(Path(spec.origin).read_text())
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and node.level == 1:
+                    if node.module:
+                        target = f"paperpipe.{node.module.split('.')[0]}"
+                        if target in graph:
+                            graph[name].add(target)
+                    else:
+                        for alias in node.names:
+                            target = f"paperpipe.{alias.name.split('.')[0]}"
+                            if target in graph:
+                                graph[name].add(target)
+
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def find_cycle(node: str, stack: list[str]) -> Optional[list[str]]:
+            visiting.add(node)
+            for child in graph[node]:
+                if child in visiting:
+                    return stack + [child]
+                if child not in visited:
+                    cycle = find_cycle(child, stack + [child])
+                    if cycle:
+                        return cycle
+            visiting.remove(node)
+            visited.add(node)
+            return None
+
+        cycle = None
+        for node in modules:
+            if node not in visited:
+                cycle = find_cycle(node, [node])
+                if cycle:
+                    break
+
+        assert not cycle, f"Import cycle detected: {' -> '.join(cycle or [])}"
+
+
 class TestConfigToml:
     def test_config_toml_sets_defaults(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv("PAPERPIPE_LLM_MODEL", raising=False)
@@ -128,7 +198,7 @@ class TestConfigToml:
                 ]
             )
         )
-        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
 
         assert paperpipe.default_llm_model() == "gpt-4o-mini"
         assert paperpipe.default_embedding_model() == "text-embedding-3-small"
@@ -147,7 +217,7 @@ class TestConfigPrecedence:
                 ]
             )
         )
-        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
         monkeypatch.setenv("PAPERPIPE_LLM_MODEL", "env-model")
         assert paperpipe.default_llm_model() == "env-model"
 
@@ -177,7 +247,7 @@ class TestConfigPrecedence:
                 ]
             )
         )
-        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
 
         assert paperpipe.default_pqa_temperature() == 0.5
         assert paperpipe.default_pqa_verbosity() == 2
@@ -208,7 +278,7 @@ class TestConfigPrecedence:
                 ]
             )
         )
-        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
 
         assert paperpipe.default_leann_llm_provider() == "ollama"
         assert paperpipe.default_leann_llm_model() == "qwen3:8b"
@@ -225,7 +295,7 @@ class TestConfigPrecedence:
                 ]
             )
         )
-        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
         monkeypatch.setenv("PAPERPIPE_LEANN_LLM_MODEL", "env-model")
 
         assert paperpipe.default_leann_llm_model() == "env-model"
@@ -253,7 +323,7 @@ class TestConfigPrecedence:
                 ]
             )
         )
-        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
 
         # LEANN supports Gemini via OpenAI-compatible endpoint (so provider/mode are "openai").
         assert paperpipe.default_leann_llm_provider() == "openai"
@@ -286,7 +356,7 @@ class TestConfigPrecedence:
                 ]
             )
         )
-        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
 
         assert paperpipe.default_leann_llm_provider() == "openai"
         assert paperpipe.default_leann_llm_model() == "gpt-4o-mini"
@@ -316,7 +386,7 @@ class TestConfigPrecedence:
                 ]
             )
         )
-        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
 
         assert paperpipe.default_leann_llm_provider() == "ollama"
         assert paperpipe.default_leann_llm_model() == "qwen3:8b"
@@ -333,7 +403,7 @@ class TestConfigPrecedence:
                 ]
             )
         )
-        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
         monkeypatch.setenv("PAPERPIPE_PQA_TEMPERATURE", "0.9")
         monkeypatch.setenv("PAPERPIPE_PQA_CONCURRENCY", "8")
 
@@ -351,7 +421,7 @@ class TestConfigPrecedence:
             "PAPERPIPE_PQA_CONCURRENCY",
         ]:
             monkeypatch.delenv(env_var, raising=False)
-        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
 
         # These return None when unset (no hardcoded default)
         assert paperpipe.default_pqa_temperature() is None
@@ -365,7 +435,7 @@ class TestConfigPrecedence:
 
     def test_pqa_config_invalid_env_values_fallback(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
         """Invalid env var values should fall back to config/defaults."""
-        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
         # Set invalid (non-numeric) values for numeric env vars
         monkeypatch.setenv("PAPERPIPE_PQA_TEMPERATURE", "not-a-number")
         monkeypatch.setenv("PAPERPIPE_PQA_VERBOSITY", "high")
@@ -385,22 +455,22 @@ class TestConfigPrecedence:
         assert paperpipe.default_pqa_ollama_timeout() == 300.0
 
     def test_pqa_ollama_timeout_env_zero_falls_back(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
         monkeypatch.setenv("PAPERPIPE_PQA_OLLAMA_TIMEOUT", "0")
         assert paperpipe.default_pqa_ollama_timeout() == 300.0
 
     def test_pqa_concurrency_env_zero_clamps_to_one(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
         monkeypatch.setenv("PAPERPIPE_PQA_CONCURRENCY", "0")
         assert paperpipe.default_pqa_concurrency() == 1
 
     def test_leann_index_by_embedding_default_on(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
         monkeypatch.delenv("PAPERPIPE_LEANN_INDEX_BY_EMBEDDING", raising=False)
         assert paperpipe.default_leann_index_name() == "papers_ollama_nomic-embed-text"
 
     def test_leann_index_by_embedding_env_off_uses_plain_index(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
         monkeypatch.setenv("PAPERPIPE_LEANN_INDEX_BY_EMBEDDING", "0")
         assert paperpipe.default_leann_index_name() == "papers"
 
@@ -416,14 +486,14 @@ class TestConfigPrecedence:
                 ]
             )
         )
-        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
         monkeypatch.delenv("PAPERPIPE_LEANN_INDEX_BY_EMBEDDING", raising=False)
 
         assert paperpipe.default_leann_index_name() == "papers_openai_text-embedding-3-small"
 
     def test_pqa_config_env_vars_direct(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
         """Test env vars are read correctly without config file."""
-        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
         monkeypatch.setenv("PAPERPIPE_PQA_TEMPERATURE", "0.7")
         monkeypatch.setenv("PAPERPIPE_PQA_VERBOSITY", "3")
         monkeypatch.setenv("PAPERPIPE_PQA_ANSWER_LENGTH", "short")
@@ -443,29 +513,29 @@ class TestConfigPrecedence:
 
 class TestOllamaHelpers:
     def test_strip_ollama_prefix_handles_none_and_whitespace(self) -> None:
-        assert paperpipe._strip_ollama_prefix(None) is None
-        assert paperpipe._strip_ollama_prefix("") is None
-        assert paperpipe._strip_ollama_prefix("   ") is None
-        assert paperpipe._strip_ollama_prefix("ollama/") is None
+        assert config._strip_ollama_prefix(None) is None
+        assert config._strip_ollama_prefix("") is None
+        assert config._strip_ollama_prefix("   ") is None
+        assert config._strip_ollama_prefix("ollama/") is None
 
     def test_strip_ollama_prefix_strips_prefix(self) -> None:
-        assert paperpipe._strip_ollama_prefix("ollama/nomic-embed-text") == "nomic-embed-text"
-        assert paperpipe._strip_ollama_prefix("  OLLAMA/nomic-embed-text  ") == "nomic-embed-text"
-        assert paperpipe._strip_ollama_prefix("nomic-embed-text") == "nomic-embed-text"
+        assert config._strip_ollama_prefix("ollama/nomic-embed-text") == "nomic-embed-text"
+        assert config._strip_ollama_prefix("  OLLAMA/nomic-embed-text  ") == "nomic-embed-text"
+        assert config._strip_ollama_prefix("nomic-embed-text") == "nomic-embed-text"
 
     def test_normalize_ollama_base_url_adds_scheme_and_strips_v1(self) -> None:
-        assert paperpipe._normalize_ollama_base_url("localhost:11434") == "http://localhost:11434"
-        assert paperpipe._normalize_ollama_base_url("http://localhost:11434/") == "http://localhost:11434"
-        assert paperpipe._normalize_ollama_base_url("http://localhost:11434/v1") == "http://localhost:11434"
+        assert config._normalize_ollama_base_url("localhost:11434") == "http://localhost:11434"
+        assert config._normalize_ollama_base_url("http://localhost:11434/") == "http://localhost:11434"
+        assert config._normalize_ollama_base_url("http://localhost:11434/v1") == "http://localhost:11434"
 
     def test_prepare_ollama_env_sets_both_vars(self) -> None:
         env: dict[str, str] = {}
-        paperpipe._prepare_ollama_env(env)
+        config._prepare_ollama_env(env)
         assert env["OLLAMA_API_BASE"] == "http://localhost:11434"
         assert env["OLLAMA_HOST"] == "http://localhost:11434"
 
         env2: dict[str, str] = {"OLLAMA_HOST": "localhost:11434"}
-        paperpipe._prepare_ollama_env(env2)
+        config._prepare_ollama_env(env2)
         assert env2["OLLAMA_API_BASE"] == "http://localhost:11434"
         assert env2["OLLAMA_HOST"] == "http://localhost:11434"
 
@@ -479,18 +549,18 @@ class TestOllamaHelpers:
             def __exit__(self, exc_type, exc, tb):
                 return False
 
-        monkeypatch.setattr(paperpipe, "urlopen", lambda *args, **kwargs: _Resp())
-        assert paperpipe._ollama_reachability_error(api_base="http://localhost:11434") is None
+        monkeypatch.setattr(config, "urlopen", lambda *args, **kwargs: _Resp())
+        assert config._ollama_reachability_error(api_base="http://localhost:11434") is None
 
 
 class TestModelIdHelpers:
     def test_split_model_id_edge_cases(self) -> None:
-        assert paperpipe._split_model_id("") == (None, "")
-        assert paperpipe._split_model_id("   ") == (None, "")
-        assert paperpipe._split_model_id("model") == (None, "model")
-        assert paperpipe._split_model_id("/model") == (None, "/model")
-        assert paperpipe._split_model_id("provider/") == (None, "provider/")
-        assert paperpipe._split_model_id("provider/model") == ("provider", "model")
+        assert config._split_model_id("") == (None, "")
+        assert config._split_model_id("   ") == (None, "")
+        assert config._split_model_id("model") == (None, "model")
+        assert config._split_model_id("/model") == (None, "/model")
+        assert config._split_model_id("provider/") == (None, "provider/")
+        assert config._split_model_id("provider/model") == ("provider", "model")
 
 
 class TestPqaOutputFiltering:
@@ -501,7 +571,7 @@ class TestPqaOutputFiltering:
             "  PydanticSerializationUnexpectedValue(Expected 10 fields but got 7: ...)\n",
             "  return self.__pydantic_serializer__.to_python(\n",
         ]
-        paperpipe._pqa_print_filtered_output_on_failure(captured_output=captured_output, max_lines=200)
+        paperqa._pqa_print_filtered_output_on_failure(captured_output=captured_output, max_lines=200)
         out = capsys.readouterr().out
         assert "raw PaperQA2 output" in out
         assert "Pydantic serializer warnings" in out
@@ -510,8 +580,8 @@ class TestPqaOutputFiltering:
         def boom(*args, **kwargs):
             raise OSError("connection refused")
 
-        monkeypatch.setattr(paperpipe, "urlopen", boom)
-        err = paperpipe._ollama_reachability_error(api_base="http://localhost:11434")
+        monkeypatch.setattr(config, "urlopen", boom)
+        err = config._ollama_reachability_error(api_base="http://localhost:11434")
         assert err is not None and "not reachable" in err
 
 
@@ -529,7 +599,7 @@ class TestGrepCollection:
 
         monkeypatch.setattr(subprocess, "run", fake_run)
 
-        matches = paperpipe._collect_grep_matches(
+        matches = search_mod._collect_grep_matches(
             query="hit",
             fixed_strings=True,
             max_matches=10,
@@ -553,7 +623,7 @@ class TestGrepCollection:
             return types.SimpleNamespace(returncode=1, stdout="", stderr="")
 
         monkeypatch.setattr(subprocess, "run", fake_run)
-        matches = paperpipe._collect_grep_matches(
+        matches = search_mod._collect_grep_matches(
             query="nope",
             fixed_strings=True,
             max_matches=10,
@@ -570,7 +640,7 @@ class TestGrepCollection:
             return types.SimpleNamespace(returncode=0, stdout="p/notes.md:5:hit\n", stderr="")
 
         monkeypatch.setattr(subprocess, "run", fake_run)
-        matches = paperpipe._collect_grep_matches(
+        matches = search_mod._collect_grep_matches(
             query="hit",
             fixed_strings=False,
             max_matches=10,
@@ -582,7 +652,7 @@ class TestGrepCollection:
     def test_collect_grep_matches_no_tools_returns_empty(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         (temp_db / "papers").mkdir(parents=True, exist_ok=True)
         monkeypatch.setattr(shutil, "which", lambda cmd: None)
-        matches = paperpipe._collect_grep_matches(
+        matches = search_mod._collect_grep_matches(
             query="x",
             fixed_strings=True,
             max_matches=10,
@@ -607,7 +677,7 @@ class TestNotesCommand:
         paperpipe.save_index({"my-paper": {"title": "Test Paper", "tags": [], "added": "now"}})
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["notes", "my-paper", "--print"])
+        result = runner.invoke(cli_mod.cli, ["notes", "my-paper", "--print"])
         assert result.exit_code == 0
         assert (paper_dir / "notes.md").exists()
         assert "# my-paper" in result.output
@@ -629,41 +699,41 @@ class TestIsSafePaperName:
     """Tests for _is_safe_paper_name helper."""
 
     def test_rejects_empty_string(self):
-        assert paperpipe._is_safe_paper_name("") is False
+        assert core._is_safe_paper_name("") is False
 
     def test_rejects_dot(self):
-        assert paperpipe._is_safe_paper_name(".") is False
+        assert core._is_safe_paper_name(".") is False
 
     def test_rejects_dotdot(self):
-        assert paperpipe._is_safe_paper_name("..") is False
+        assert core._is_safe_paper_name("..") is False
 
     def test_rejects_forward_slash(self):
-        assert paperpipe._is_safe_paper_name("foo/bar") is False
+        assert core._is_safe_paper_name("foo/bar") is False
 
     def test_rejects_backslash(self):
-        assert paperpipe._is_safe_paper_name("foo\\bar") is False
+        assert core._is_safe_paper_name("foo\\bar") is False
 
     def test_rejects_absolute_path(self):
-        assert paperpipe._is_safe_paper_name("/etc/passwd") is False
+        assert core._is_safe_paper_name("/etc/passwd") is False
 
     def test_accepts_valid_name(self):
-        assert paperpipe._is_safe_paper_name("nerf-2020") is True
+        assert core._is_safe_paper_name("nerf-2020") is True
 
     def test_accepts_name_with_dots(self):
-        assert paperpipe._is_safe_paper_name("paper.v2") is True
+        assert core._is_safe_paper_name("paper.v2") is True
 
 
 class TestResolvePaperNameFromRef:
     """Tests for _resolve_paper_name_from_ref helper."""
 
     def test_returns_error_for_empty_input(self, temp_db: Path):
-        name, error = paperpipe._resolve_paper_name_from_ref("", {})
+        name, error = core._resolve_paper_name_from_ref("", {})
         assert name is None
         assert "Missing" in error
 
     def test_finds_paper_in_index(self, temp_db: Path):
         index = {"my-paper": {"arxiv_id": "1234.5678", "title": "Test"}}
-        name, error = paperpipe._resolve_paper_name_from_ref("my-paper", index)
+        name, error = core._resolve_paper_name_from_ref("my-paper", index)
         assert name == "my-paper"
         assert error == ""
 
@@ -673,12 +743,12 @@ class TestResolvePaperNameFromRef:
         paper_dir.mkdir(parents=True)
         (paper_dir / "meta.json").write_text('{"arxiv_id": "1234.5678"}')
 
-        name, error = paperpipe._resolve_paper_name_from_ref("disk-paper", {})
+        name, error = core._resolve_paper_name_from_ref("disk-paper", {})
         assert name == "disk-paper"
         assert error == ""
 
     def test_returns_error_for_invalid_arxiv_id(self, temp_db: Path):
-        name, error = paperpipe._resolve_paper_name_from_ref("not-a-paper-or-id", {})
+        name, error = core._resolve_paper_name_from_ref("not-a-paper-or-id", {})
         assert name is None
         assert "not found" in error.lower()
 
@@ -689,7 +759,7 @@ class TestResolvePaperNameFromRef:
         (paper_dir / "meta.json").write_text('{"arxiv_id": "2301.00001"}')
 
         # Empty index, but valid arxiv ID should trigger fallback scan
-        name, error = paperpipe._resolve_paper_name_from_ref("2301.00001", {})
+        name, error = core._resolve_paper_name_from_ref("2301.00001", {})
         assert name == "some-paper"
         assert error == ""
 
@@ -700,7 +770,7 @@ class TestResolvePaperNameFromRef:
             paper_dir.mkdir(parents=True)
             (paper_dir / "meta.json").write_text('{"arxiv_id": "2301.00001"}')
 
-        name, error = paperpipe._resolve_paper_name_from_ref("2301.00001", {})
+        name, error = core._resolve_paper_name_from_ref("2301.00001", {})
         assert name is None
         assert "Multiple papers match" in error
 
@@ -712,7 +782,7 @@ class TestResolvePaperNameFromRef:
         paper_dir.mkdir(parents=True)
         (paper_dir / "meta.json").write_text('{"arxiv_id": "2301.00001"}')
 
-        name, error = paperpipe._resolve_paper_name_from_ref("2301.00001", {})
+        name, error = core._resolve_paper_name_from_ref("2301.00001", {})
         assert name == "real-paper"
 
     def test_fallback_scan_skips_invalid_json(self, temp_db: Path):
@@ -725,7 +795,7 @@ class TestResolvePaperNameFromRef:
         good_paper.mkdir(parents=True)
         (good_paper / "meta.json").write_text('{"arxiv_id": "2301.00001"}')
 
-        name, error = paperpipe._resolve_paper_name_from_ref("2301.00001", {})
+        name, error = core._resolve_paper_name_from_ref("2301.00001", {})
         assert name == "good-paper"
 
     def test_fallback_scan_skips_missing_meta(self, temp_db: Path):
@@ -737,7 +807,7 @@ class TestResolvePaperNameFromRef:
         valid.mkdir(parents=True)
         (valid / "meta.json").write_text('{"arxiv_id": "2301.00001"}')
 
-        name, error = paperpipe._resolve_paper_name_from_ref("2301.00001", {})
+        name, error = core._resolve_paper_name_from_ref("2301.00001", {})
         assert name == "valid"
 
     def test_fallback_scan_returns_not_found(self, temp_db: Path):
@@ -746,7 +816,7 @@ class TestResolvePaperNameFromRef:
         paper.mkdir(parents=True)
         (paper / "meta.json").write_text('{"arxiv_id": "9999.99999"}')
 
-        name, error = paperpipe._resolve_paper_name_from_ref("2301.00001", {})
+        name, error = core._resolve_paper_name_from_ref("2301.00001", {})
         assert name is None
         assert "not found" in error.lower()
 
@@ -755,27 +825,27 @@ class TestProbeHint:
     """Tests for _probe_hint helper."""
 
     def test_hint_for_gpt52_not_supported(self):
-        hint = paperpipe._probe_hint("completion", "gpt-5.2", "model_not_supported error")
+        hint = paperqa._probe_hint("completion", "gpt-5.2", "model_not_supported error")
         assert hint is not None
         assert "gpt-5.1" in hint
 
     def test_hint_for_embedding_not_supported(self):
-        hint = paperpipe._probe_hint("embedding", "text-embedding-3-large", "not supported")
+        hint = paperqa._probe_hint("embedding", "text-embedding-3-large", "not supported")
         assert hint is not None
         assert "text-embedding-3-small" in hint
 
     def test_hint_for_claude_35_retired(self):
-        hint = paperpipe._probe_hint("completion", "claude-3-5-sonnet", "not_found")
+        hint = paperqa._probe_hint("completion", "claude-3-5-sonnet", "not_found")
         assert hint is not None
         assert "claude-sonnet-4-5" in hint
 
     def test_hint_for_voyage_completion(self):
-        hint = paperpipe._probe_hint("completion", "voyage/voyage-3", "does not support parameters")
+        hint = paperqa._probe_hint("completion", "voyage/voyage-3", "does not support parameters")
         assert hint is not None
         assert "embedding" in hint
 
     def test_no_hint_for_unknown_error(self):
-        hint = paperpipe._probe_hint("completion", "some-model", "random error")
+        hint = paperqa._probe_hint("completion", "some-model", "random error")
         assert hint is None
 
 
@@ -784,7 +854,7 @@ class TestPillowAvailable:
 
     def test_returns_bool(self):
         # Just verify it returns a boolean without crashing
-        result = paperpipe._pillow_available()
+        result = paperqa._pillow_available()
         assert isinstance(result, bool)
 
 
@@ -793,7 +863,7 @@ class TestGenerateLlmContent:
 
     def test_falls_back_when_litellm_unavailable(self, tmp_path, monkeypatch):
         # Force LiteLLM to appear unavailable
-        monkeypatch.setattr(paperpipe, "_litellm_available", lambda: False)
+        monkeypatch.setattr(paper_mod, "_litellm_available", lambda: False)
 
         meta = {
             "arxiv_id": "2301.00001",
@@ -815,7 +885,7 @@ class TestGenerateLlmContent:
         assert tags == []
 
     def test_falls_back_without_tex_content(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(paperpipe, "_litellm_available", lambda: False)
+        monkeypatch.setattr(paper_mod, "_litellm_available", lambda: False)
 
         meta = {
             "arxiv_id": "2301.00001",
@@ -836,13 +906,13 @@ class TestFirstLine:
     """Tests for _first_line helper."""
 
     def test_extracts_first_line(self):
-        assert paperpipe._first_line("first\nsecond\nthird") == "first"
+        assert paperqa._first_line("first\nsecond\nthird") == "first"
 
     def test_strips_whitespace(self):
-        assert paperpipe._first_line("  hello  \nworld") == "hello"
+        assert paperqa._first_line("  hello  \nworld") == "hello"
 
     def test_single_line(self):
-        assert paperpipe._first_line("just one line") == "just one line"
+        assert paperqa._first_line("just one line") == "just one line"
 
 
 class TestCategoriesToTags:
@@ -907,24 +977,24 @@ class TestExtractNameFromTitle:
     """Tests for _extract_name_from_title helper."""
 
     def test_extracts_colon_prefix(self):
-        assert paperpipe._extract_name_from_title("NeRF: Representing Scenes") == "nerf"
+        assert paper_mod._extract_name_from_title("NeRF: Representing Scenes") == "nerf"
 
     def test_extracts_multi_word_prefix(self):
-        assert paperpipe._extract_name_from_title("Instant NGP: Fast Training") == "instant-ngp"
+        assert paper_mod._extract_name_from_title("Instant NGP: Fast Training") == "instant-ngp"
 
     def test_returns_none_for_no_colon(self):
-        assert paperpipe._extract_name_from_title("Attention Is All You Need") is None
+        assert paper_mod._extract_name_from_title("Attention Is All You Need") is None
 
     def test_returns_none_for_long_prefix(self):
         # More than 3 words should be rejected
-        result = paperpipe._extract_name_from_title("This Is A Very Long Prefix: And Then The Rest")
+        result = paper_mod._extract_name_from_title("This Is A Very Long Prefix: And Then The Rest")
         assert result is None
 
     def test_handles_special_characters(self):
-        assert paperpipe._extract_name_from_title("BERT++: Better BERT") == "bert"
+        assert paper_mod._extract_name_from_title("BERT++: Better BERT") == "bert"
 
     def test_handles_parentheses(self):
-        assert paperpipe._extract_name_from_title("GPT (Generative): A Model") == "gpt-generative"
+        assert paper_mod._extract_name_from_title("GPT (Generative): A Model") == "gpt-generative"
 
 
 class TestGenerateAutoName:
@@ -1044,13 +1114,13 @@ class TestGenerateSimpleSummary:
 class TestCli:
     def test_cli_help(self):
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["--help"])
+        result = runner.invoke(cli_mod.cli, ["--help"])
         assert result.exit_code == 0
         assert "paperpipe" in result.output
 
     def test_index_help_includes_leann_build_flags(self) -> None:
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["index", "--help"])
+        result = runner.invoke(cli_mod.cli, ["index", "--help"])
         assert result.exit_code == 0
         assert "--leann-embedding-model" in result.output
         assert "--leann-embedding-mode" in result.output
@@ -1070,12 +1140,12 @@ class TestCli:
             captured["force"] = force
             captured["extra_args"] = list(extra_args)
 
-        monkeypatch.setattr(paperpipe, "_refresh_pqa_pdf_staging_dir", fake_refresh)
-        monkeypatch.setattr(paperpipe, "_leann_build_index", fake_build)
+        monkeypatch.setattr(paperqa, "_refresh_pqa_pdf_staging_dir", fake_refresh)
+        monkeypatch.setattr(cli_mod, "_leann_build_index", fake_build)
 
         runner = CliRunner()
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             [
                 "index",
                 "--backend",
@@ -1110,13 +1180,13 @@ class TestCli:
 
     def test_list_empty(self, temp_db: Path):
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["list"])
+        result = runner.invoke(cli_mod.cli, ["list"])
         assert result.exit_code == 0
         assert "No papers found" in result.output
 
     def test_search_no_results(self, temp_db: Path):
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["search", "nonexistent"])
+        result = runner.invoke(cli_mod.cli, ["search", "nonexistent"])
         assert result.exit_code == 0
         assert "No papers found" in result.output
 
@@ -1132,7 +1202,7 @@ class TestCli:
         monkeypatch.setattr(subprocess, "run", fake_run)
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["search", "--grep", "AdamW"])
+        result = runner.invoke(cli_mod.cli, ["search", "--grep", "AdamW"])
         assert result.exit_code == 0, result.output
         assert "AdamW" in result.output
 
@@ -1155,7 +1225,7 @@ class TestCli:
         monkeypatch.setattr(subprocess, "run", fake_run)
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["search", "--grep", "Eq. 7"])
+        result = runner.invoke(cli_mod.cli, ["search", "--grep", "Eq. 7"])
         assert result.exit_code == 0, result.output
         assert "Eq. 7" in result.output
 
@@ -1174,7 +1244,7 @@ class TestCli:
         monkeypatch.setattr(subprocess, "run", fake_run)
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["search", "--grep", "nope"])
+        result = runner.invoke(cli_mod.cli, ["search", "--grep", "nope"])
         assert result.exit_code == 0, result.output
         assert "No matches" in result.output
 
@@ -1187,13 +1257,13 @@ class TestCli:
         monkeypatch.setattr(subprocess, "run", fake_run)
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["search", "--rg", "hit"])
+        result = runner.invoke(cli_mod.cli, ["search", "--rg", "hit"])
         assert result.exit_code == 0, result.output
         assert "hit" in result.output
 
     def test_search_regex_flag_requires_grep(self, temp_db: Path) -> None:
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["search", "--regex", "x"])
+        result = runner.invoke(cli_mod.cli, ["search", "--regex", "x"])
         assert result.exit_code != 0
         assert "only apply with --grep" in result.output
 
@@ -1206,7 +1276,7 @@ class TestCli:
         monkeypatch.setattr(subprocess, "run", fake_run)
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["search", "--grep", "--json", "AdamW"])
+        result = runner.invoke(cli_mod.cli, ["search", "--grep", "--json", "AdamW"])
         assert result.exit_code == 0, result.output
         payload = json.loads(result.output)
         assert payload[0]["paper"] == "x"
@@ -1227,11 +1297,11 @@ class TestCli:
         paperpipe.save_index({"geom-paper": {"arxiv_id": None, "title": "Surface Reconstruction", "tags": []}})
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["search-index", "--rebuild"])
+        result = runner.invoke(cli_mod.cli, ["search-index", "--rebuild"])
         assert result.exit_code == 0, result.output
         assert (temp_db / "search.db").exists()
 
-        result = runner.invoke(paperpipe.cli, ["search", "--fts", "surface"])
+        result = runner.invoke(cli_mod.cli, ["search", "--fts", "surface"])
         assert result.exit_code == 0, result.output
         assert "geom-paper" in result.output
 
@@ -1259,7 +1329,7 @@ class TestCli:
         )
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["search-index", "--rebuild"])
+        result = runner.invoke(cli_mod.cli, ["search-index", "--rebuild"])
         assert result.exit_code == 0, result.output
 
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/rg" if cmd == "rg" else None)
@@ -1272,7 +1342,7 @@ class TestCli:
 
         monkeypatch.setattr(subprocess, "run", fake_run)
 
-        result = runner.invoke(paperpipe.cli, ["search", "--hybrid", "surface reconstruction"])
+        result = runner.invoke(cli_mod.cli, ["search", "--hybrid", "surface reconstruction"])
         assert result.exit_code == 0, result.output
         # Hybrid should annotate grep hits.
         assert "paper-b" in result.output
@@ -1290,7 +1360,7 @@ class TestCli:
         paperpipe.save_index({"paper-b": {"arxiv_id": None, "title": "Unrelated", "tags": []}})
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["search-index", "--rebuild"])
+        result = runner.invoke(cli_mod.cli, ["search-index", "--rebuild"])
         assert result.exit_code == 0, result.output
 
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/rg" if cmd == "rg" else None)
@@ -1302,13 +1372,13 @@ class TestCli:
 
         monkeypatch.setattr(subprocess, "run", fake_run)
 
-        result = runner.invoke(paperpipe.cli, ["search", "--hybrid", "--show-grep-hits", "surface reconstruction"])
+        result = runner.invoke(cli_mod.cli, ["search", "--hybrid", "--show-grep-hits", "surface reconstruction"])
         assert result.exit_code == 0, result.output
         assert "paper-b/summary.md:1:" in result.output
 
     def test_search_hybrid_requires_search_db(self, temp_db: Path) -> None:
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["search", "--hybrid", "x"])
+        result = runner.invoke(cli_mod.cli, ["search", "--hybrid", "x"])
         assert result.exit_code != 0
         assert "search-index" in result.output
 
@@ -1325,11 +1395,11 @@ class TestCli:
 
         paperpipe.save_index({"p": {"arxiv_id": None, "title": "Surface Reconstruction", "tags": ["tag"]}})
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["search-index", "--rebuild"])
+        result = runner.invoke(cli_mod.cli, ["search-index", "--rebuild"])
         assert result.exit_code == 0, result.output
 
         monkeypatch.setenv("PAPERPIPE_SEARCH_MODE", "scan")
-        result = runner.invoke(paperpipe.cli, ["search", "surface reconstruction"])
+        result = runner.invoke(cli_mod.cli, ["search", "surface reconstruction"])
         assert result.exit_code == 0, result.output
         assert "Matches:" in result.output
 
@@ -1346,39 +1416,39 @@ class TestCli:
             conn.commit()
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["search", "--fts", "x"])
+        result = runner.invoke(cli_mod.cli, ["search", "--fts", "x"])
         assert result.exit_code != 0
         assert "schema version mismatch" in result.output.lower()
         assert "search-index --rebuild" in result.output
 
     def test_show_nonexistent(self, temp_db: Path):
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["show", "nonexistent"])
+        result = runner.invoke(cli_mod.cli, ["show", "nonexistent"])
         assert result.exit_code == 0
         assert "not found" in result.output
 
     def test_path_command(self, temp_db: Path):
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["path"])
+        result = runner.invoke(cli_mod.cli, ["path"])
         assert result.exit_code == 0
         assert ".paperpipe" in result.output
 
     def test_tags_empty(self, temp_db: Path):
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["tags"])
+        result = runner.invoke(cli_mod.cli, ["tags"])
         assert result.exit_code == 0
 
     def test_cli_verbose_flag(self, temp_db: Path):
         """Test that --verbose flag is accepted."""
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["--verbose", "list"])
+        result = runner.invoke(cli_mod.cli, ["--verbose", "list"])
         assert result.exit_code == 0
         assert "No papers found" in result.output
 
     def test_cli_quiet_flag(self, temp_db: Path):
         """Test that --quiet flag is accepted."""
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["--quiet", "list"])
+        result = runner.invoke(cli_mod.cli, ["--quiet", "list"])
         assert result.exit_code == 0
         # Data output should still be shown even with --quiet
         assert "No papers found" in result.output
@@ -1396,7 +1466,7 @@ class TestCli:
             }
         )
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["list"])
+        result = runner.invoke(cli_mod.cli, ["list"])
         assert result.exit_code == 0
         assert "test-paper" in result.output
 
@@ -1408,7 +1478,7 @@ class TestCli:
             }
         )
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["list", "-t", "ml"])
+        result = runner.invoke(cli_mod.cli, ["list", "-t", "ml"])
         assert "paper1" in result.output
         assert "paper2" not in result.output
 
@@ -1423,7 +1493,7 @@ class TestCli:
             }
         )
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["search", "neural"])
+        result = runner.invoke(cli_mod.cli, ["search", "neural"])
         assert "neural-sdf" in result.output
 
     def test_search_finds_by_tag(self, temp_db: Path):
@@ -1437,7 +1507,7 @@ class TestCli:
             }
         )
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["search", "transformer"])
+        result = runner.invoke(cli_mod.cli, ["search", "transformer"])
         assert "test-paper" in result.output
 
     def test_search_finds_by_arxiv_id(self, temp_db: Path):
@@ -1451,7 +1521,7 @@ class TestCli:
             }
         )
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["search", "1706"])
+        result = runner.invoke(cli_mod.cli, ["search", "1706"])
         assert "attention" in result.output
 
     def test_search_finds_by_summary_content_fuzzy(self, temp_db: Path):
@@ -1471,7 +1541,7 @@ class TestCli:
         )
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["search", "surfae reconstructon"])
+        result = runner.invoke(cli_mod.cli, ["search", "surfae reconstructon"])
         assert result.exit_code == 0
         assert "geom-paper" in result.output
 
@@ -1491,7 +1561,7 @@ class TestCli:
         )
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["search", "--exact", "surfae reconstructon"])
+        result = runner.invoke(cli_mod.cli, ["search", "--exact", "surfae reconstructon"])
         assert result.exit_code == 0
         assert "No papers found" in result.output
 
@@ -1520,7 +1590,7 @@ class TestCli:
         )
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["search", "surface reconstruction"])
+        result = runner.invoke(cli_mod.cli, ["search", "surface reconstruction"])
         assert result.exit_code == 0
         assert "exact-paper" in result.output
         assert "fuzzy-only-paper" not in result.output
@@ -1544,7 +1614,7 @@ class TestCli:
         (paper_dir / "source.tex").touch()
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["show", "test-paper"])
+        result = runner.invoke(cli_mod.cli, ["show", "test-paper"])
         assert result.exit_code == 0
         assert "Test Paper Title" in result.output
         assert "2301.00001" in result.output
@@ -1560,7 +1630,7 @@ class TestCli:
             }
         )
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["tags"])
+        result = runner.invoke(cli_mod.cli, ["tags"])
         assert result.exit_code == 0
         assert "ml: 3" in result.output
         assert "cv: 1" in result.output
@@ -1573,7 +1643,7 @@ class TestCli:
             }
         )
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["list", "--json"])
+        result = runner.invoke(cli_mod.cli, ["list", "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert "paper1" in data
@@ -1596,7 +1666,7 @@ class TestCli:
         paperpipe.save_index({"test-paper": {"arxiv_id": "2301.00001", "title": "Test Paper Title", "tags": ["ml"]}})
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["show", "test-paper", "--level", "eq"])
+        result = runner.invoke(cli_mod.cli, ["show", "test-paper", "--level", "eq"])
         assert result.exit_code == 0
         assert "# test-paper" in result.output
         assert "Content: equations" in result.output
@@ -1617,7 +1687,7 @@ class TestCli:
         )
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["show", "paper-a", "paper-b", "--level", "equations"])
+        result = runner.invoke(cli_mod.cli, ["show", "paper-a", "paper-b", "--level", "equations"])
         assert result.exit_code == 0
         assert "# paper-a" in result.output
         assert "# paper-b" in result.output
@@ -1630,7 +1700,7 @@ class TestCli:
         paperpipe.save_index({"test-paper": {"arxiv_id": "2301.00001", "title": "T", "tags": []}})
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["export", "test-paper", "--level", "equations", "--to", "-"])
+        result = runner.invoke(cli_mod.cli, ["export", "test-paper", "--level", "equations", "--to", "-"])
         assert result.exit_code != 0
         assert "export` only writes to a directory" in result.output.lower()
 
@@ -1642,7 +1712,7 @@ class TestCli:
 
         runner = CliRunner()
         out_dir = tmp_path / "paper-context"
-        result = runner.invoke(paperpipe.cli, ["export", "test-paper", "--level", "equations", "--to", str(out_dir)])
+        result = runner.invoke(cli_mod.cli, ["export", "test-paper", "--level", "equations", "--to", str(out_dir)])
         assert result.exit_code == 0
         assert (out_dir / "test-paper_equations.md").exists()
         assert (out_dir / "test-paper_equations.md").read_text() == "eq\n"
@@ -1655,7 +1725,7 @@ class TestCli:
 
         runner = CliRunner()
         out_dir = tmp_path / "paper-context"
-        result = runner.invoke(paperpipe.cli, ["export", "test-paper", "--level", "eq", "--to", str(out_dir)])
+        result = runner.invoke(cli_mod.cli, ["export", "test-paper", "--level", "eq", "--to", str(out_dir)])
         assert result.exit_code == 0
         assert (out_dir / "test-paper_equations.md").exists()
 
@@ -1827,7 +1897,8 @@ class TestDownloadSource:
         import requests
 
         mock_response = MagicMock()
-        mock_response.raise_for_status.side_effect = Exception("404 Not Found")
+        mock_response.status_code = 404
+        mock_response.raise_for_status.side_effect = requests.HTTPError("404 Not Found", response=mock_response)
 
         monkeypatch.setattr(requests, "get", lambda url, timeout: mock_response)
 
@@ -1988,63 +2059,63 @@ class TestAddCommand:
         assert paperpipe.generate_auto_name(meta, set(), use_llm=False) == "some-paper"
 
     def test_parse_authors_keeps_last_first_single_author(self):
-        assert paperpipe._parse_authors("Smith, John") == ["Smith, John"]
+        assert core._parse_authors("Smith, John") == ["Smith, John"]
 
     def test_parse_authors_semicolon_separated(self):
-        assert paperpipe._parse_authors("Smith, John; Doe, Jane") == ["Smith, John", "Doe, Jane"]
+        assert core._parse_authors("Smith, John; Doe, Jane") == ["Smith, John", "Doe, Jane"]
 
     def test_parse_authors_multiple_comma_separated(self):
-        assert paperpipe._parse_authors("Alice, Bob, Charlie") == ["Alice", "Bob", "Charlie"]
+        assert core._parse_authors("Alice, Bob, Charlie") == ["Alice", "Bob", "Charlie"]
 
     def test_parse_authors_empty(self):
-        assert paperpipe._parse_authors("") == []
-        assert paperpipe._parse_authors(None) == []
+        assert core._parse_authors("") == []
+        assert core._parse_authors(None) == []
 
     def test_format_title_short_truncates(self):
         long_title = "A" * 100
-        result = paperpipe._format_title_short(long_title, max_len=60)
+        result = core._format_title_short(long_title, max_len=60)
         assert len(result) == 63  # 60 chars + "..."
         assert result.endswith("...")
 
     def test_format_title_short_keeps_short(self):
         short_title = "Short Title"
-        assert paperpipe._format_title_short(short_title) == short_title
+        assert core._format_title_short(short_title) == short_title
 
     def test_slugify_title_basic(self):
-        assert paperpipe._slugify_title("Hello World") == "hello-world"
+        assert core._slugify_title("Hello World") == "hello-world"
 
     def test_slugify_title_empty(self):
-        assert paperpipe._slugify_title("") == "paper"
-        assert paperpipe._slugify_title("   ") == "paper"
+        assert core._slugify_title("") == "paper"
+        assert core._slugify_title("   ") == "paper"
 
     def test_slugify_title_truncates_long(self):
         long_title = "word " * 50
-        result = paperpipe._slugify_title(long_title, max_len=30)
+        result = core._slugify_title(long_title, max_len=30)
         assert len(result) <= 30
 
     def test_slugify_title_special_chars(self):
-        assert paperpipe._slugify_title("Test: A 'Paper' with \"Quotes\"") == "test-a-paper-with-quotes"
+        assert core._slugify_title("Test: A 'Paper' with \"Quotes\"") == "test-a-paper-with-quotes"
 
     def test_looks_like_pdf_valid(self, tmp_path: Path):
         pdf = tmp_path / "test.pdf"
         pdf.write_bytes(b"%PDF-1.4\ntest content")
-        assert paperpipe._looks_like_pdf(pdf) is True
+        assert core._looks_like_pdf(pdf) is True
 
     def test_looks_like_pdf_invalid(self, tmp_path: Path):
         txt = tmp_path / "test.txt"
         txt.write_text("not a pdf")
-        assert paperpipe._looks_like_pdf(txt) is False
+        assert core._looks_like_pdf(txt) is False
 
     def test_looks_like_pdf_missing_file(self, tmp_path: Path):
         missing = tmp_path / "missing.pdf"
-        assert paperpipe._looks_like_pdf(missing) is False
+        assert core._looks_like_pdf(missing) is False
 
     def test_add_rejects_unsafe_name_without_network(self, temp_db: Path, monkeypatch):
-        monkeypatch.setattr(paperpipe, "fetch_arxiv_metadata", lambda _: (_ for _ in ()).throw(AssertionError()))
+        monkeypatch.setattr(paper_mod, "fetch_arxiv_metadata", lambda _: (_ for _ in ()).throw(AssertionError()))
 
         runner = CliRunner()
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             ["add", "1706.03762", "--name", "../bad", "--no-llm"],
         )
 
@@ -2057,7 +2128,7 @@ class TestAddCommand:
 
         runner = CliRunner()
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             [
                 "add",
                 "--pdf",
@@ -2111,7 +2182,7 @@ class TestAddCommand:
         pdf_path.write_bytes(b"%PDF-1.4\n%local\n")
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["add", "--pdf", str(pdf_path), "--no-llm"])
+        result = runner.invoke(cli_mod.cli, ["add", "--pdf", str(pdf_path), "--no-llm"])
         assert result.exit_code != 0
         assert "--title" in result.output
 
@@ -2121,7 +2192,7 @@ class TestAddCommand:
 
         runner = CliRunner()
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             ["add", "--pdf", str(bad_path), "--title", "Some Paper", "--no-llm"],
         )
         assert result.exit_code != 0
@@ -2133,7 +2204,7 @@ class TestAddCommand:
 
         runner = CliRunner()
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             ["add", "--pdf", str(pdf_path), "--title", "Some Paper", "--year", "12", "--no-llm"],
         )
         assert result.exit_code != 0
@@ -2149,7 +2220,7 @@ class TestAddCommand:
 
         runner = CliRunner()
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             ["add", "--pdf", str(pdf_path), "--title", "Some Paper", "--no-llm"],
         )
         assert result.exit_code != 0
@@ -2166,11 +2237,11 @@ class TestAddCommand:
         paperpipe.save_index({"test-paper": {"arxiv_id": "1706.03762", "title": "Test", "tags": [], "added": "x"}})
 
         # Should not fetch metadata again when skipping duplicates
-        monkeypatch.setattr(paperpipe, "fetch_arxiv_metadata", lambda _: (_ for _ in ()).throw(AssertionError()))
+        monkeypatch.setattr(paper_mod, "fetch_arxiv_metadata", lambda _: (_ for _ in ()).throw(AssertionError()))
 
         runner = CliRunner()
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             ["add", "1706.03762", "--name", "test-paper", "--no-llm"],
         )
 
@@ -2200,11 +2271,11 @@ class TestAddCommand:
                 "pdf_url": "https://arxiv.org/pdf/1706.03762",
             }
 
-        monkeypatch.setattr(paperpipe, "fetch_arxiv_metadata", mock_fetch)
+        monkeypatch.setattr(paper_mod, "fetch_arxiv_metadata", mock_fetch)
 
         runner = CliRunner()
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             ["add", "1706.03762", "--name", "existing-paper", "--no-llm"],
         )
 
@@ -2219,10 +2290,10 @@ class TestAddCommand:
         )
         paperpipe.save_index({"attention": {"arxiv_id": "1706.03762v1", "title": "Old", "tags": [], "added": "x"}})
 
-        monkeypatch.setattr(paperpipe, "fetch_arxiv_metadata", lambda _: (_ for _ in ()).throw(AssertionError()))
+        monkeypatch.setattr(paper_mod, "fetch_arxiv_metadata", lambda _: (_ for _ in ()).throw(AssertionError()))
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["add", "1706.03762v2", "--no-llm"])
+        result = runner.invoke(cli_mod.cli, ["add", "1706.03762v2", "--no-llm"])
 
         assert result.exit_code == 0
         assert "already added" in result.output.lower()
@@ -2257,17 +2328,17 @@ class TestAddCommand:
                 "pdf_url": "https://arxiv.org/pdf/1706.03762",
             }
 
-        monkeypatch.setattr(paperpipe, "fetch_arxiv_metadata", mock_fetch)
+        monkeypatch.setattr(paper_mod, "fetch_arxiv_metadata", mock_fetch)
 
         def fake_download_pdf(_arxiv_id: str, dest: Path):
             dest.write_bytes(b"%PDF")
             return True
 
-        monkeypatch.setattr(paperpipe, "download_pdf", fake_download_pdf)
-        monkeypatch.setattr(paperpipe, "download_source", lambda _arxiv_id, _paper_dir: None)
+        monkeypatch.setattr(paper_mod, "download_pdf", fake_download_pdf)
+        monkeypatch.setattr(paper_mod, "download_source", lambda _arxiv_id, _paper_dir: None)
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["add", "1706.03762", "--duplicate", "--no-llm"])
+        result = runner.invoke(cli_mod.cli, ["add", "1706.03762", "--duplicate", "--no-llm"])
 
         assert result.exit_code == 0
         assert "Added: 1706_03762-2" in result.output
@@ -2315,7 +2386,7 @@ class TestAddCommand:
                 "pdf_url": "https://arxiv.org/pdf/1706.03762",
             }
 
-        monkeypatch.setattr(paperpipe, "fetch_arxiv_metadata", mock_fetch)
+        monkeypatch.setattr(paper_mod, "fetch_arxiv_metadata", mock_fetch)
 
         def fake_download_pdf(_arxiv_id: str, dest: Path):
             dest.write_bytes(b"%PDF")
@@ -2326,11 +2397,11 @@ class TestAddCommand:
             (pdir / "source.tex").write_text(tex)
             return tex
 
-        monkeypatch.setattr(paperpipe, "download_pdf", fake_download_pdf)
-        monkeypatch.setattr(paperpipe, "download_source", fake_download_source)
+        monkeypatch.setattr(paper_mod, "download_pdf", fake_download_pdf)
+        monkeypatch.setattr(paper_mod, "download_source", fake_download_source)
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["add", "1706.03762", "--update", "--name", name, "--no-llm"])
+        result = runner.invoke(cli_mod.cli, ["add", "1706.03762", "--update", "--name", name, "--no-llm"])
 
         assert result.exit_code == 0
         assert "Updated: attention" in result.output
@@ -2349,7 +2420,7 @@ class TestAddMultiplePapers:
         """Test that --name errors when used with multiple papers."""
         runner = CliRunner()
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             ["add", "1706.03762", "2301.00001", "--name", "my-paper", "--no-llm"],
         )
         assert result.exit_code != 0
@@ -2361,7 +2432,7 @@ class TestInstallSkillCommand:
         monkeypatch.setenv("HOME", str(tmp_path))
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["install", "skill", "--codex"])
+        result = runner.invoke(cli_mod.cli, ["install", "skill", "--codex"])
         assert result.exit_code == 0, result.output
 
         dest = tmp_path / ".codex" / "skills" / "papi"
@@ -2374,7 +2445,7 @@ class TestInstallSkillCommand:
         dest.mkdir(parents=True)
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["install", "skill", "--codex"])
+        result = runner.invoke(cli_mod.cli, ["install", "skill", "--codex"])
         assert result.exit_code == 0
         assert "use --force" in result.output.lower()
 
@@ -2385,7 +2456,7 @@ class TestInstallSkillCommand:
         dest.write_text("not a symlink")
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["install", "skill", "--codex", "--force"])
+        result = runner.invoke(cli_mod.cli, ["install", "skill", "--codex", "--force"])
         assert result.exit_code == 0, result.output
 
         assert dest.is_symlink()
@@ -2394,7 +2465,7 @@ class TestInstallSkillCommand:
         monkeypatch.setenv("HOME", str(tmp_path))
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["install", "skill", "--gemini"])
+        result = runner.invoke(cli_mod.cli, ["install", "skill", "--gemini"])
         assert result.exit_code == 0, result.output
 
         dest = tmp_path / ".gemini" / "skills" / "papi"
@@ -2407,7 +2478,7 @@ class TestInstallPromptsCommand:
         monkeypatch.setenv("HOME", str(tmp_path))
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["install", "prompts", "--codex"])
+        result = runner.invoke(cli_mod.cli, ["install", "prompts", "--codex"])
         assert result.exit_code == 0, result.output
 
         prompt_dir = tmp_path / ".codex" / "prompts"
@@ -2432,7 +2503,7 @@ class TestInstallPromptsCommand:
         dest.write_text("not a symlink")
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["install", "prompts", "--codex"])
+        result = runner.invoke(cli_mod.cli, ["install", "prompts", "--codex"])
         assert result.exit_code == 0
         assert "use --force" in result.output.lower()
 
@@ -2440,7 +2511,7 @@ class TestInstallPromptsCommand:
         monkeypatch.setenv("HOME", str(tmp_path))
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["install", "prompts", "--codex", "--copy"])
+        result = runner.invoke(cli_mod.cli, ["install", "prompts", "--codex", "--copy"])
         assert result.exit_code == 0, result.output
 
         dest = tmp_path / ".codex" / "prompts" / "curate-paper-note.md"
@@ -2451,7 +2522,7 @@ class TestInstallPromptsCommand:
         monkeypatch.setenv("HOME", str(tmp_path))
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["install", "prompts", "--gemini"])
+        result = runner.invoke(cli_mod.cli, ["install", "prompts", "--gemini"])
         assert result.exit_code == 0, result.output
 
         prompt_dir = tmp_path / ".gemini" / "commands"
@@ -2509,7 +2580,7 @@ class TestInstallMcpCommand:
         monkeypatch.setattr(subprocess, "run", fake_run)
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["install", "mcp", "--claude"])
+        result = runner.invoke(cli_mod.cli, ["install", "mcp", "--claude"])
         assert result.exit_code == 0, result.output
 
         assert any(
@@ -2530,7 +2601,7 @@ class TestInstallMcpCommand:
     def test_install_mcp_repo_writes_mcp_json(self, temp_db: Path):
         runner = CliRunner()
         with runner.isolated_filesystem():
-            result = runner.invoke(paperpipe.cli, ["install", "mcp", "--repo", "--embedding", "text-embedding-3-small"])
+            result = runner.invoke(cli_mod.cli, ["install", "mcp", "--repo", "--embedding", "text-embedding-3-small"])
             assert result.exit_code == 0, result.output
 
             cfg = json.loads(Path(".mcp.json").read_text())
@@ -2545,7 +2616,7 @@ class TestInstallMcpCommand:
 
         runner = CliRunner()
         with runner.isolated_filesystem():
-            result = runner.invoke(paperpipe.cli, ["install", "mcp", "--repo", "--embedding", "text-embedding-3-small"])
+            result = runner.invoke(cli_mod.cli, ["install", "mcp", "--repo", "--embedding", "text-embedding-3-small"])
             assert result.exit_code == 0, result.output
 
             cfg = json.loads(Path(".mcp.json").read_text())
@@ -2558,12 +2629,12 @@ class TestInstallMcpCommand:
         self, temp_db: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         (temp_db / "config.toml").write_text("\n".join(["[paperqa]", 'embedding = "config-embedding"', ""]))
-        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
         monkeypatch.setenv("PAPERQA_EMBEDDING", "env-embedding")
 
         runner = CliRunner()
         with runner.isolated_filesystem():
-            result = runner.invoke(paperpipe.cli, ["install", "mcp", "--repo"])
+            result = runner.invoke(cli_mod.cli, ["install", "mcp", "--repo"])
             assert result.exit_code == 0, result.output
 
             cfg = json.loads(Path(".mcp.json").read_text())
@@ -2574,7 +2645,7 @@ class TestInstallMcpCommand:
         monkeypatch.setattr(shutil, "which", lambda _cmd: None)
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["install", "mcp", "--gemini", "--embedding", "text-embedding-3-small"])
+        result = runner.invoke(cli_mod.cli, ["install", "mcp", "--gemini", "--embedding", "text-embedding-3-small"])
         assert result.exit_code == 0, result.output
 
         cfg = json.loads((tmp_path / ".gemini" / "settings.json").read_text())
@@ -2594,7 +2665,7 @@ class TestInstallMcpCommand:
         monkeypatch.setattr(subprocess, "run", fake_run)
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["install", "mcp", "--gemini", "--embedding", "text-embedding-3-small"])
+        result = runner.invoke(cli_mod.cli, ["install", "mcp", "--gemini", "--embedding", "text-embedding-3-small"])
         assert result.exit_code == 0, result.output
 
         assert any(
@@ -2628,7 +2699,7 @@ class TestInstallMcpCommand:
         monkeypatch.setattr(subprocess, "run", fake_run)
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["install", "mcp", "--gemini"])
+        result = runner.invoke(cli_mod.cli, ["install", "mcp", "--gemini"])
         assert result.exit_code == 0, result.output
         assert "already configured" not in result.output.lower()
         assert settings_path.read_text() == before
@@ -2645,7 +2716,7 @@ class TestInstallMcpCommand:
         monkeypatch.setattr(subprocess, "run", fake_run)
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["install", "mcp", "--codex", "--embedding", "text-embedding-3-small"])
+        result = runner.invoke(cli_mod.cli, ["install", "mcp", "--codex", "--embedding", "text-embedding-3-small"])
         assert result.exit_code == 0, result.output
         assert any(
             c[:4] == ["codex", "mcp", "add", "paperqa"]
@@ -2668,7 +2739,7 @@ class TestInstallMcpCommand:
 
         runner = CliRunner()
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             ["install", "mcp", "--codex", "--force", "--embedding", "text-embedding-3-small"],
         )
         assert result.exit_code == 0, result.output
@@ -2681,13 +2752,13 @@ class TestUninstallSkillCommand:
         monkeypatch.setenv("HOME", str(tmp_path))
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["install", "skill", "--codex"])
+        result = runner.invoke(cli_mod.cli, ["install", "skill", "--codex"])
         assert result.exit_code == 0, result.output
 
         dest = tmp_path / ".codex" / "skills" / "papi"
         assert dest.is_symlink()
 
-        result2 = runner.invoke(paperpipe.cli, ["uninstall", "skill", "--codex"])
+        result2 = runner.invoke(cli_mod.cli, ["uninstall", "skill", "--codex"])
         assert result2.exit_code == 0, result2.output
         assert not dest.exists()
 
@@ -2698,7 +2769,7 @@ class TestUninstallSkillCommand:
         dest.write_text("not a symlink")
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["uninstall", "skill", "--codex"])
+        result = runner.invoke(cli_mod.cli, ["uninstall", "skill", "--codex"])
         assert result.exit_code == 1
         assert "use --force" in result.output.lower()
 
@@ -2708,13 +2779,13 @@ class TestUninstallPromptsCommand:
         monkeypatch.setenv("HOME", str(tmp_path))
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["install", "prompts", "--codex"])
+        result = runner.invoke(cli_mod.cli, ["install", "prompts", "--codex"])
         assert result.exit_code == 0, result.output
 
         dest = tmp_path / ".codex" / "prompts" / "papi.md"
         assert dest.is_symlink()
 
-        result2 = runner.invoke(paperpipe.cli, ["uninstall", "prompts", "--codex"])
+        result2 = runner.invoke(cli_mod.cli, ["uninstall", "prompts", "--codex"])
         assert result2.exit_code == 0, result2.output
         assert not dest.exists()
 
@@ -2722,14 +2793,14 @@ class TestUninstallPromptsCommand:
         monkeypatch.setenv("HOME", str(tmp_path))
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["install", "prompts", "--codex", "--copy"])
+        result = runner.invoke(cli_mod.cli, ["install", "prompts", "--codex", "--copy"])
         assert result.exit_code == 0, result.output
 
         dest = tmp_path / ".codex" / "prompts" / "curate-paper-note.md"
         assert dest.exists()
         assert not dest.is_symlink()
 
-        result2 = runner.invoke(paperpipe.cli, ["uninstall", "prompts", "--codex"])
+        result2 = runner.invoke(cli_mod.cli, ["uninstall", "prompts", "--codex"])
         assert result2.exit_code == 0, result2.output
         assert not dest.exists()
 
@@ -2738,7 +2809,7 @@ class TestUninstallPromptsCommand:
         monkeypatch.setattr(shutil, "which", lambda _cmd: None)
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["uninstall", "mcp,prompts", "--codex", "--force"])
+        result = runner.invoke(cli_mod.cli, ["uninstall", "mcp,prompts", "--codex", "--force"])
         assert result.exit_code == 0, result.output
 
 
@@ -2755,7 +2826,7 @@ class TestUninstallMcpCommand:
         monkeypatch.setattr(subprocess, "run", fake_run)
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["uninstall", "mcp", "--claude"])
+        result = runner.invoke(cli_mod.cli, ["uninstall", "mcp", "--claude"])
         assert result.exit_code == 0, result.output
 
         assert ["claude", "mcp", "remove", "paperqa"] in calls
@@ -2790,7 +2861,7 @@ class TestUninstallMcpCommand:
                 + "\n"
             )
 
-            result = runner.invoke(paperpipe.cli, ["uninstall", "mcp", "--repo"])
+            result = runner.invoke(cli_mod.cli, ["uninstall", "mcp", "--repo"])
             assert result.exit_code == 0, result.output
 
             cfg = json.loads(Path(".mcp.json").read_text())
@@ -2821,7 +2892,7 @@ class TestUninstallMcpCommand:
         )
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["uninstall", "mcp", "--gemini"])
+        result = runner.invoke(cli_mod.cli, ["uninstall", "mcp", "--gemini"])
         assert result.exit_code == 0, result.output
 
         cfg = json.loads((tmp_path / ".gemini" / "settings.json").read_text())
@@ -2841,7 +2912,7 @@ class TestUninstallMcpCommand:
         monkeypatch.setattr(subprocess, "run", fake_run)
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["uninstall", "mcp", "--gemini"])
+        result = runner.invoke(cli_mod.cli, ["uninstall", "mcp", "--gemini"])
         assert result.exit_code == 0, result.output
 
         assert ["gemini", "mcp", "remove", "--scope", "user", "paperqa"] in calls
@@ -2851,7 +2922,7 @@ class TestUninstallMcpCommand:
 class TestUninstallValidation:
     def test_uninstall_repo_requires_mcp_component(self, temp_db: Path):
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["uninstall", "skill", "--repo"])
+        result = runner.invoke(cli_mod.cli, ["uninstall", "skill", "--repo"])
         assert result.exit_code != 0
         assert "--repo is only valid" in result.output
 
@@ -2876,7 +2947,7 @@ class TestRemoveMultiplePapers:
         )
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["remove", "p1", "p2", "--yes"])
+        result = runner.invoke(cli_mod.cli, ["remove", "p1", "p2", "--yes"])
         assert result.exit_code == 0
         assert "Removed: p1" in result.output
         assert "Removed: p2" in result.output
@@ -2897,7 +2968,7 @@ class TestRemoveMultiplePapers:
 
         runner = CliRunner()
         # p1 exists, nonexistent does not
-        result = runner.invoke(paperpipe.cli, ["remove", "p1", "nonexistent", "--yes"])
+        result = runner.invoke(cli_mod.cli, ["remove", "p1", "nonexistent", "--yes"])
         # Exit code 1 because one failed
         assert result.exit_code == 1
         assert "Removed: p1" in result.output
@@ -2927,7 +2998,7 @@ class TestRegenerateMultiplePapers:
         )
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["regenerate", "p1", "p2", "--no-llm", "-o", "summary,equations"])
+        result = runner.invoke(cli_mod.cli, ["regenerate", "p1", "p2", "--no-llm", "-o", "summary,equations"])
         assert result.exit_code == 0
         assert "Regenerating p1:" in result.output
         assert "Regenerating p2:" in result.output
@@ -2946,7 +3017,7 @@ class TestRegenerateMultiplePapers:
 
         runner = CliRunner()
         # p1 exists, nonexistent does not
-        result = runner.invoke(paperpipe.cli, ["regenerate", "p1", "nonexistent", "--no-llm", "-o", "summary"])
+        result = runner.invoke(cli_mod.cli, ["regenerate", "p1", "nonexistent", "--no-llm", "-o", "summary"])
         # Exit code 1 because one failed
         assert result.exit_code == 1
         assert "Regenerating p1:" in result.output
@@ -3002,7 +3073,7 @@ class TestAuditCommand:
         )
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["audit"])
+        result = runner.invoke(cli_mod.cli, ["audit"])
         assert result.exit_code == 0
         assert "flagged" in result.output.lower()
         assert "bad-paper" in result.output
@@ -3037,7 +3108,7 @@ class TestAuditCommand:
         paperpipe.save_index({"bad-paper": {"arxiv_id": "id-bad", "title": "Bad Paper", "tags": [], "added": "x"}})
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["audit", "--regenerate", "--no-llm", "-o", "summary,equations"])
+        result = runner.invoke(cli_mod.cli, ["audit", "--regenerate", "--no-llm", "-o", "summary,equations"])
         assert result.exit_code == 0
         assert "Regenerating bad-paper:" in result.output
         assert "# Bad Paper" in (bad_dir / "summary.md").read_text()
@@ -3048,7 +3119,7 @@ class TestExport:
     def test_export_nonexistent_paper(self, temp_db: Path):
         runner = CliRunner()
         with runner.isolated_filesystem():
-            result = runner.invoke(paperpipe.cli, ["export", "nonexistent"])
+            result = runner.invoke(cli_mod.cli, ["export", "nonexistent"])
             assert "not found" in result.output
 
     def test_export_summary(self, temp_db: Path):
@@ -3059,7 +3130,7 @@ class TestExport:
 
         runner = CliRunner()
         with runner.isolated_filesystem():
-            result = runner.invoke(paperpipe.cli, ["export", "test-paper", "--level", "summary", "--to", "."])
+            result = runner.invoke(cli_mod.cli, ["export", "test-paper", "--level", "summary", "--to", "."])
             assert result.exit_code == 0
             assert Path("test-paper_summary.md").exists()
             assert Path("test-paper_summary.md").read_text() == "# Test Summary"
@@ -3071,7 +3142,7 @@ class TestExport:
 
         runner = CliRunner()
         with runner.isolated_filesystem():
-            result = runner.invoke(paperpipe.cli, ["export", "test-paper", "--level", "equations", "--to", "."])
+            result = runner.invoke(cli_mod.cli, ["export", "test-paper", "--level", "equations", "--to", "."])
             assert result.exit_code == 0
             assert Path("test-paper_equations.md").exists()
 
@@ -3082,7 +3153,7 @@ class TestExport:
 
         runner = CliRunner()
         with runner.isolated_filesystem():
-            result = runner.invoke(paperpipe.cli, ["export", "test-paper", "--level", "full", "--to", "."])
+            result = runner.invoke(cli_mod.cli, ["export", "test-paper", "--level", "full", "--to", "."])
             assert result.exit_code == 0
             assert Path("test-paper.tex").exists()
 
@@ -3093,7 +3164,7 @@ class TestExport:
 
         runner = CliRunner()
         with runner.isolated_filesystem():
-            result = runner.invoke(paperpipe.cli, ["export", "test-paper", "--level", "full", "--to", "."])
+            result = runner.invoke(cli_mod.cli, ["export", "test-paper", "--level", "full", "--to", "."])
             assert "No LaTeX source" in result.output
 
 
@@ -3101,7 +3172,7 @@ class TestAskCommand:
     def test_ask_constructs_correct_command(self, temp_db: Path, monkeypatch):
         # Mock pqa availability
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
-        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: False)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: False)
 
         # Mock subprocess.Popen (used for pqa with streaming output)
         mock_popen = MockPopen(returncode=0, stdout="Answer\n")
@@ -3113,7 +3184,7 @@ class TestAskCommand:
 
         runner = CliRunner()
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             [
                 "ask",
                 "query",
@@ -3158,18 +3229,18 @@ class TestAskCommand:
         assert "0.7" in pqa_call
         assert "--verbosity" in pqa_call
         assert "2" in pqa_call
-        assert pqa_kwargs.get("cwd") == paperpipe.PAPERS_DIR
+        assert pqa_kwargs.get("cwd") == config.PAPERS_DIR
         assert (temp_db / ".pqa_papers" / "test-paper.pdf").exists()
 
     def test_ask_injects_ollama_timeout_config_by_default(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
-        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: False)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: False)
 
         def fake_prepare_ollama_env(env: dict[str, str]) -> None:
             env["OLLAMA_API_BASE"] = "http://127.0.0.1:11434"
 
-        monkeypatch.setattr(paperpipe, "_prepare_ollama_env", fake_prepare_ollama_env)
-        monkeypatch.setattr(paperpipe, "_ollama_reachability_error", lambda api_base: None)
+        monkeypatch.setattr(config, "_prepare_ollama_env", fake_prepare_ollama_env)
+        monkeypatch.setattr(config, "_ollama_reachability_error", lambda api_base: None)
         monkeypatch.setenv("PAPERPIPE_PQA_OLLAMA_TIMEOUT", "123")
 
         mock_popen = MockPopen(returncode=0, stdout="Answer\n")
@@ -3180,7 +3251,7 @@ class TestAskCommand:
 
         runner = CliRunner()
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             [
                 "ask",
                 "query",
@@ -3207,13 +3278,13 @@ class TestAskCommand:
 
     def test_ask_does_not_override_user_llm_config(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
-        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: False)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: False)
 
         def fake_prepare_ollama_env(env: dict[str, str]) -> None:
             env["OLLAMA_API_BASE"] = "http://127.0.0.1:11434"
 
-        monkeypatch.setattr(paperpipe, "_prepare_ollama_env", fake_prepare_ollama_env)
-        monkeypatch.setattr(paperpipe, "_ollama_reachability_error", lambda api_base: None)
+        monkeypatch.setattr(config, "_prepare_ollama_env", fake_prepare_ollama_env)
+        monkeypatch.setattr(config, "_ollama_reachability_error", lambda api_base: None)
 
         mock_popen = MockPopen(returncode=0, stdout="Answer\n")
         monkeypatch.setattr(subprocess, "Popen", mock_popen)
@@ -3223,7 +3294,7 @@ class TestAskCommand:
 
         runner = CliRunner()
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             [
                 "ask",
                 "query",
@@ -3260,7 +3331,7 @@ class TestAskCommand:
 
         runner = CliRunner()
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             [
                 "ask",
                 "query",
@@ -3313,7 +3384,7 @@ class TestAskCommand:
         dummy_mod.ask = dummy_ask  # type: ignore[attr-defined]
         monkeypatch.setitem(sys.modules, "paperqa", dummy_mod)
 
-        payload = paperpipe._paperqa_ask_evidence_blocks(
+        payload = paperqa._paperqa_ask_evidence_blocks(
             cmd=[
                 "pqa",
                 "--llm",
@@ -3366,7 +3437,7 @@ class TestAskCommand:
 
     def test_ask_pqa_agent_type_flag_is_passed(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
-        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: True)
 
         mock_popen = MockPopen(returncode=0, stdout="Answer\n")
         monkeypatch.setattr(subprocess, "Popen", mock_popen)
@@ -3375,7 +3446,7 @@ class TestAskCommand:
         (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["ask", "query", "--pqa-agent-type", "fake"])
+        result = runner.invoke(cli_mod.cli, ["ask", "query", "--pqa-agent-type", "fake"])
         assert result.exit_code == 0, result.output
 
         pqa_call, _ = next(c for c in mock_popen.calls if c[0][0] == "pqa")
@@ -3385,7 +3456,7 @@ class TestAskCommand:
 
     def test_ask_filters_noisy_pqa_output_by_default(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
-        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: True)
 
         mock_popen = MockPopen(returncode=0, stdout="New file to index: test-paper.pdf...\nAnswer\n")
         monkeypatch.setattr(subprocess, "Popen", mock_popen)
@@ -3394,14 +3465,14 @@ class TestAskCommand:
         (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["ask", "query"])
+        result = runner.invoke(cli_mod.cli, ["ask", "query"])
         assert result.exit_code == 0, result.output
         assert "Answer" in result.output
         assert "New file to index:" not in result.output
 
     def test_ask_pqa_raw_disables_output_filtering(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
-        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: True)
 
         mock_popen = MockPopen(returncode=0, stdout="New file to index: test-paper.pdf...\nAnswer\n")
         monkeypatch.setattr(subprocess, "Popen", mock_popen)
@@ -3410,16 +3481,16 @@ class TestAskCommand:
         (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["ask", "query", "--pqa-raw"])
+        result = runner.invoke(cli_mod.cli, ["ask", "query", "--pqa-raw"])
         assert result.exit_code == 0, result.output
         assert "Answer" in result.output
         assert "New file to index:" in result.output
 
     def test_ask_evidence_blocks_outputs_json(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
-        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: True)
         monkeypatch.setattr(
-            paperpipe,
+            paperqa,
             "_paperqa_ask_evidence_blocks",
             lambda **kwargs: {"backend": "pqa", "question": "q", "answer": "a", "evidence": []},
         )
@@ -3428,20 +3499,20 @@ class TestAskCommand:
         (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["ask", "query", "--format", "evidence-blocks"])
+        result = runner.invoke(cli_mod.cli, ["ask", "query", "--format", "evidence-blocks"])
         assert result.exit_code == 0, result.output
         assert '"backend": "pqa"' in result.output
 
     def test_ask_evidence_blocks_rejects_passthrough_args(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
-        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: True)
 
         (temp_db / "papers" / "test-paper").mkdir(parents=True)
         (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
 
         runner = CliRunner()
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             ["ask", "query", "--format", "evidence-blocks", "--agent.search_count", "10"],
         )
         assert result.exit_code != 0
@@ -3449,25 +3520,25 @@ class TestAskCommand:
 
     def test_ask_evidence_blocks_reports_errors(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
-        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: True)
 
         def boom(**_kwargs):
             raise click.ClickException("boom")
 
-        monkeypatch.setattr(paperpipe, "_paperqa_ask_evidence_blocks", boom)
+        monkeypatch.setattr(paperqa, "_paperqa_ask_evidence_blocks", boom)
 
         (temp_db / "papers" / "test-paper").mkdir(parents=True)
         (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["ask", "query", "--format", "evidence-blocks"])
+        result = runner.invoke(cli_mod.cli, ["ask", "query", "--format", "evidence-blocks"])
         assert result.exit_code != 0
         assert "Error: boom" in result.output
 
     def test_ask_ollama_models_prepare_env_for_pqa(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
-        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
-        monkeypatch.setattr(paperpipe, "_ollama_reachability_error", lambda **kwargs: None)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: True)
+        monkeypatch.setattr(config, "_ollama_reachability_error", lambda **kwargs: None)
         monkeypatch.delenv("OLLAMA_HOST", raising=False)
         monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
 
@@ -3478,7 +3549,7 @@ class TestAskCommand:
         (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["ask", "query", "--pqa-llm", "ollama/qwen3:8b"])
+        result = runner.invoke(cli_mod.cli, ["ask", "query", "--pqa-llm", "ollama/qwen3:8b"])
         assert result.exit_code == 0, result.output
 
         _, pqa_kwargs = next(c for c in mock_popen.calls if c[0][0] == "pqa")
@@ -3488,7 +3559,7 @@ class TestAskCommand:
 
     def test_ask_retry_failed_index_clears_error_markers(self, temp_db: Path, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
-        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: True)
 
         mock_popen = MockPopen(returncode=0, stdout="Answer\n")
         monkeypatch.setattr(subprocess, "Popen", mock_popen)
@@ -3513,17 +3584,17 @@ class TestAskCommand:
 
         runner = CliRunner()
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             ["ask", "query", "--pqa-llm", "my-llm", "--pqa-embedding", "my-embed", "--pqa-retry-failed"],
         )
         assert result.exit_code == 0
 
-        mapping = paperpipe._paperqa_load_index_files_map(files_zip)
+        mapping = paperqa._paperqa_load_index_files_map(files_zip)
         assert mapping == {}
 
     def test_ask_does_not_override_user_settings(self, temp_db: Path, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
-        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: False)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: False)
 
         mock_popen = MockPopen(returncode=0, stdout="Answer\n")
         monkeypatch.setattr(subprocess, "Popen", mock_popen)
@@ -3532,7 +3603,7 @@ class TestAskCommand:
         (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["ask", "query", "-s", "my-settings"])
+        result = runner.invoke(cli_mod.cli, ["ask", "query", "-s", "my-settings"])
 
         assert result.exit_code == 0
 
@@ -3544,7 +3615,7 @@ class TestAskCommand:
 
     def test_ask_does_not_override_user_parsing(self, temp_db: Path, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
-        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: False)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: False)
 
         mock_popen = MockPopen(returncode=0, stdout="Answer\n")
         monkeypatch.setattr(subprocess, "Popen", mock_popen)
@@ -3554,7 +3625,7 @@ class TestAskCommand:
 
         runner = CliRunner()
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             ["ask", "query", "--parsing.multimodal", "ON_WITHOUT_ENRICHMENT"],
         )
 
@@ -3567,7 +3638,7 @@ class TestAskCommand:
 
     def test_ask_does_not_force_multimodal_when_pillow_available(self, temp_db: Path, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
-        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: True)
 
         mock_popen = MockPopen(returncode=0, stdout="Answer\n")
         monkeypatch.setattr(subprocess, "Popen", mock_popen)
@@ -3576,7 +3647,7 @@ class TestAskCommand:
         (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["ask", "query"])
+        result = runner.invoke(cli_mod.cli, ["ask", "query"])
 
         assert result.exit_code == 0
 
@@ -3585,7 +3656,7 @@ class TestAskCommand:
 
     def test_ask_does_not_override_user_index_directory(self, temp_db: Path, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
-        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: True)
 
         mock_popen = MockPopen(returncode=0, stdout="Answer\n")
         monkeypatch.setattr(subprocess, "Popen", mock_popen)
@@ -3595,7 +3666,7 @@ class TestAskCommand:
 
         runner = CliRunner()
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             ["ask", "query", "--agent.index.index_directory", "/custom/index"],
         )
 
@@ -3609,7 +3680,7 @@ class TestAskCommand:
 
     def test_ask_does_not_override_user_paper_directory(self, temp_db: Path, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
-        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: True)
 
         mock_popen = MockPopen(returncode=0, stdout="Answer\n")
         monkeypatch.setattr(subprocess, "Popen", mock_popen)
@@ -3619,7 +3690,7 @@ class TestAskCommand:
 
         runner = CliRunner()
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             ["ask", "query", "--agent.index.paper_directory", "/custom/papers"],
         )
 
@@ -3632,7 +3703,7 @@ class TestAskCommand:
 
     def test_ask_marks_crashing_doc_error_when_custom_paper_directory_used(self, temp_db: Path, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
-        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: False)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: False)
 
         custom_papers = temp_db / "custom_papers"
         custom_papers.mkdir(parents=True)
@@ -3647,7 +3718,7 @@ class TestAskCommand:
 
         runner = CliRunner()
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             ["ask", "query", "--pqa-embedding", "my-embed", "--agent.index.paper_directory", str(custom_papers)],
         )
 
@@ -3662,14 +3733,14 @@ class TestAskCommand:
     def test_ask_first_class_options(self, temp_db: Path, monkeypatch):
         """Test all first-class options are passed correctly to pqa."""
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
-        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: True)
 
         mock_popen = MockPopen(returncode=0, stdout="Answer\n")
         monkeypatch.setattr(subprocess, "Popen", mock_popen)
 
         runner = CliRunner()
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             [
                 "ask",
                 "test query",
@@ -3716,16 +3787,16 @@ class TestAskCommand:
     def test_ask_concurrency_defaults_to_one(self, temp_db: Path, monkeypatch):
         """Concurrency should default to 1 when not specified."""
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
-        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: True)
         # Ensure no env override
         monkeypatch.delenv("PAPERPIPE_PQA_CONCURRENCY", raising=False)
-        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
 
         mock_popen = MockPopen(returncode=0, stdout="Answer\n")
         monkeypatch.setattr(subprocess, "Popen", mock_popen)
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["ask", "test"])
+        result = runner.invoke(cli_mod.cli, ["ask", "test"])
 
         assert result.exit_code == 0
         pqa_call, _ = next(c for c in mock_popen.calls if c[0][0] == "pqa")
@@ -3751,7 +3822,7 @@ class TestLeannCommands:
         (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["leann-index"])
+        result = runner.invoke(cli_mod.cli, ["leann-index"])
         assert result.exit_code == 0, result.output
 
         cmd, kwargs = calls[0]
@@ -3778,7 +3849,7 @@ class TestLeannCommands:
                 ]
             )
         )
-        monkeypatch.setattr(paperpipe, "_CONFIG_CACHE", None)
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
 
         calls: list[tuple[list[str], dict]] = []
 
@@ -3792,7 +3863,7 @@ class TestLeannCommands:
         (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["leann-index"])
+        result = runner.invoke(cli_mod.cli, ["leann-index"])
         assert result.exit_code == 0, result.output
 
         cmd, kwargs = calls[0]
@@ -3804,7 +3875,7 @@ class TestLeannCommands:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann" if cmd == "leann" else None)
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["leann-index", "--file-types", ".txt"])
+        result = runner.invoke(cli_mod.cli, ["leann-index", "--file-types", ".txt"])
         assert result.exit_code != 0
         assert "PDF-only" in result.output
 
@@ -3820,7 +3891,7 @@ class TestLeannCommands:
 
         runner = CliRunner()
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             [
                 "ask",
                 "what is x",
@@ -3859,7 +3930,7 @@ class TestLeannCommands:
         monkeypatch.setattr(subprocess, "Popen", mock_popen)
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["ask", "what is x", "--backend", "leann", "--leann-no-auto-index"])
+        result = runner.invoke(cli_mod.cli, ["ask", "what is x", "--backend", "leann", "--leann-no-auto-index"])
         assert result.exit_code == 0, result.output
         assert "OUT" in result.output
 
@@ -3892,7 +3963,7 @@ class TestLeannCommands:
         monkeypatch.setattr(subprocess, "Popen", mock_popen)
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["ask", "q", "--backend", "leann"])
+        result = runner.invoke(cli_mod.cli, ["ask", "q", "--backend", "leann"])
         assert result.exit_code == 0, result.output
         assert "OUT" in result.output
         assert build_calls, "Expected `leann build` to run when index is missing"
@@ -3901,7 +3972,7 @@ class TestLeannCommands:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann" if cmd == "leann" else None)
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["ask", "q", "--backend", "leann", "--leann-no-auto-index"])
+        result = runner.invoke(cli_mod.cli, ["ask", "q", "--backend", "leann", "--leann-no-auto-index"])
         assert result.exit_code != 0
         assert "Build it first" in result.output
 
@@ -3909,7 +3980,7 @@ class TestLeannCommands:
 class TestIndexCommand:
     def test_index_backend_pqa_runs_pqa_index(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
-        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: False)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: False)
 
         noisy = (
             "/home/x/pydantic/main.py:464: UserWarning: Pydantic serializer warnings:\n"
@@ -3923,7 +3994,7 @@ class TestIndexCommand:
         (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["index", "--pqa-embedding", "my-embed"])
+        result = runner.invoke(cli_mod.cli, ["index", "--pqa-embedding", "my-embed"])
         assert result.exit_code == 0, result.output
         assert "Indexed" in result.output
         assert "PydanticSerializationUnexpectedValue" not in result.output
@@ -3939,8 +4010,8 @@ class TestIndexCommand:
         self, temp_db: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
-        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: False)
-        monkeypatch.setattr(paperpipe, "_ollama_reachability_error", lambda **kwargs: None)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: False)
+        monkeypatch.setattr(config, "_ollama_reachability_error", lambda **kwargs: None)
         monkeypatch.delenv("OLLAMA_HOST", raising=False)
         monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
 
@@ -3951,7 +4022,7 @@ class TestIndexCommand:
         (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["index", "--pqa-embedding", "ollama/nomic-embed-text"])
+        result = runner.invoke(cli_mod.cli, ["index", "--pqa-embedding", "ollama/nomic-embed-text"])
         assert result.exit_code == 0, result.output
 
         pqa_call, _ = next(c for c in mock_popen.calls if c[0][0] == "pqa")
@@ -3967,7 +4038,7 @@ class TestIndexCommand:
         self, temp_db: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
-        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: False)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: False)
 
         noisy = (
             "/home/x/pydantic/main.py:464: UserWarning: Pydantic serializer warnings:\n"
@@ -3981,14 +4052,14 @@ class TestIndexCommand:
         (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["index", "--pqa-embedding", "my-embed", "--pqa-raw"])
+        result = runner.invoke(cli_mod.cli, ["index", "--pqa-embedding", "my-embed", "--pqa-raw"])
         assert result.exit_code == 0, result.output
         assert "PydanticSerializationUnexpectedValue" in result.output
 
     def test_index_backend_pqa_ollama_models_prepare_env(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
-        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: False)
-        monkeypatch.setattr(paperpipe, "_ollama_reachability_error", lambda **kwargs: None)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: False)
+        monkeypatch.setattr(config, "_ollama_reachability_error", lambda **kwargs: None)
         monkeypatch.delenv("OLLAMA_HOST", raising=False)
         monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
 
@@ -3999,7 +4070,7 @@ class TestIndexCommand:
         (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["index", "--pqa-llm", "ollama/qwen3:8b"])
+        result = runner.invoke(cli_mod.cli, ["index", "--pqa-llm", "ollama/qwen3:8b"])
         assert result.exit_code == 0, result.output
 
         _, pqa_kwargs = next(c for c in mock_popen.calls if c[0][0] == "pqa")
@@ -4009,12 +4080,12 @@ class TestIndexCommand:
 
     def test_index_rejects_pqa_concurrency_zero(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
-        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: True)
         mock_popen = MockPopen(returncode=0, stdout="Indexed\n")
         monkeypatch.setattr(subprocess, "Popen", mock_popen)
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["index", "--pqa-concurrency", "0"])
+        result = runner.invoke(cli_mod.cli, ["index", "--pqa-concurrency", "0"])
         assert result.exit_code != 0
         assert "--pqa-concurrency must be >= 1" in result.output
 
@@ -4033,7 +4104,7 @@ class TestIndexCommand:
         (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["index", "--backend", "leann"])
+        result = runner.invoke(cli_mod.cli, ["index", "--backend", "leann"])
         assert result.exit_code == 0, result.output
 
         cmd, kwargs = calls[0]
@@ -4066,7 +4137,7 @@ class TestModelsCommand:
 
         runner = CliRunner()
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             [
                 "models",
                 "--kind",
@@ -4098,7 +4169,7 @@ class TestModelsCommand:
 
         runner = CliRunner()
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             [
                 "models",
                 "--kind",
@@ -4122,7 +4193,7 @@ class TestModelsCommand:
     def test_models_requires_litellm(self, monkeypatch):
         monkeypatch.setitem(sys.modules, "litellm", types.SimpleNamespace())
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["models", "--kind", "completion", "--model", "ok-model"])
+        result = runner.invoke(cli_mod.cli, ["models", "--kind", "completion", "--model", "ok-model"])
         assert result.exit_code != 0
         assert "LiteLLM is required" in result.output
 
@@ -4137,27 +4208,27 @@ class TestModelsCommand:
         monkeypatch.setitem(sys.modules, "litellm", fake_litellm)
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["models", "--preset", "latest", "--json"])
+        result = runner.invoke(cli_mod.cli, ["models", "--preset", "latest", "--json"])
         assert result.exit_code == 0
         json.loads(result.output)
 
-        result = runner.invoke(paperpipe.cli, ["models", "latest", "--json"])
+        result = runner.invoke(cli_mod.cli, ["models", "latest", "--json"])
         assert result.exit_code == 0
         json.loads(result.output)
 
-        result = runner.invoke(paperpipe.cli, ["models", "--preset", "last-gen", "--json"])
+        result = runner.invoke(cli_mod.cli, ["models", "--preset", "last-gen", "--json"])
         assert result.exit_code == 0
         json.loads(result.output)
 
-        result = runner.invoke(paperpipe.cli, ["models", "last-gen", "--json"])
+        result = runner.invoke(cli_mod.cli, ["models", "last-gen", "--json"])
         assert result.exit_code == 0
         json.loads(result.output)
 
-        result = runner.invoke(paperpipe.cli, ["models", "--preset", "all", "--json"])
+        result = runner.invoke(cli_mod.cli, ["models", "--preset", "all", "--json"])
         assert result.exit_code == 0
         json.loads(result.output)
 
-        result = runner.invoke(paperpipe.cli, ["models", "all", "--json"])
+        result = runner.invoke(cli_mod.cli, ["models", "all", "--json"])
         assert result.exit_code == 0
         json.loads(result.output)
 
@@ -4183,7 +4254,7 @@ class TestModelsCommand:
         monkeypatch.setenv("VOYAGE_API_KEY", "x")
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["models", "--json"])
+        result = runner.invoke(cli_mod.cli, ["models", "--json"])
         assert result.exit_code == 0
 
         # Default run probes one "latest" completion + embedding per configured provider.
@@ -4214,7 +4285,7 @@ class TestModelsCommand:
         monkeypatch.setenv("VOYAGE_API_KEY", "x")
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["models", "latest", "--kind", "completion", "--json"])
+        result = runner.invoke(cli_mod.cli, ["models", "latest", "--kind", "completion", "--json"])
         assert result.exit_code == 0
         json.loads(result.output)
 
@@ -4254,7 +4325,7 @@ class TestRegenerateCommand:
 
         runner = CliRunner()
         # Use summary,equations,tags to avoid name regeneration which would rename the papers
-        result = runner.invoke(paperpipe.cli, ["regenerate", "--all", "--no-llm", "-o", "summary,equations,tags"])
+        result = runner.invoke(cli_mod.cli, ["regenerate", "--all", "--no-llm", "-o", "summary,equations,tags"])
         assert result.exit_code == 0
         assert "Regenerating p1:" in result.output
         assert "Regenerating p2:" in result.output
@@ -4275,7 +4346,7 @@ class TestRegenerateCommand:
         paperpipe.save_index({"p1": {"arxiv_id": "1", "title": "Paper 1", "tags": [], "added": "x"}})
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["regenerate", "all", "--no-llm", "-o", "summary,equations"])
+        result = runner.invoke(cli_mod.cli, ["regenerate", "all", "--no-llm", "-o", "summary,equations"])
         assert result.exit_code == 0
         assert "Regenerating p1:" in result.output
 
@@ -4306,7 +4377,7 @@ class TestRegenerateCommand:
 
         runner = CliRunner()
         # With a paper named "all" in the index, "regenerate all" should target that paper only
-        result = runner.invoke(paperpipe.cli, ["regenerate", "all", "--no-llm", "-o", "summary,equations"])
+        result = runner.invoke(cli_mod.cli, ["regenerate", "all", "--no-llm", "-o", "summary,equations"])
         assert result.exit_code == 0
         assert "Regenerating all:" in result.output
         assert "Regenerating p2:" not in result.output
@@ -4317,7 +4388,7 @@ class TestRegenerateCommand:
         paperpipe.save_index({"p1": {"arxiv_id": "1", "title": "Paper 1", "tags": [], "added": "x"}})
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["regenerate", "--all", "--no-llm"])
+        result = runner.invoke(cli_mod.cli, ["regenerate", "--all", "--no-llm"])
         assert result.exit_code != 0
         assert "failed to regenerate" in result.output.lower()
 
@@ -4339,7 +4410,7 @@ class TestRegenerateCommand:
 
         runner = CliRunner()
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             ["regenerate", f"https://arxiv.org/abs/{TEST_ARXIV_ID}", "--no-llm", "-o", "summary"],
         )
         assert result.exit_code == 0
@@ -4359,7 +4430,7 @@ class TestRegenerateCommand:
         paperpipe.save_index({"p1": {"arxiv_id": "1", "title": "Paper 1", "tags": ["existing"], "added": "x"}})
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["regenerate", "p1", "--no-llm"])
+        result = runner.invoke(cli_mod.cli, ["regenerate", "p1", "--no-llm"])
         assert result.exit_code == 0
         # Should only regenerate equations (missing)
         assert "equations" in result.output
@@ -4384,7 +4455,7 @@ class TestRegenerateCommand:
         paperpipe.save_index({"p1": {"arxiv_id": "1", "title": "Paper 1", "tags": [], "added": "x"}})
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["regenerate", "p1", "--no-llm", "-o", "summary"])
+        result = runner.invoke(cli_mod.cli, ["regenerate", "p1", "--no-llm", "-o", "summary"])
         assert result.exit_code == 0
         assert "summary" in result.output
         # Summary should be changed
@@ -4402,7 +4473,7 @@ class TestRegenerateCommand:
         paperpipe.save_index({"p1": {"arxiv_id": "1", "title": "Paper 1", "tags": [], "added": "x"}})
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["regenerate", "p1", "-o", "invalid"])
+        result = runner.invoke(cli_mod.cli, ["regenerate", "p1", "-o", "invalid"])
         assert result.exit_code != 0
         assert "invalid" in result.output.lower()
 
@@ -4418,7 +4489,7 @@ class TestRemoveCommand:
         paperpipe.save_index({"p1": {"arxiv_id": TEST_ARXIV_ID, "title": "Paper 1", "tags": [], "added": "x"}})
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["remove", f"https://arxiv.org/abs/{TEST_ARXIV_ID}", "--yes"])
+        result = runner.invoke(cli_mod.cli, ["remove", f"https://arxiv.org/abs/{TEST_ARXIV_ID}", "--yes"])
         assert result.exit_code == 0
         assert "Removed: p1" in result.output
         assert not (papers_dir / "p1").exists()
@@ -4442,7 +4513,7 @@ class TestRemoveCommand:
         )
 
         runner = CliRunner()
-        result = runner.invoke(paperpipe.cli, ["remove", TEST_ARXIV_ID, "--yes"])
+        result = runner.invoke(cli_mod.cli, ["remove", TEST_ARXIV_ID, "--yes"])
         # Exit code 1 because the operation failed (ambiguous match)
         assert result.exit_code == 1
         assert "Multiple papers match arXiv ID" in result.output
@@ -4509,7 +4580,7 @@ class TestAddCommandIntegration:
         """Test adding a paper without LLM generation."""
         runner = CliRunner()
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             ["add", TEST_ARXIV_ID, "--name", "attention", "--no-llm"],
         )
 
@@ -4540,7 +4611,7 @@ class TestAddCommandIntegration:
         """Test adding a paper with custom tags."""
         runner = CliRunner()
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             [
                 "add",
                 TEST_ARXIV_ID,
@@ -4594,7 +4665,7 @@ class TestLlmIntegration:
         """Test adding a paper with LLM generation enabled."""
         runner = CliRunner()
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             ["add", TEST_ARXIV_ID, "--name", "attention-llm"],
         )
 
@@ -4625,13 +4696,13 @@ class TestPaperQAIntegration:
 
         # First add a paper
         runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             ["add", TEST_ARXIV_ID, "--name", "attention-pqa", "--no-llm"],
         )
 
         # Then query it
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             ["ask", "What is the attention mechanism?"],
         )
 
@@ -4642,7 +4713,7 @@ class TestPaperQAIntegration:
 class TestAskErrorHandling:
     def test_ask_excludes_failed_files_from_staging(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
-        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: True)
 
         mock_popen = MockPopen(returncode=0, stdout="Answer\n")
         monkeypatch.setattr(subprocess, "Popen", mock_popen)
@@ -4669,7 +4740,7 @@ class TestAskErrorHandling:
         runner = CliRunner()
         # Run ask WITHOUT --pqa-retry-failed
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             ["ask", "query", "--pqa-embedding", embedding_model, "--agent.index.index_directory", str(index_dir)],
         )
 
@@ -4685,7 +4756,7 @@ class TestAskErrorHandling:
 
     def test_ask_stages_failed_files_with_retry_failed(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
-        monkeypatch.setattr(paperpipe, "_pillow_available", lambda: True)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: True)
 
         mock_popen = MockPopen(returncode=0, stdout="Answer\n")
         monkeypatch.setattr(subprocess, "Popen", mock_popen)
@@ -4706,7 +4777,7 @@ class TestAskErrorHandling:
         runner = CliRunner()
         # Run ask WITH --pqa-retry-failed
         result = runner.invoke(
-            paperpipe.cli,
+            cli_mod.cli,
             [
                 "ask",
                 "query",
@@ -4725,5 +4796,5 @@ class TestAskErrorHandling:
         assert (staging_dir / "test-paper.pdf").exists(), "Failed file should be staged when retrying"
 
         # Also verify that the ERROR marker was cleared from the index file
-        mapping = paperpipe._paperqa_load_index_files_map(files_zip)
+        mapping = paperqa._paperqa_load_index_files_map(files_zip)
         assert mapping == {}, "ERROR markers should be cleared"

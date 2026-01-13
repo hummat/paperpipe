@@ -85,10 +85,10 @@ Documentation = "https://github.com/hummat/paperpipe#readme"
 Repository = "https://github.com/hummat/paperpipe"
 
 [tool.hatch.build.targets.wheel]
-only-include = ["paperpipe.py", "paperqa_mcp_server.py", "README.md", "ROADMAP.md", "LICENSE", "AGENT_INTEGRATION.md", "skill", "prompts"]
+only-include = ["paperpipe", "paperqa_mcp_server.py", "README.md", "ROADMAP.md", "LICENSE", "AGENT_INTEGRATION.md", "skill", "prompts"]
 
 [tool.hatch.build.targets.sdist]
-only-include = ["paperpipe.py", "paperqa_mcp_server.py", "pyproject.toml", "README.md", "ROADMAP.md", "LICENSE", "AGENT_INTEGRATION.md", "skill", "prompts"]
+only-include = ["paperpipe", "paperqa_mcp_server.py", "pyproject.toml", "README.md", "ROADMAP.md", "LICENSE", "AGENT_INTEGRATION.md", "skill", "prompts"]
 
 [tool.pytest.ini_options]
 addopts = "--cov=paperpipe --cov-report=term-missing --cov-fail-under=75 -m 'not integration'"
@@ -120,7 +120,7 @@ select = ["E", "F", "I", "W"]
 ignore = ["E501"]
 
 [tool.pyright]
-include = ["paperpipe.py", "paperqa_mcp_server.py", "test_paperpipe.py"]
+include = ["paperpipe", "paperqa_mcp_server.py", "test_paperpipe.py"]
 exclude = ["__pycache__", ".git", ".venv", "build", "dist", ".pytest_cache", ".ruff_cache"]
 pythonVersion = "3.10"
 typeCheckingMode = "basic"
