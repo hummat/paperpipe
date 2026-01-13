@@ -15,13 +15,13 @@ deps:
 	@bash scripts/deps.sh
 
 fmt:
-	@ruff format .
+	@uv run ruff format .
 
 lint:
-	@ruff check .
+	@uv run ruff check .
 
 type:
-	@pyright
+	@uv run pyright
 
 test:
 	@uv run pytest -m "not integration"
