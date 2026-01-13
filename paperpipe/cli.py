@@ -10,6 +10,8 @@ import shutil
 import subprocess
 import sys
 from contextlib import redirect_stderr, redirect_stdout
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as package_version
 from io import StringIO
 from pathlib import Path
 from typing import Optional
@@ -95,8 +97,15 @@ from .search import (
 # ============================================================================
 
 
+def _cli_version() -> str:
+    try:
+        return package_version("paperpipe")
+    except PackageNotFoundError:
+        return "0+unknown"
+
+
 @click.group()
-@click.version_option(version="0.7.0")
+@click.version_option(version=_cli_version())
 @click.option("--quiet", "-q", is_flag=True, help="Suppress progress messages.")
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug output.")
 def cli(quiet: bool = False, verbose: bool = False):

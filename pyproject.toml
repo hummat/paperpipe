@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "paperpipe"
-version = "0.7.0"
+version = "0.8.0"
 description = "Unified paper database for coding agents + PaperQA2"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -120,7 +120,7 @@ select = ["E", "F", "I", "W"]
 ignore = ["E501"]
 
 [tool.pyright]
-include = ["paperpipe", "paperqa_mcp_server.py", "test_paperpipe.py"]
+include = ["paperpipe", "paperqa_mcp_server.py", "tests"]
 exclude = ["__pycache__", ".git", ".venv", "build", "dist", ".pytest_cache", ".ruff_cache"]
 pythonVersion = "3.10"
 typeCheckingMode = "basic"

@@ -8,9 +8,10 @@ import re
 import shutil
 import sqlite3
 import subprocess
+from contextlib import contextmanager
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 import click
 
@@ -239,13 +240,21 @@ def _search_db_path() -> Path:
     return config.PAPER_DB / "search.db"
 
 
-def _sqlite_connect(path: Path) -> sqlite3.Connection:
+@contextmanager
+def _sqlite_connect(path: Path) -> Iterator[sqlite3.Connection]:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path))
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.row_factory = sqlite3.Row
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def _sqlite_fts5_available(conn: sqlite3.Connection) -> bool:
