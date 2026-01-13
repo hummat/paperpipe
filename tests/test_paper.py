@@ -23,7 +23,7 @@ class TestGenerateLlmContent:
         }
         tex_content = r"\begin{equation}E=mc^2\end{equation}"
 
-        summary, equations, tags = paperpipe.generate_llm_content(tmp_path, meta, tex_content)
+        summary, equations, tags, tldr = paperpipe.generate_llm_content(tmp_path, meta, tex_content)
 
         # Should get simple summary (contains title)
         assert "Test Paper" in summary
@@ -31,6 +31,8 @@ class TestGenerateLlmContent:
         assert "E=mc^2" in equations
         # No LLM tags
         assert tags == []
+        # Should get simple TL;DR
+        assert "Test Paper" in tldr
 
     def test_falls_back_without_tex_content(self, tmp_path, monkeypatch):
         monkeypatch.setattr(paper_mod, "_litellm_available", lambda: False)
@@ -44,10 +46,28 @@ class TestGenerateLlmContent:
             "published": "2023-01-01",
         }
 
-        summary, equations, tags = paperpipe.generate_llm_content(tmp_path, meta, None)
+        summary, equations, tags, tldr = paperpipe.generate_llm_content(tmp_path, meta, None)
 
         assert "Test Paper" in summary
         assert "No LaTeX source" in equations
+        assert "Test Paper" in tldr
+
+
+class TestGenerateSimpleTldr:
+    """Tests for generate_simple_tldr function."""
+
+    def test_generate_simple_tldr_with_abstract(self):
+        meta = {
+            "title": "Attention Is All You Need",
+            "abstract": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks. We propose a new simple network architecture, the Transformer.",
+        }
+        tldr = paper_mod.generate_simple_tldr(meta)
+        assert "Attention Is All You Need: The dominant sequence transduction models are based on complex recurrent or convolutional neural networks." in tldr
+
+    def test_generate_simple_tldr_no_abstract(self):
+        meta = {"title": "Test Title", "abstract": ""}
+        tldr = paper_mod.generate_simple_tldr(meta)
+        assert tldr == "Test Title"
 
 
 class TestExtractNameFromTitle:

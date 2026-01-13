@@ -132,6 +132,7 @@ def cli(quiet: bool = False, verbose: bool = False):
 @click.option("--name", "-n", help="Short name for the paper (only valid with single paper)")
 @click.option("--tags", "-t", help="Additional comma-separated tags (applied to all papers)")
 @click.option("--no-llm", is_flag=True, help="Skip LLM-based generation")
+@click.option("--tldr/--no-tldr", default=True, show_default=True, help="Generate a one-paragraph TL;DR.")
 @click.option(
     "--duplicate",
     is_flag=True,
@@ -153,6 +154,7 @@ def add(
     name: Optional[str],
     tags: Optional[str],
     no_llm: bool,
+    tldr: bool,
     duplicate: bool,
     update: bool,
 ):
@@ -176,6 +178,7 @@ def add(
             doi=doi,
             url=url,
             no_llm=no_llm,
+            tldr=tldr,
         )
         if not success:
             raise SystemExit(1)
@@ -211,6 +214,7 @@ def add(
             name,
             tags,
             no_llm,
+            tldr,
             duplicate,
             update,
             index,
@@ -286,7 +290,7 @@ def regenerate(
     \b
       --overwrite all           Regenerate everything
       --overwrite name          Regenerate name only
-      --overwrite tags,summary  Regenerate tags and summary
+      --overwrite tags,tldr     Regenerate tags and TL;DR
 
     Use --name or --tags to set values directly (no LLM):
 
@@ -2623,13 +2627,13 @@ def models(
 @click.option(
     "--level",
     "-l",
-    type=click.Choice(["meta", "summary", "equations", "eq", "tex", "latex", "full"], case_sensitive=False),
+    type=click.Choice(["meta", "summary", "equations", "eq", "tex", "latex", "full", "tldr"], case_sensitive=False),
     default="meta",
     show_default=True,
     help="What to show (prints to stdout).",
 )
 def show(papers: tuple[str, ...], level: str):
-    """Show paper details or print saved content (summary/equations/LaTeX)."""
+    """Show paper details or print saved content (summary/equations/LaTeX/TL;DR)."""
     index = load_index()
 
     level_norm = (level or "").strip().lower()
@@ -2647,6 +2651,9 @@ def show(papers: tuple[str, ...], level: str):
     elif level_norm == "tex":
         src_name = "source.tex"
         missing_msg = "No LaTeX source found"
+    elif level_norm == "tldr":
+        src_name = "tldr.md"
+        missing_msg = "No TL;DR found"
     else:
         src_name = ""
         missing_msg = ""
@@ -2695,6 +2702,13 @@ def show(papers: tuple[str, ...], level: str):
                 click.echo(f"- Tags: {', '.join([str(t) for t in tags])}")
             click.echo(f"- Has PDF: {has_pdf}")
             click.echo(f"- Has LaTeX: {has_source}")
+
+            tldr_path = paper_dir / "tldr.md"
+            if tldr_path.exists():
+                tldr_text = tldr_path.read_text(errors="ignore").strip()
+                if tldr_text:
+                    click.echo(f"- TL;DR: {tldr_text}")
+
             click.echo(f"- Location: {paper_dir}")
             try:
                 click.echo(f"- Files: {', '.join(sorted(f.name for f in paper_dir.iterdir()))}")

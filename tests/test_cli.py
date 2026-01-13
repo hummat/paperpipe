@@ -546,6 +546,30 @@ class TestCli:
         assert "Content: equations" in result.output
         assert "E=mc^2" in result.output
 
+    def test_show_tldr_stdout(self, temp_db: Path):
+        paper_dir = temp_db / "papers" / "test-paper"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "meta.json").write_text(json.dumps({"title": "T"}))
+        (paper_dir / "tldr.md").write_text("Very short summary.")
+        paperpipe.save_index({"test-paper": {"title": "T", "tags": []}})
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["show", "test-paper", "--level", "tldr"])
+        assert result.exit_code == 0
+        assert "Very short summary." in result.output
+
+    def test_show_meta_includes_tldr(self, temp_db: Path):
+        paper_dir = temp_db / "papers" / "test-paper"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "meta.json").write_text(json.dumps({"title": "T"}))
+        (paper_dir / "tldr.md").write_text("Short TLDR")
+        paperpipe.save_index({"test-paper": {"title": "T", "tags": []}})
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["show", "test-paper"])
+        assert result.exit_code == 0
+        assert "- TL;DR: Short TLDR" in result.output
+
     def test_show_multiple_papers_separated(self, temp_db: Path):
         for name, arxiv_id in [("paper-a", "2301.00001"), ("paper-b", "2301.00002")]:
             paper_dir = temp_db / "papers" / name
@@ -714,6 +738,8 @@ class TestAddCommand:
         assert (paper_dir / "paper.pdf").read_bytes() == pdf_path.read_bytes()
         assert (paper_dir / "summary.md").exists()
         assert (paper_dir / "equations.md").exists()
+        assert (paper_dir / "tldr.md").exists()
+        assert "Some Paper" in (paper_dir / "tldr.md").read_text()
 
         meta = json.loads((paper_dir / "meta.json").read_text())
         assert meta["arxiv_id"] is None

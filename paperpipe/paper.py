@@ -345,16 +345,17 @@ def generate_llm_content(
     tex_content: Optional[str],
     *,
     audit_reasons: Optional[list[str]] = None,
-) -> tuple[str, str, list[str]]:
+) -> tuple[str, str, list[str], str]:
     """
-    Generate summary, equations.md, and semantic tags using LLM.
-    Returns (summary, equations_md, additional_tags)
+    Generate summary, equations.md, semantic tags, and tldr.md using LLM.
+    Returns (summary, equations_md, additional_tags, tldr)
     """
     if not _litellm_available():
         # Fallback: simple extraction without LLM
         summary = generate_simple_summary(meta, tex_content)
         equations = extract_equations_simple(tex_content) if tex_content else "No LaTeX source available."
-        return summary, equations, []
+        tldr = generate_simple_tldr(meta)
+        return summary, equations, [], tldr
 
     try:
         return generate_with_litellm(meta, tex_content, audit_reasons=audit_reasons)
@@ -366,7 +367,19 @@ def generate_llm_content(
         debug("LLM generation failed:\n%s", traceback.format_exc())
     summary = generate_simple_summary(meta, tex_content)
     equations = extract_equations_simple(tex_content) if tex_content else "No LaTeX source available."
-    return summary, equations, []
+    tldr = generate_simple_tldr(meta)
+    return summary, equations, [], tldr
+
+
+def generate_simple_tldr(meta: dict) -> str:
+    """Generate a simple TL;DR from metadata (heuristic)."""
+    title = meta.get("title") or "Untitled"
+    abstract = meta.get("abstract") or ""
+    # heuristic: Title + first sentence of abstract
+    first_sentence = abstract.split(".")[0] if abstract else ""
+    if first_sentence:
+        return f"{title}: {first_sentence}."
+    return title
 
 
 def generate_simple_summary(meta: dict, tex_content: Optional[str] = None) -> str:
@@ -461,8 +474,8 @@ def generate_with_litellm(
     tex_content: Optional[str],
     *,
     audit_reasons: Optional[list[str]] = None,
-) -> tuple[str, str, list[str]]:
-    """Generate summary, equations, and tags using LiteLLM.
+) -> tuple[str, str, list[str], str]:
+    """Generate summary, equations, tags, and tldr using LiteLLM.
 
     Simple approach: send title/abstract/raw LaTeX to the LLM and let it decide what's important.
     """
@@ -484,6 +497,19 @@ def generate_with_litellm(
         context_parts.append(tex_content)
 
     context = "\n".join(context_parts)
+
+    # Generate TL;DR (short, 2-3 sentences)
+    tldr_prompt = f"""Write a very short TL;DR (2-3 sentences) for this paper.
+Focus on the main problem and the proposed solution.
+Return ONLY the TL;DR text.
+
+{context}"""
+
+    try:
+        llm_tldr = _run_llm(tldr_prompt, purpose="tldr")
+        tldr = llm_tldr if llm_tldr else generate_simple_tldr(meta)
+    except Exception:
+        tldr = generate_simple_tldr(meta)
 
     # Generate summary
     summary_prompt = f"""Write a technical summary of this paper for a developer implementing the methods.
@@ -545,7 +571,7 @@ Abstract: {abstract[:800]}"""
     except Exception:
         pass
 
-    return summary, equations, additional_tags
+    return summary, equations, additional_tags, tldr
 
 
 def _add_single_paper(
@@ -553,6 +579,7 @@ def _add_single_paper(
     name: Optional[str],
     tags: Optional[str],
     no_llm: bool,
+    tldr: bool,
     duplicate: bool,
     update: bool,
     index: dict,
@@ -604,6 +631,7 @@ def _add_single_paper(
             name=target,
             tags=tags,
             no_llm=no_llm,
+            tldr=tldr,
             index=index,
             base_to_names=base_to_names,
         )
@@ -666,14 +694,19 @@ def _add_single_paper(
     auto_tags = categories_to_tags(meta["categories"])
     user_tags = [t.strip() for t in tags.split(",")] if tags else []
 
-    # 6. Generate summary and equations
+    # 6. Generate summary, equations, and tldr
     echo_progress("  Generating summary and equations...")
+    tldr_content = None
     if no_llm:
         summary = generate_simple_summary(meta, tex_content)
         equations = extract_equations_simple(tex_content) if tex_content else "No LaTeX source available."
         llm_tags: list[str] = []
+        if tldr:
+            tldr_content = generate_simple_tldr(meta)
     else:
-        summary, equations, llm_tags = generate_llm_content(paper_dir, meta, tex_content)
+        summary, equations, llm_tags, llm_tldr = generate_llm_content(paper_dir, meta, tex_content)
+        if tldr:
+            tldr_content = llm_tldr
 
     # Combine all tags
     all_tags = normalize_tags([*auto_tags, *user_tags, *llm_tags])
@@ -681,6 +714,8 @@ def _add_single_paper(
     # 7. Save files
     (paper_dir / "summary.md").write_text(summary)
     (paper_dir / "equations.md").write_text(equations)
+    if tldr_content:
+        (paper_dir / "tldr.md").write_text(tldr_content)
 
     # Save metadata
     paper_meta = {
@@ -733,6 +768,7 @@ def _add_local_pdf(
     doi: Optional[str],
     url: Optional[str],
     no_llm: bool,
+    tldr: bool = True,
 ) -> tuple[bool, Optional[str]]:
     """Add a local PDF as a first-class paper entry."""
     if not pdf.exists() or not pdf.is_file():
@@ -809,9 +845,13 @@ def _add_local_pdf(
     # Best-effort artifacts (no PDF parsing in MVP)
     summary = generate_simple_summary(meta, None)
     equations = "No LaTeX source available."
+    tldr_content = generate_simple_tldr(meta) if tldr else None
 
     (paper_dir / "summary.md").write_text(summary)
     (paper_dir / "equations.md").write_text(equations)
+    if tldr_content:
+        (paper_dir / "tldr.md").write_text(tldr_content)
+
     (paper_dir / "meta.json").write_text(json.dumps(meta, indent=2))
     ensure_notes_file(paper_dir, meta)
 
@@ -831,6 +871,7 @@ def _update_existing_paper(
     name: str,
     tags: Optional[str],
     no_llm: bool,
+    tldr: bool = True,
     index: dict,
     base_to_names: dict[str, list[str]],
 ) -> tuple[bool, Optional[str]]:
@@ -878,17 +919,24 @@ def _update_existing_paper(
     user_tags = [t.strip() for t in tags.split(",")] if tags else []
 
     echo_progress("  Generating summary and equations...")
+    tldr_content = None
     if no_llm:
         summary = generate_simple_summary(meta, tex_content)
         equations = extract_equations_simple(tex_content) if tex_content else "No LaTeX source available."
         llm_tags: list[str] = []
+        if tldr:
+            tldr_content = generate_simple_tldr(meta)
     else:
-        summary, equations, llm_tags = generate_llm_content(paper_dir, meta, tex_content)
+        summary, equations, llm_tags, llm_tldr = generate_llm_content(paper_dir, meta, tex_content)
+        if tldr:
+            tldr_content = llm_tldr
 
     all_tags = normalize_tags([*auto_tags, *prior_tags, *user_tags, *llm_tags])
 
     (paper_dir / "summary.md").write_text(summary)
     (paper_dir / "equations.md").write_text(equations)
+    if tldr_content:
+        (paper_dir / "tldr.md").write_text(tldr_content)
 
     paper_meta = {
         "arxiv_id": meta.get("arxiv_id"),
@@ -950,6 +998,7 @@ def _regenerate_one_paper(
 
     summary_path = paper_dir / "summary.md"
     equations_path = paper_dir / "equations.md"
+    tldr_path = paper_dir / "tldr.md"
 
     # Determine what needs regeneration
     if overwrite_all:
@@ -957,18 +1006,21 @@ def _regenerate_one_paper(
         do_equations = True
         do_tags = True
         do_name = True
+        do_tldr = True
     elif overwrite_fields:
         do_summary = "summary" in overwrite_fields
         do_equations = "equations" in overwrite_fields
         do_tags = "tags" in overwrite_fields
         do_name = "name" in overwrite_fields
+        do_tldr = "tldr" in overwrite_fields
     else:
         do_summary = not summary_path.exists() or summary_path.stat().st_size == 0
         do_equations = not equations_path.exists() or equations_path.stat().st_size == 0
         do_tags = not meta.get("tags")
         do_name = _is_arxiv_id_name(name)
+        do_tldr = not tldr_path.exists() or tldr_path.stat().st_size == 0
 
-    if not (do_summary or do_equations or do_tags or do_name):
+    if not (do_summary or do_equations or do_tags or do_name or do_tldr):
         echo_progress(f"  {name}: nothing to regenerate")
         return True, None
 
@@ -981,6 +1033,8 @@ def _regenerate_one_paper(
         actions.append("tags")
     if do_name:
         actions.append("name")
+    if do_tldr:
+        actions.append("tldr")
     echo_progress(f"Regenerating {name}: {', '.join(actions)}")
 
     new_name: Optional[str] = None
@@ -999,6 +1053,7 @@ def _regenerate_one_paper(
                 paper_dir = new_dir
                 summary_path = paper_dir / "summary.md"
                 equations_path = paper_dir / "equations.md"
+                tldr_path = paper_dir / "tldr.md"
                 meta_path = paper_dir / "meta.json"
                 new_name = candidate
                 echo_progress(f"  Renamed: {name} → {candidate}")
@@ -1006,16 +1061,19 @@ def _regenerate_one_paper(
     # Generate content based on what's needed
     summary: Optional[str] = None
     equations: Optional[str] = None
+    tldr: Optional[str] = None
     llm_tags: list[str] = []
 
-    if do_summary or do_equations or do_tags:
+    if do_summary or do_equations or do_tags or do_tldr:
         if no_llm:
             if do_summary:
                 summary = generate_simple_summary(meta, tex_content)
             if do_equations:
                 equations = extract_equations_simple(tex_content) if tex_content else "No LaTeX source available."
+            if do_tldr:
+                tldr = generate_simple_tldr(meta)
         else:
-            llm_summary, llm_equations, llm_tags = generate_llm_content(
+            llm_summary, llm_equations, llm_tags, llm_tldr = generate_llm_content(
                 paper_dir,
                 meta,
                 tex_content,
@@ -1025,6 +1083,8 @@ def _regenerate_one_paper(
                 summary = llm_summary
             if do_equations:
                 equations = llm_equations
+            if do_tldr:
+                tldr = llm_tldr
             if not do_tags:
                 llm_tags = []
 
@@ -1033,6 +1093,9 @@ def _regenerate_one_paper(
 
     if equations is not None:
         equations_path.write_text(equations)
+
+    if tldr is not None:
+        tldr_path.write_text(tldr)
 
     if llm_tags:
         meta["tags"] = normalize_tags([*meta.get("tags", []), *llm_tags])

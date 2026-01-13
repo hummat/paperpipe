@@ -12,7 +12,8 @@ This repo implements methods from scientific papers. Papers are managed via `pap
   - Equations (verification): `papi show <paper> -l eq`
   - Definitions (LaTeX): `papi show <paper> -l tex`
   - Overview: `papi show <paper> -l summary`
-- Direct files (if needed): `<paper_db>/papers/{paper}/equations.md`, `source.tex`, `summary.md`
+  - Quick TL;DR: `papi show <paper> -l tldr`
+- Direct files (if needed): `<paper_db>/papers/{paper}/equations.md`, `source.tex`, `summary.md`, `tldr.md`
 
 Rules:
 - For “does this match the paper?”, use `papi show <paper> -l eq` / `-l tex` and compare symbols step-by-step.

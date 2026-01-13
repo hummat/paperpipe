@@ -78,6 +78,7 @@ pip install -e ".[all]"
 │       ├── source.tex                # full LaTeX (if available from arXiv)
 │       ├── equations.md              # extracted equations with context
 │       ├── summary.md                # coding-oriented summary
+│       ├── tldr.md                   # one-paragraph TL;DR
 │       ├── meta.json                 # metadata + tags
 │       └── notes.md                  # your implementation notes
 ```
@@ -86,13 +87,14 @@ pip install -e ".[all]"
 - `equations.md` — Key equations with variable definitions. Use for code verification.
 - `source.tex` — Original LaTeX. Use when you need exact notation or the equation extraction missed something.
 - `summary.md` — High-level overview focused on implementation (not literature review). Use for understanding the approach.
+- `tldr.md` — Quick 2-3 sentence overview of the paper's contribution.
 - `.pqa_papers/` — Staged PDFs only (no markdown) so RAG backends don't index generated content.
 
 ## Core commands
 
 | Command | Purpose |
 |---------|---------|
-| `papi add <arxiv-id-or-url>` | Add a paper (downloads PDF + LaTeX, generates summary/equations) |
+| `papi add <arxiv-id-or-url>` | Add a paper (downloads PDF + LaTeX, generates summary/equations/TL;DR) |
 | `papi add --pdf file.pdf --title "..."` | Add a local PDF |
 | `papi list` | List papers (filter with `--tag`) |
 | `papi search "query"` | Search across titles, tags, summaries, equations (`--grep` exact, `--fts` ranked BM25) |
@@ -100,9 +102,10 @@ pip install -e ".[all]"
 | `papi show <paper> --level eq` | Print equations (best for agent sessions) |
 | `papi show <paper> --level tex` | Print LaTeX source |
 | `papi show <paper> --level summary` | Print summary |
+| `papi show <paper> --level tldr` | Print TL;DR |
 | `papi export <papers...> --to ./dir` | Export context files into a repo (`--level summary\|equations\|full`) |
 | `papi notes <paper>` | Open/print implementation notes |
-| `papi regenerate <papers...>` | Regenerate summary/equations/tags |
+| `papi regenerate <papers...>` | Regenerate summary/equations/tags/TL;DR |
 | `papi remove <papers...>` | Remove papers |
 | `papi ask "question"` | Cross-paper RAG query (requires PaperQA2 or LEANN) |
 | `papi index` | Build/update the retrieval index |
