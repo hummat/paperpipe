@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.fastmcp import FastMCP  # type: ignore[reportMissingImports]
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -52,7 +52,7 @@ def _get_mcp() -> "FastMCP":
     global _mcp
     if _mcp is None:
         try:
-            from mcp.server.fastmcp import FastMCP
+            from mcp.server.fastmcp import FastMCP  # type: ignore[reportMissingImports]
         except ImportError as e:
             print(
                 "Error: MCP not installed. Install with: pip install 'paperpipe[mcp]'",
@@ -187,9 +187,9 @@ def _register_tools() -> None:
             }
 
         try:
-            from paperqa.agents.search import SearchIndex
-            from paperqa.docs import Docs
-            from paperqa.settings import Settings
+            from paperqa.agents.search import SearchIndex  # type: ignore[reportMissingImports]
+            from paperqa.docs import Docs  # type: ignore[reportMissingImports]
+            from paperqa.settings import Settings  # type: ignore[reportMissingImports]
         except Exception as e:
             return {"ok": False, "error": f"paper-qa import failed: {type(e).__name__}: {e}"}
 

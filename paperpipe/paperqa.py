@@ -383,8 +383,13 @@ def _pqa_print_filtered_index_output_on_failure(
 
 def _paperqa_ask_evidence_blocks(*, cmd: list[str], query: str) -> dict[str, Any]:
     try:
-        import paperqa as paperqa_mod
-        from paperqa import Settings
+        import importlib
+
+        paperqa_mod = importlib.import_module("paperqa")
+        Settings = getattr(paperqa_mod, "Settings", None)
+        ask = getattr(paperqa_mod, "ask", None)
+        if Settings is None or ask is None:
+            raise AttributeError("paperqa.Settings or paperqa.ask not available")
     except Exception as e:
         raise click.ClickException(
             "PaperQA2 Python package is required for --format evidence-blocks. "
@@ -484,7 +489,7 @@ def _paperqa_ask_evidence_blocks(*, cmd: list[str], query: str) -> dict[str, Any
         settings_kwargs["agent"] = agent
 
     settings = Settings(**cast(Any, settings_kwargs))
-    response = paperqa_mod.ask(query, settings=settings)
+    response = ask(query, settings=settings)
 
     answer_text: str = getattr(response, "answer", "") or ""
     session = getattr(response, "session", None)
