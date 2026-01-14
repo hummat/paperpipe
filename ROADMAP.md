@@ -160,9 +160,21 @@ Goal: easy citation export for LaTeX workflows.
 **Complexity: MEDIUM** — BibTeX parsing is irregular, needs `bibtexparser` dependency.
 
 - `papi import-bib /path/to/library.bib`
+- Alternative: `papi add --from-file papers.bib` (for consistency with existing import workflows)
 - Creates metadata-only entries (PDF via `papi attach` later).
 - Dedup order: `doi` > `arxiv_id` > bibtex key.
 - Optional extra: `paperpipe[bibtex]`.
+
+### `papi add` Semantic Scholar support
+
+**Utility: MEDIUM** — expands paper sources beyond arXiv.
+**Complexity: LOW-MEDIUM** — similar to existing arXiv integration, needs Semantic Scholar API key.
+
+- `papi add semantic-scholar-id`
+- Fetch metadata from Semantic Scholar API
+- Download PDF if available
+- Generate summary/equations/tags as with arXiv papers
+- Store in same format with consistent metadata schema
 
 ### `papi rebuild-index` (recovery)
 
