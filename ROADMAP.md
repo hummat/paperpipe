@@ -14,7 +14,7 @@ It is not a commitment to specific timelines.
 
 ## Planned (next)
 
-### 0) TL;DR summaries on `papi add` (Semantic Scholar style)
+### 0) TL;DR summaries on `papi add` (Semantic Scholar style) — ✅ DONE
 
 Goal: auto-generate a short, one-paragraph TL;DR when adding a paper (ideally using metadata + abstract, optionally LLM).
 
@@ -25,7 +25,7 @@ Ideas:
 - Expose in `papi show` output (optional).
 - Provide a lightweight update path that detects missing artifacts (e.g., TL;DR) and backfills them without full regenerate.
 
-Status: planned.
+Status: implemented (Jan 2026).
 
 ### 1) Retrieval quality improvements (expose existing backend features)
 
@@ -253,6 +253,14 @@ Implemented with env var normalization (`OLLAMA_HOST`, etc.), reachability check
 ### PaperQA2 "fake" agent mode (`papi ask --pqa-agent-type`)
 
 Implemented — passes through to `pqa --agent.agent_type`.
+
+### Import/Export via `papi list --json` and `papi add --from-file` — ✅ DONE
+
+Implemented (Jan 2026):
+- `papi list --json` provides full export capability to JSON format
+- `papi add --from-file` imports papers from JSON files (exported via `papi list --json`) or text files (one arXiv ID per line)
+- Preserves custom names and tags during import
+- Composable with existing filtering options (e.g., `papi list --tag "cv" --json`)
 
 ---
 

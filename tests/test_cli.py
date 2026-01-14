@@ -546,6 +546,30 @@ class TestCli:
         assert "Content: equations" in result.output
         assert "E=mc^2" in result.output
 
+    def test_show_tldr_stdout(self, temp_db: Path):
+        paper_dir = temp_db / "papers" / "test-paper"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "meta.json").write_text(json.dumps({"title": "T"}))
+        (paper_dir / "tldr.md").write_text("Very short summary.")
+        paperpipe.save_index({"test-paper": {"title": "T", "tags": []}})
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["show", "test-paper", "--level", "tldr"])
+        assert result.exit_code == 0
+        assert "Very short summary." in result.output
+
+    def test_show_meta_includes_tldr(self, temp_db: Path):
+        paper_dir = temp_db / "papers" / "test-paper"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "meta.json").write_text(json.dumps({"title": "T"}))
+        (paper_dir / "tldr.md").write_text("Short TLDR")
+        paperpipe.save_index({"test-paper": {"title": "T", "tags": []}})
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["show", "test-paper"])
+        assert result.exit_code == 0
+        assert "- TL;DR: Short TLDR" in result.output
+
     def test_show_multiple_papers_separated(self, temp_db: Path):
         for name, arxiv_id in [("paper-a", "2301.00001"), ("paper-b", "2301.00002")]:
             paper_dir = temp_db / "papers" / name
@@ -714,6 +738,8 @@ class TestAddCommand:
         assert (paper_dir / "paper.pdf").read_bytes() == pdf_path.read_bytes()
         assert (paper_dir / "summary.md").exists()
         assert (paper_dir / "equations.md").exists()
+        assert (paper_dir / "tldr.md").exists()
+        assert "Some Paper" in (paper_dir / "tldr.md").read_text()
 
         meta = json.loads((paper_dir / "meta.json").read_text())
         assert meta["arxiv_id"] is None
@@ -965,6 +991,82 @@ class TestAddCommand:
         assert meta["added"] == "x"  # preserved
         assert "computer-vision" in meta["tags"]
         assert "old-tag" in meta["tags"]
+
+    def test_add_from_file_json(self, temp_db: Path, monkeypatch):
+        """Test adding papers from a JSON file (export format)."""
+        papers_json = temp_db / "papers.json"
+        papers_json.write_text(
+            json.dumps(
+                {
+                    "paper1": {"arxiv_id": "1111.1111", "tags": ["tag1"]},
+                    "paper2": {"arxiv_id": "2222.2222", "tags": ["tag2", "tag3"]},
+                }
+            )
+        )
+
+        # Mock fetch_metadata and download
+        def mock_fetch(arxiv_id):
+            return {
+                "arxiv_id": arxiv_id,
+                "title": f"Title {arxiv_id}",
+                "authors": [],
+                "abstract": "Abstract",
+                "primary_category": "cs.AI",
+                "categories": ["cs.AI"],
+                "published": "2023-01-01",
+                "pdf_url": f"http://arxiv.org/pdf/{arxiv_id}",
+                "updated": "2023-01-01",
+            }
+
+        monkeypatch.setattr(paper_mod, "fetch_arxiv_metadata", mock_fetch)
+        monkeypatch.setattr(paper_mod, "download_pdf", lambda *args: True)
+        monkeypatch.setattr(paper_mod, "download_source", lambda *args: None)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["add", "--from-file", str(papers_json), "--no-llm"])
+        assert result.exit_code == 0, result.output
+        assert "Importing 2 papers" in result.output
+        assert "Added: paper1" in result.output
+        assert "Added: paper2" in result.output
+
+        index = paperpipe.load_index()
+        assert "paper1" in index
+        assert "tag1" in index["paper1"]["tags"]
+        assert "paper2" in index
+        assert "tag2" in index["paper2"]["tags"]
+
+    def test_add_from_file_text(self, temp_db: Path, monkeypatch):
+        """Test adding papers from a text file (one ID per line)."""
+        papers_txt = temp_db / "papers.txt"
+        papers_txt.write_text("1111.1111\n2222.2222\n# Comment")
+
+        # Mock fetch_metadata and download
+        def mock_fetch(arxiv_id):
+            return {
+                "arxiv_id": arxiv_id,
+                "title": f"Title {arxiv_id}",
+                "authors": [],
+                "abstract": "Abstract",
+                "primary_category": "cs.AI",
+                "categories": ["cs.AI"],
+                "published": "2023-01-01",
+                "pdf_url": f"http://arxiv.org/pdf/{arxiv_id}",
+                "updated": "2023-01-01",
+            }
+
+        monkeypatch.setattr(paper_mod, "fetch_arxiv_metadata", mock_fetch)
+        monkeypatch.setattr(paper_mod, "download_pdf", lambda *args: True)
+        monkeypatch.setattr(paper_mod, "download_source", lambda *args: None)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["add", "--from-file", str(papers_txt), "--no-llm", "--tags", "batch"])
+        assert result.exit_code == 0, result.output
+        assert "Importing 2 papers" in result.output
+
+        index = paperpipe.load_index()
+        assert len(index) == 2
+        for info in index.values():
+            assert "batch" in info["tags"]
 
 
 class TestAddMultiplePapers:
@@ -2976,7 +3078,7 @@ class TestLlmIntegration:
         \end{document}
         """
 
-        summary, equations, tags = paperpipe.generate_with_litellm(meta, tex_content)
+        summary, equations, tags, _ = paperpipe.generate_with_litellm(meta, tex_content)
 
         assert len(summary) > 50
         assert len(equations) > 20
