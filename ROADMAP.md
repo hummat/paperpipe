@@ -12,7 +12,9 @@ It is not a commitment to specific timelines.
 - Precedence for configuration: **CLI flags > env vars > config.toml > defaults**.
 - **Leverage existing backends**: PaperQA2 and LEANN already provide sophisticated retrieval. Expose their features rather than reimplementing.
 
-## Planned (next)
+## Post-1.0 Roadmap
+
+Items below are planned for future 1.x minor releases.
 
 ### 0) TL;DR summaries on `papi add` (Semantic Scholar style) — ✅ DONE
 
