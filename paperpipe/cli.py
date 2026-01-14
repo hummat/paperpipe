@@ -141,6 +141,11 @@ def cli(quiet: bool = False, verbose: bool = False):
 @click.option(
     "--update", is_flag=True, help="If this arXiv ID already exists, refresh it in-place instead of skipping."
 )
+@click.option(
+    "--from-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Import papers from a JSON file (exported via `papi list --json`) or text file (one ID per line).",
+)
 def add(
     arxiv_ids: tuple[str, ...],
     pdf: Optional[Path],
@@ -157,11 +162,12 @@ def add(
     tldr: bool,
     duplicate: bool,
     update: bool,
+    from_file: Optional[Path],
 ):
     """Add one or more papers to the database."""
     if pdf:
-        if arxiv_ids:
-            raise click.UsageError("Use either arXiv IDs/URLs OR `--pdf`, not both.")
+        if arxiv_ids or from_file:
+            raise click.UsageError("Use either arXiv IDs/URLs/--from-file OR `--pdf`, not both.")
         if not title or not title.strip():
             raise click.UsageError("Missing required option: --title (required with --pdf).")
         if duplicate or update:
@@ -186,13 +192,70 @@ def add(
             _maybe_update_search_index(name=paper_name)
         return
 
-    if not arxiv_ids:
-        raise click.UsageError("Missing arXiv ID/URL argument(s) (or pass `--pdf`).")
+    if not arxiv_ids and not from_file:
+        raise click.UsageError("Missing arXiv ID/URL argument(s) or --from-file (or pass `--pdf`).")
 
-    if name and len(arxiv_ids) > 1:
-        raise click.UsageError("--name can only be used when adding a single paper.")
+    if name and (len(arxiv_ids) > 1 or from_file):
+        raise click.UsageError("--name can only be used when adding a single paper via CLI arguments.")
     if duplicate and update:
         raise click.UsageError("Use either --duplicate or --update, not both.")
+
+    # Collect tasks: list of (arxiv_id, name_override, tags_override)
+    tasks: list[tuple[str, Optional[str], Optional[str]]] = []
+
+    # 1. From CLI args
+    for aid in arxiv_ids:
+        tasks.append((aid, name, tags))
+
+    # 2. From file
+    if from_file:
+        content = from_file.read_text("utf-8")
+        try:
+            # Try parsing as JSON (export format: dict[name, info])
+            data = json.loads(content)
+            if isinstance(data, dict):
+                echo_progress(f"Importing {len(data)} papers from JSON...")
+                for key, info in data.items():
+                    # Handle both export format (dict) and list of IDs (if user made a list)
+                    if isinstance(info, dict):
+                        aid = info.get("arxiv_id")
+                        if not aid:
+                            continue
+                        # If importing from JSON, we use the key as the name
+                        # and merge JSON tags with CLI tags
+                        item_tags = info.get("tags", [])
+                        if isinstance(item_tags, list):
+                            item_tags_str = ",".join(item_tags)
+                        else:
+                            item_tags_str = str(item_tags) if item_tags else ""
+
+                        # Merge with CLI tags if present
+                        final_tags = item_tags_str
+                        if tags:
+                            final_tags = f"{final_tags},{tags}" if final_tags else tags
+
+                        tasks.append((aid, key, final_tags))
+                    elif isinstance(info, str):
+                        # Simple dict {"name": "arxiv_id"} style? unlikely but possible
+                        tasks.append((info, key, tags))
+            elif isinstance(data, list):
+                # JSON list of IDs?
+                for item in data:
+                    if isinstance(item, str):
+                        tasks.append((item, None, tags))
+                    elif isinstance(item, dict) and "arxiv_id" in item:
+                        tasks.append((item["arxiv_id"], item.get("name"), item.get("tags")))
+        except json.JSONDecodeError:
+            # Fallback: Treat as line-separated text file
+            # Filter empty lines and comments
+            lines = [line.strip() for line in content.splitlines() if line.strip() and not line.strip().startswith("#")]
+            echo_progress(f"Importing {len(lines)} papers from text file...")
+            for line in lines:
+                tasks.append((line, None, tags))
+
+    if not tasks:
+        click.echo("No papers to add.")
+        return
 
     index = load_index()
     existing_names = set(index.keys())
@@ -203,16 +266,16 @@ def add(
     skipped = 0
     failures = 0
 
-    for i, arxiv_id in enumerate(arxiv_ids, 1):
-        if len(arxiv_ids) > 1:
-            echo_progress(f"[{i}/{len(arxiv_ids)}] Adding {arxiv_id}...")
+    for i, (arxiv_id, p_name, p_tags) in enumerate(tasks, 1):
+        if len(tasks) > 1:
+            echo_progress(f"[{i}/{len(tasks)}] Adding {arxiv_id}...")
         else:
             echo_progress(f"Adding paper: {arxiv_id}")
 
         success, paper_name, action = _add_single_paper(
             arxiv_id,
-            name,
-            tags,
+            p_name,
+            p_tags,
             no_llm,
             tldr,
             duplicate,
@@ -236,7 +299,7 @@ def add(
             failures += 1
 
     # Print summary for multiple papers
-    if len(arxiv_ids) > 1:
+    if len(tasks) > 1:
         click.echo()
         if failures == 0:
             parts = []

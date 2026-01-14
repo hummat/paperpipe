@@ -96,6 +96,7 @@ pip install -e ".[all]"
 |---------|---------|
 | `papi add <arxiv-id-or-url>` | Add a paper (downloads PDF + LaTeX, generates summary/equations/TL;DR) |
 | `papi add --pdf file.pdf --title "..."` | Add a local PDF |
+| `papi add --from-file list.json` | Import papers from a JSON list or text file |
 | `papi list` | List papers (filter with `--tag`) |
 | `papi search "query"` | Search across titles, tags, summaries, equations (`--grep` exact, `--fts` ranked BM25) |
 | `papi search-index` | Build/update ranked search index (`search.db`) |
@@ -113,6 +114,28 @@ pip install -e ".[all]"
 | `papi path` | Print database location |
 
 Run `papi --help` or `papi <command> --help` for full options.
+
+## Import/Export
+
+Share your paper collection with others or back it up.
+
+**Export:**
+```bash
+# Export full list to JSON
+papi list --json > my_papers.json
+
+# Export specific tag
+papi list --tag "computer-vision" --json > cv_papers.json
+```
+
+**Import:**
+```bash
+# Import from JSON (preserves custom names and tags)
+papi add --from-file my_papers.json
+
+# Import from text file (one arXiv ID per line)
+papi add --from-file paper_ids.txt --tags "imported"
+```
 
 Exact text search (fast, no LLM required):
 

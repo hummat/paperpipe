@@ -345,6 +345,10 @@ def generate_llm_content(
     tex_content: Optional[str],
     *,
     audit_reasons: Optional[list[str]] = None,
+    do_summary: bool = True,
+    do_equations: bool = True,
+    do_tags: bool = True,
+    do_tldr: bool = True,
 ) -> tuple[str, str, list[str], str]:
     """
     Generate summary, equations.md, semantic tags, and tldr.md using LLM.
@@ -358,7 +362,15 @@ def generate_llm_content(
         return summary, equations, [], tldr
 
     try:
-        return generate_with_litellm(meta, tex_content, audit_reasons=audit_reasons)
+        return generate_with_litellm(
+            meta,
+            tex_content,
+            audit_reasons=audit_reasons,
+            do_summary=do_summary,
+            do_equations=do_equations,
+            do_tags=do_tags,
+            do_tldr=do_tldr,
+        )
     except ImportError as e:
         echo_warning(f"LiteLLM not installed; falling back to non-LLM generation ({e}).")
         debug("LiteLLM import failed:\n%s", traceback.format_exc())
@@ -474,6 +486,10 @@ def generate_with_litellm(
     tex_content: Optional[str],
     *,
     audit_reasons: Optional[list[str]] = None,
+    do_summary: bool = True,
+    do_equations: bool = True,
+    do_tags: bool = True,
+    do_tldr: bool = True,
 ) -> tuple[str, str, list[str], str]:
     """Generate summary, equations, tags, and tldr using LiteLLM.
 
@@ -498,21 +514,25 @@ def generate_with_litellm(
 
     context = "\n".join(context_parts)
 
-    # Generate TL;DR (short, 2-3 sentences)
-    tldr_prompt = f"""Write a very short TL;DR (2-3 sentences) for this paper.
+    tldr = ""
+    if do_tldr:
+        # Generate TL;DR (short, 2-3 sentences)
+        tldr_prompt = f"""Write a very short TL;DR (2-3 sentences) for this paper.
 Focus on the main problem and the proposed solution.
 Return ONLY the TL;DR text.
 
 {context}"""
 
-    try:
-        llm_tldr = _run_llm(tldr_prompt, purpose="tldr")
-        tldr = llm_tldr if llm_tldr else generate_simple_tldr(meta)
-    except Exception:
-        tldr = generate_simple_tldr(meta)
+        try:
+            llm_tldr = _run_llm(tldr_prompt, purpose="tldr")
+            tldr = llm_tldr if llm_tldr else generate_simple_tldr(meta)
+        except Exception:
+            tldr = generate_simple_tldr(meta)
 
-    # Generate summary
-    summary_prompt = f"""Write a technical summary of this paper for a developer implementing the methods.
+    summary = ""
+    if do_summary:
+        # Generate summary
+        summary_prompt = f"""Write a technical summary of this paper for a developer implementing the methods.
 
 Include:
 - Core contribution (1-2 sentences)
@@ -523,15 +543,17 @@ Keep it under 400 words. Use markdown. Only include information from the provide
 
 {context}"""
 
-    try:
-        llm_summary = _run_llm(summary_prompt, purpose="summary")
-        summary = llm_summary if llm_summary else generate_simple_summary(meta, tex_content)
-    except Exception:
-        summary = generate_simple_summary(meta, tex_content)
+        try:
+            llm_summary = _run_llm(summary_prompt, purpose="summary")
+            summary = llm_summary if llm_summary else generate_simple_summary(meta, tex_content)
+        except Exception:
+            summary = generate_simple_summary(meta, tex_content)
 
-    # Generate equations.md
-    if tex_content:
-        eq_prompt = f"""Extract the key equations from this paper's LaTeX source.
+    equations = ""
+    if do_equations:
+        # Generate equations.md
+        if tex_content:
+            eq_prompt = f"""Extract the key equations from this paper's LaTeX source.
 
 For each important equation:
 1. Show the LaTeX
@@ -543,33 +565,34 @@ Use markdown with ```latex blocks.
 
 {context}"""
 
-        try:
-            llm_equations = _run_llm(eq_prompt, purpose="equations")
-            equations = llm_equations if llm_equations else extract_equations_simple(tex_content)
-        except Exception:
-            equations = extract_equations_simple(tex_content)
-    else:
-        equations = "No LaTeX source available."
+            try:
+                llm_equations = _run_llm(eq_prompt, purpose="equations")
+                equations = llm_equations if llm_equations else extract_equations_simple(tex_content)
+            except Exception:
+                equations = extract_equations_simple(tex_content)
+        else:
+            equations = "No LaTeX source available."
 
-    # Generate semantic tags
-    tag_prompt = f"""Suggest 3-5 technical tags for this paper (lowercase, hyphenated).
+    additional_tags = []
+    if do_tags:
+        # Generate semantic tags
+        tag_prompt = f"""Suggest 3-5 technical tags for this paper (lowercase, hyphenated).
 Focus on methods, domains, techniques.
 Return ONLY tags, one per line.
 
 Title: {title}
 Abstract: {abstract[:800]}"""
 
-    additional_tags = []
-    try:
-        llm_tags_text = _run_llm(tag_prompt, purpose="tags")
-        if llm_tags_text:
-            additional_tags = [
-                t.strip().lower().replace(" ", "-")
-                for t in llm_tags_text.split("\n")
-                if t.strip() and len(t.strip()) < 30
-            ][:5]
-    except Exception:
-        pass
+        try:
+            llm_tags_text = _run_llm(tag_prompt, purpose="tags")
+            if llm_tags_text:
+                additional_tags = [
+                    t.strip().lower().replace(" ", "-")
+                    for t in llm_tags_text.split("\n")
+                    if t.strip() and len(t.strip()) < 30
+                ][:5]
+        except Exception:
+            pass
 
     return summary, equations, additional_tags, tldr
 
@@ -1078,6 +1101,10 @@ def _regenerate_one_paper(
                 meta,
                 tex_content,
                 audit_reasons=audit_reasons,
+                do_summary=do_summary,
+                do_equations=do_equations,
+                do_tags=do_tags,
+                do_tldr=do_tldr,
             )
             if do_summary:
                 summary = llm_summary

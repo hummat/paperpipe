@@ -62,7 +62,10 @@ class TestGenerateSimpleTldr:
             "abstract": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks. We propose a new simple network architecture, the Transformer.",
         }
         tldr = paper_mod.generate_simple_tldr(meta)
-        assert "Attention Is All You Need: The dominant sequence transduction models are based on complex recurrent or convolutional neural networks." in tldr
+        assert (
+            "Attention Is All You Need: The dominant sequence transduction models are based on complex recurrent or convolutional neural networks."
+            in tldr
+        )
 
     def test_generate_simple_tldr_no_abstract(self):
         meta = {"title": "Test Title", "abstract": ""}
