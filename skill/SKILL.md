@@ -96,6 +96,15 @@ papi add 2303.13476 --name my-custom-name     # override auto-name
 papi add 2303.13476 --update                  # refresh existing paper in-place
 papi add 2303.13476 --duplicate               # add a second copy (-2/-3 suffix)
 papi add --pdf /path/to/paper.pdf --title "Some Paper" --tags my-project  # local PDF ingest
+
+# Bulk import from files
+papi add --from-file papers.bib               # BibTeX file (auto-extracts arXiv IDs)
+papi add --from-file my_papers.json           # JSON list (from papi list --json)
+papi add --from-file paper_ids.txt            # Text file (one ID per line)
+
+# Semantic Scholar support
+papi add https://www.semanticscholar.org/paper/...
+papi add 0123456789abcdef0123456789abcdef01234567  # S2 paper ID
 ```
 
 ## See Also

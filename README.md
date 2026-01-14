@@ -135,6 +135,18 @@ papi add --from-file my_papers.json
 
 # Import from text file (one arXiv ID per line)
 papi add --from-file paper_ids.txt --tags "imported"
+
+# Import from BibTeX file (requires bibtexparser)
+papi add --from-file papers.bib
+# or install with BibTeX support:
+# uv tool install paperpipe --with "paperpipe[bibtex]"
+```
+
+**Semantic Scholar Support:**
+```bash
+# Add papers from Semantic Scholar
+papi add https://www.semanticscholar.org/paper/...
+papi add 0123456789abcdef0123456789abcdef01234567  # S2 paper ID
 ```
 
 Exact text search (fast, no LLM required):

@@ -4,22 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "paperpipe"
-version = "0.9.0"
+version = "1.0.0"
 description = "Unified paper database for coding agents + PaperQA2"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
-authors = [
-    { name = "Matthias Humt" }
-]
-keywords = [
-    "arxiv",
-    "papers",
-    "research",
-    "llm",
-    "coding-agent",
-    "paperqa",
-]
+authors = [{ name = "Matthias Humt" }]
+keywords = ["arxiv", "papers", "research", "llm", "coding-agent", "paperqa"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -38,26 +29,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-llm = [
-    "litellm>=1.0.0",
-]
-leann = [
-    "leann-core>=0.3.5",
-    "leann-backend-hnsw>=0.3.5",
-]
-paperqa = [
-    "paper-qa>=5.0.0; python_version >= '3.11'",
-]
-paperqa-media = [
-    "paper-qa[pypdf-media]>=5.0.0; python_version >= '3.11'",
-]
+llm = ["litellm>=1.0.0"]
+leann = ["leann-core>=0.3.5", "leann-backend-hnsw>=0.3.5"]
+paperqa = ["paper-qa>=5.0.0; python_version >= '3.11'"]
+paperqa-media = ["paper-qa[pypdf-media]>=5.0.0; python_version >= '3.11'"]
 mcp = [
     "mcp>=1.0.0; python_version >= '3.11'",
     "paper-qa>=5.0.0; python_version >= '3.11'",
 ]
-all = [
-    "paperpipe[llm,leann,paperqa,paperqa-media,mcp]",
-]
+bibtex = ["bibtexparser>=1.4.0"]
+all = ["paperpipe[llm,leann,paperqa,paperqa-media,mcp,bibtex]"]
 dev = [
     "build>=1.0.0",
     "pyright>=1.1.385",
@@ -85,13 +66,32 @@ Documentation = "https://github.com/hummat/paperpipe#readme"
 Repository = "https://github.com/hummat/paperpipe"
 
 [tool.hatch.build.targets.wheel]
-only-include = ["paperpipe", "paperqa_mcp_server.py", "README.md", "ROADMAP.md", "LICENSE", "AGENT_INTEGRATION.md", "skill", "prompts"]
+only-include = [
+    "paperpipe",
+    "paperqa_mcp_server.py",
+    "README.md",
+    "ROADMAP.md",
+    "LICENSE",
+    "AGENT_INTEGRATION.md",
+    "skill",
+    "prompts",
+]
 
 [tool.hatch.build.targets.sdist]
-only-include = ["paperpipe", "paperqa_mcp_server.py", "pyproject.toml", "README.md", "ROADMAP.md", "LICENSE", "AGENT_INTEGRATION.md", "skill", "prompts"]
+only-include = [
+    "paperpipe",
+    "paperqa_mcp_server.py",
+    "pyproject.toml",
+    "README.md",
+    "ROADMAP.md",
+    "LICENSE",
+    "AGENT_INTEGRATION.md",
+    "skill",
+    "prompts",
+]
 
 [tool.pytest.ini_options]
-addopts = "--cov=paperpipe --cov-report=term-missing --cov-fail-under=75 -m 'not integration'"
+addopts = "--cov=paperpipe --cov-report=term-missing --cov-fail-under=75 -m 'not integration' -W ignore::DeprecationWarning:bibtexparser -W ignore::DeprecationWarning:pyparsing"
 markers = [
     "integration: marks tests as integration tests (may require network/external services)",
     "slow: marks tests as slow",
@@ -99,6 +99,8 @@ markers = [
 filterwarnings = [
     "ignore:open_text is deprecated.*:DeprecationWarning:litellm\\..*",
     "ignore:Pydantic serializer warnings:UserWarning:pydantic\\.main",
+    "ignore:.*:DeprecationWarning:bibtexparser\\..*",
+    "ignore:.*:DeprecationWarning:pyparsing\\..*",
 ]
 
 [tool.coverage.run]
@@ -106,10 +108,7 @@ source = ["paperpipe"]
 omit = ["test_*.py"]
 
 [tool.coverage.report]
-exclude_lines = [
-    "if __name__ == .__main__.:",
-    "pragma: no cover",
-]
+exclude_lines = ["if __name__ == .__main__.:", "pragma: no cover"]
 
 [tool.ruff]
 line-length = 120
@@ -121,7 +120,15 @@ ignore = ["E501"]
 
 [tool.pyright]
 include = ["paperpipe", "paperqa_mcp_server.py", "tests"]
-exclude = ["__pycache__", ".git", ".venv", "build", "dist", ".pytest_cache", ".ruff_cache"]
+exclude = [
+    "__pycache__",
+    ".git",
+    ".venv",
+    "build",
+    "dist",
+    ".pytest_cache",
+    ".ruff_cache",
+]
 pythonVersion = "3.10"
 typeCheckingMode = "basic"
 reportMissingImports = "warning"

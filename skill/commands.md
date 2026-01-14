@@ -35,8 +35,10 @@ Gemini CLI note: skills are currently experimental; enable them in `~/.gemini/se
 | Command | Description |
 |---------|-------------|
 | `papi add <arxiv-id-or-url>` | Add paper (name auto-generated; idempotent by arXiv ID) |
+| `papi add <s2-id-or-url>` | Add paper from Semantic Scholar (resolves to arXiv ID) |
 | `papi add --pdf PATH --title TEXT` | Add local PDF as a first-class paper |
 | `papi add <arxiv> --name <n> --tags t1,t2` | Add with explicit name/tags |
+| `papi add --from-file <file>` | Import from JSON, BibTeX (.bib), or text file |
 | `papi add <arxiv> --update [--name <n>]` | Refresh an existing paper in-place |
 | `papi add <arxiv> --duplicate` | Add another copy even if it already exists |
 | `papi regenerate <name>` | Regenerate summaries/equations/tags |
