@@ -8,6 +8,7 @@ Copy/paste this into your repo’s agent instructions file (`AGENTS.md`, or `CLA
 This repo implements methods from scientific papers. Papers are managed via `papi` (PaperPipe).
 
 - Paper DB root: run `papi path` (default `~/.paperpipe/`; override via `PAPER_DB_PATH`).
+- Add a paper: `papi add <arxiv_id_or_url>` or `papi add <s2_id_or_url>`.
 - Inspect a paper (prints to stdout):
   - Equations (verification): `papi show <paper> -l eq`
   - Definitions (LaTeX): `papi show <paper> -l tex`

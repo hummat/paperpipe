@@ -13,6 +13,7 @@ from pathlib import Path
 import click
 import conftest
 import pytest
+import requests
 from click.testing import CliRunner
 from conftest import MockPopen
 
@@ -1067,6 +1068,205 @@ class TestAddCommand:
         assert len(index) == 2
         for info in index.values():
             assert "batch" in info["tags"]
+
+    def test_add_from_file_bibtex(self, temp_db: Path, monkeypatch):
+        """Test adding papers from a BibTeX file."""
+        papers_bib = temp_db / "papers.bib"
+        papers_bib.write_text("""
+@article{test2023,
+  title={Test Paper Title},
+  author={Doe, John and Smith, Jane},
+  journal={Test Journal},
+  year={2023},
+  eprint={1111.1111},
+  archivePrefix={arXiv},
+  primaryClass={cs.AI}
+}
+
+@article{another2023,
+  title={Another Test Paper},
+  author={Brown, Alice},
+  journal={Another Journal},
+  year={2023},
+  doi={10.1234/567890},
+  url={https://arxiv.org/abs/2222.2222}
+}
+""")
+
+        # Mock fetch_metadata and download
+        def mock_fetch(arxiv_id):
+            return {
+                "arxiv_id": arxiv_id,
+                "title": f"Title {arxiv_id}",
+                "authors": [],
+                "abstract": "Abstract",
+                "primary_category": "cs.AI",
+                "categories": ["cs.AI"],
+                "published": "2023-01-01",
+                "pdf_url": f"http://arxiv.org/pdf/{arxiv_id}",
+                "updated": "2023-01-01",
+            }
+
+        monkeypatch.setattr(paper_mod, "fetch_arxiv_metadata", mock_fetch)
+        monkeypatch.setattr(paper_mod, "download_pdf", lambda *args: True)
+        monkeypatch.setattr(paper_mod, "download_source", lambda *args: None)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["add", "--from-file", str(papers_bib), "--no-llm"])
+        # Skip test if bibtexparser is not installed
+        if "bibtexparser not installed" in result.output:
+            pytest.skip("bibtexparser not installed")
+        assert result.exit_code == 0, result.output
+        # Should find at least one paper with arXiv ID
+        assert "Added:" in result.output or "already added" in result.output.lower()
+        # Should show progress message
+        assert "Adding" in result.output
+
+    def test_add_from_file_bibtex_malformed(self, temp_db: Path, monkeypatch):
+        """Test error handling for malformed BibTeX files."""
+        papers_bib = temp_db / "papers.bib"
+        # Write malformed BibTeX content
+        papers_bib.write_text("""
+@article{test2023,
+  title={Test Paper Title},
+  author={Doe, John and Smith, Jane},
+  journal={Test Journal,
+  year={2023},
+  eprint={1111.1111}
+  # Missing closing brace
+""")
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["add", "--from-file", str(papers_bib), "--no-llm"])
+        # Skip test if bibtexparser is not installed
+        if "bibtexparser not installed" in result.output:
+            pytest.skip("bibtexparser not installed")
+        # Should handle parsing errors gracefully
+        assert result.exit_code != 0 or "Failed to parse BibTeX file" in result.output
+
+    def test_add_from_file_bibtex_missing_fields(self, temp_db: Path, monkeypatch):
+        """Test BibTeX entries with missing required fields."""
+        papers_bib = temp_db / "papers.bib"
+        # BibTeX entry with no arXiv ID or DOI
+        papers_bib.write_text("""
+@article{test2023,
+  title={Test Paper Title},
+  author={Doe, John and Smith, Jane},
+  journal={Test Journal},
+  year={2023}
+}
+""")
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["add", "--from-file", str(papers_bib), "--no-llm"])
+        # Skip test if bibtexparser is not installed
+        if "bibtexparser not installed" in result.output:
+            pytest.skip("bibtexparser not installed")
+        # Should handle missing fields gracefully (no papers added, but no crash)
+        assert result.exit_code == 0
+
+    def test_add_semantic_scholar(self, temp_db: Path, monkeypatch):
+        """Test adding papers from Semantic Scholar IDs."""
+
+        # Mock Semantic Scholar API response
+        def mock_semantic_scholar_request(url, params=None, timeout=None):
+            class MockResponse:
+                def __init__(self):
+                    self.status_code = 200
+                    self._json = {
+                        "title": "Test Paper from Semantic Scholar",
+                        "authors": [{"name": "John Doe"}, {"name": "Jane Smith"}],
+                        "abstract": "This is a test abstract.",
+                        "year": 2023,
+                        "venue": "Test Conference",
+                        "url": "https://www.semanticscholar.org/paper/test-id",
+                        "externalIds": {"ArXiv": "3333.3333", "DOI": "10.1234/test-doi"},
+                    }
+
+                def json(self):
+                    return self._json
+
+                def raise_for_status(self):
+                    pass
+
+            return MockResponse()
+
+        monkeypatch.setattr("requests.get", mock_semantic_scholar_request)
+
+        # Mock arXiv fetch
+        def mock_fetch(arxiv_id):
+            return {
+                "arxiv_id": arxiv_id,
+                "title": f"Title {arxiv_id}",
+                "authors": [],
+                "abstract": "Abstract",
+                "primary_category": "cs.AI",
+                "categories": ["cs.AI"],
+                "published": "2023-01-01",
+                "pdf_url": f"http://arxiv.org/pdf/{arxiv_id}",
+                "updated": "2023-01-01",
+            }
+
+        monkeypatch.setattr(paper_mod, "fetch_arxiv_metadata", mock_fetch)
+        monkeypatch.setattr(paper_mod, "download_pdf", lambda *args: True)
+        monkeypatch.setattr(paper_mod, "download_source", lambda *args: None)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["add", "https://www.semanticscholar.org/paper/test-id", "--no-llm"])
+        assert result.exit_code == 0, result.output
+        assert "Added:" in result.output or "already added" in result.output.lower()
+
+    def test_add_semantic_scholar_api_error(self, temp_db: Path, monkeypatch):
+        """Test error handling for Semantic Scholar API failures."""
+
+        # Mock Semantic Scholar API response with 404 error
+        def mock_semantic_scholar_request_404(url, params=None, timeout=None):
+            class MockResponse:
+                def __init__(self):
+                    self.status_code = 404
+                    self._json = {}
+
+                def json(self):
+                    return self._json
+
+                def raise_for_status(self):
+                    raise requests.exceptions.HTTPError("404 Not Found")
+
+            return MockResponse()
+
+        monkeypatch.setattr("requests.get", mock_semantic_scholar_request_404)
+        monkeypatch.setattr("requests.exceptions.HTTPError", requests.exceptions.HTTPError)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["add", "https://www.semanticscholar.org/paper/nonexistent", "--no-llm"])
+        # Should handle API errors gracefully
+        assert result.exit_code != 0
+
+    def test_add_semantic_scholar_rate_limit(self, temp_db: Path, monkeypatch):
+        """Test handling of Semantic Scholar API rate limiting."""
+
+        # Mock Semantic Scholar API response with 429 error
+        def mock_semantic_scholar_request_429(url, params=None, timeout=None):
+            class MockResponse:
+                def __init__(self):
+                    self.status_code = 429
+                    self._json = {}
+
+                def json(self):
+                    return self._json
+
+                def raise_for_status(self):
+                    raise requests.exceptions.HTTPError("429 Too Many Requests")
+
+            return MockResponse()
+
+        monkeypatch.setattr("requests.get", mock_semantic_scholar_request_429)
+        monkeypatch.setattr("requests.exceptions.HTTPError", requests.exceptions.HTTPError)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["add", "https://www.semanticscholar.org/paper/test-id", "--no-llm"])
+        # Should handle rate limiting gracefully
+        assert result.exit_code != 0
 
 
 class TestAddMultiplePapers:

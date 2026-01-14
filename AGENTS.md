@@ -18,7 +18,7 @@ Package-based Click CLI (`paperpipe/`). Runtime state lives in `~/.paperpipe/` (
 
 Key flows:
 
-- `add`: fetch arXiv metadata → download PDF + (if available) LaTeX source → generate summary/equations/tags
+- `add`: fetch arXiv or Semantic Scholar metadata → download PDF + (if available) LaTeX source → generate summary/equations/tags
   → update index
 - `regenerate`: re-run summary/equation generation for an existing paper
 - `export`: copy selected content to a destination directory

@@ -152,9 +152,9 @@ Goal: easy citation export for LaTeX workflows.
 - `papi bibtex PAPER...` → prints BibTeX entries
 - Options: `--to library.bib`, `--key-style name|doi|arxiv|slug`
 
-## Later (lower priority or higher complexity)
+## Completed
 
-### `papi import-bib` (bulk ingest from BibTeX)
+### `papi import-bib` (bulk ingest from BibTeX) — ✅ DONE
 
 **Utility: MEDIUM** — useful for bootstrapping from existing libraries.
 **Complexity: MEDIUM** — BibTeX parsing is irregular, needs `bibtexparser` dependency.
@@ -165,7 +165,7 @@ Goal: easy citation export for LaTeX workflows.
 - Dedup order: `doi` > `arxiv_id` > bibtex key.
 - Optional extra: `paperpipe[bibtex]`.
 
-### `papi add` Semantic Scholar support
+### `papi add` Semantic Scholar support — ✅ DONE
 
 **Utility: MEDIUM** — expands paper sources beyond arXiv.
 **Complexity: LOW-MEDIUM** — similar to existing arXiv integration, needs Semantic Scholar API key.
