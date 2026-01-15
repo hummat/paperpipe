@@ -1472,9 +1472,7 @@ class TestInstallMcpCommand:
             assert cfg2["mcpServers"]["paperqa"]["command"] == "paperqa_mcp_server"
             assert cfg2["mcpServers"]["paperqa"]["args"] == []
 
-    def test_install_mcp_repo_writes_leann_when_available(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann_mcp" if cmd == "leann_mcp" else None)
-
+    def test_install_mcp_repo_writes_config(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         runner = CliRunner()
         with runner.isolated_filesystem():
             result = runner.invoke(cli_mod.cli, ["install", "mcp", "--repo", "--embedding", "text-embedding-3-small"])
@@ -1483,8 +1481,8 @@ class TestInstallMcpCommand:
             cfg = json.loads(Path(".mcp.json").read_text())
             assert cfg["mcpServers"]["paperqa"]["command"] == "paperqa_mcp_server"
             assert cfg["mcpServers"]["paperqa"]["args"] == []
-            assert cfg["mcpServers"]["leann"]["command"] == "leann_mcp"
-            assert cfg["mcpServers"]["leann"]["args"] == []
+            # paperqa server now includes both PaperQA2 and LEANN tools
+            assert "leann" not in cfg["mcpServers"]  # No separate LEANN server anymore
 
     def test_install_mcp_repo_uses_paperqa_embedding_env_override(
         self, temp_db: Path, monkeypatch: pytest.MonkeyPatch
@@ -1689,7 +1687,7 @@ class TestUninstallMcpCommand:
         assert result.exit_code == 0, result.output
 
         assert ["claude", "mcp", "remove", "paperqa"] in calls
-        assert ["claude", "mcp", "remove", "leann"] in calls
+        # No separate leann server anymore
 
     def test_uninstall_mcp_repo_removes_server_keys(self, temp_db: Path):
         runner = CliRunner()
@@ -1699,7 +1697,6 @@ class TestUninstallMcpCommand:
                     {
                         "mcpServers": {
                             "paperqa": {"command": "papi", "args": [], "env": {}},
-                            "leann": {"command": "papi", "args": [], "env": {}},
                             "other": {"command": "x", "args": [], "env": {}},
                         }
                     }
@@ -1712,7 +1709,6 @@ class TestUninstallMcpCommand:
                     {
                         "mcpServers": {
                             "paperqa": {"command": "papi", "args": [], "env": {}},
-                            "leann": {"command": "papi", "args": [], "env": {}},
                             "other": {"command": "x", "args": [], "env": {}},
                         }
                     }
@@ -1725,12 +1721,12 @@ class TestUninstallMcpCommand:
 
             cfg = json.loads(Path(".mcp.json").read_text())
             assert "paperqa" not in cfg["mcpServers"]
-            assert "leann" not in cfg["mcpServers"]
+            # No separate leann server anymore
             assert "other" in cfg["mcpServers"]
 
             cfg2 = json.loads((Path(".gemini") / "settings.json").read_text())
             assert "paperqa" not in cfg2["mcpServers"]
-            assert "leann" not in cfg2["mcpServers"]
+            # No separate leann server anymore
             assert "other" in cfg2["mcpServers"]
 
     def test_uninstall_mcp_gemini_writes_settings_json(self, temp_db: Path, tmp_path: Path, monkeypatch):
@@ -1743,7 +1739,6 @@ class TestUninstallMcpCommand:
                 {
                     "mcpServers": {
                         "paperqa": {"command": "papi", "args": [], "env": {}},
-                        "leann": {"command": "papi", "args": [], "env": {}},
                     }
                 }
             )
@@ -1756,7 +1751,7 @@ class TestUninstallMcpCommand:
 
         cfg = json.loads((tmp_path / ".gemini" / "settings.json").read_text())
         assert "paperqa" not in cfg.get("mcpServers", {})
-        assert "leann" not in cfg.get("mcpServers", {})
+        # No separate leann server anymore
 
     def test_uninstall_mcp_gemini_runs_gemini_mcp_remove(self, temp_db: Path, tmp_path: Path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path))
@@ -1775,7 +1770,7 @@ class TestUninstallMcpCommand:
         assert result.exit_code == 0, result.output
 
         assert ["gemini", "mcp", "remove", "--scope", "user", "paperqa"] in calls
-        assert ["gemini", "mcp", "remove", "--scope", "user", "leann"] in calls
+        # No separate leann server anymore
 
 
 class TestUninstallValidation:

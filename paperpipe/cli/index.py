@@ -497,6 +497,26 @@ def index_cmd(
         elif not paperqa._pqa_is_noisy_index_line(line):
             click.echo(line, nl=False)
     returncode = proc.wait()
+
+    # Write metadata on success (before error check)
+    if returncode == 0 and backend == "pqa":
+        try:
+            # Import here to avoid issues if MCP isn't installed
+            from paperpipe.mcp_server import _write_index_metadata
+
+            # Extract values used for indexing
+            index_dir_for_meta = Path(index_dir_raw) if index_dir_raw else default_pqa_index_dir()
+            index_name_for_meta = index_name_raw or pqa_index_name_for_embedding(embedding_for_pqa or "")
+
+            _write_index_metadata(
+                index_root=index_dir_for_meta,
+                index_name=index_name_for_meta,
+                embedding_model=embedding_for_pqa or "",
+            )
+        except Exception as e:
+            # Non-fatal: log warning but don't fail the index operation
+            echo_progress(f"Warning: Failed to write index metadata: {e}")
+
     if returncode != 0:
         if not raw_output:
             paperqa._pqa_print_filtered_index_output_on_failure(captured_output=captured_output)

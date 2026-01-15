@@ -18,7 +18,10 @@ Use this skill when the user:
 ### Decision Rules (Use the Cheapest Thing That Works)
 
 1. Prefer `papi show <paper> -l eq|tex|summary` (prints to stdout); use direct files under `{db}/papers/{name}/` if needed.
-2. Prefer retrieval-only MCP chunks over full `papi ask` when you only need “top passages about X”.
+2. Prefer MCP retrieval tools when you need "top passages about X":
+   - `leann_search(index_name, query, top_k)` - fast, returns snippets + file paths
+   - `retrieve_chunks(query, index_name, embedding_model, k)` - slower, returns citations
+   - For PaperQA2: `embedding_model` MUST match index (e.g., `paperpipe_voyage_voyage-3.5` → `"voyage/voyage-3.5"`)
 3. Use `papi ask` only when explicitly requested to run a RAG backend (PaperQA2 via `--backend pqa`, or LEANN via `--backend leann`).
 
 ### 1. Find the paper database location

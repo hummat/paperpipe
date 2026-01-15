@@ -16,13 +16,21 @@ This repo implements methods from scientific papers. Papers are managed via `pap
   - Quick TL;DR: `papi show <paper> -l tldr`
 - Direct files (if needed): `<paper_db>/papers/{paper}/equations.md`, `source.tex`, `summary.md`, `tldr.md`
 
+MCP Tools (if configured):
+- `leann_search(index_name, query, top_k)` - Fast semantic search, returns snippets + file paths
+- `retrieve_chunks(query, index_name, embedding_model, k)` - Detailed retrieval with citations
+  - ⚠️ `embedding_model` MUST match the index (e.g., `paperpipe_voyage_voyage-3.5` → `voyage/voyage-3.5`)
+  - Mismatch causes: `ValueError: size 1024 is different from 3072`
+- Choose: `leann_search` for exploration, `retrieve_chunks` for formal citations
+
 Rules:
-- For “does this match the paper?”, use `papi show <paper> -l eq` / `-l tex` and compare symbols step-by-step.
+- For "does this match the paper?", use `papi show <paper> -l eq` / `-l tex` and compare symbols step-by-step.
 - For "which paper mentions X?":
   - Exact string hits (fast): `papi search --rg "X"` (case-insensitive, literal by default)
   - Ranked search (BM25): `papi index --backend search --search-rebuild` then `papi search "X"`
   - Hybrid (ranked + exact boost): `papi search --hybrid "X"`
-- If the agent can’t read `~/.paperpipe/`, export context into the repo: `papi export <papers...> --level equations --to ./paper-context/`.
+  - MCP semantic search: `leann_search()` or `retrieve_chunks()`
+- If the agent can't read `~/.paperpipe/`, export context into the repo: `papi export <papers...> --level equations --to ./paper-context/`.
 - Use `papi ask "..."` only when you explicitly want RAG synthesis (PaperQA2 default if installed; optional `--backend leann`).
   - For cheaper/deterministic queries: `papi ask "..." --pqa-agent-type fake`
   - For machine-readable evidence: `papi ask "..." --format evidence-blocks`

@@ -257,8 +257,8 @@ This is what makes verification possible — the agent can compare your code sym
 ### MCP servers
 
 paperpipe provides MCP servers for retrieval-only workflows:
-- **PaperQA2 retrieval**: raw chunks + citations over the cached index (via `paperqa_mcp_server`)
-- **LEANN search**: semantic code search over paper content (via `leann_mcp`)
+- **PaperQA2 retrieval**: raw chunks + citations (via `paperqa_mcp_server`)
+- **LEANN search**: fast semantic search over papers (via `leann_mcp`)
 
 MCP servers are configured automatically when you run `papi install mcp`. The install command creates the appropriate configuration files for your agent (Claude Code, Codex CLI, or Gemini CLI).
 
@@ -287,21 +287,23 @@ The MCP servers are automatically launched by your agent when needed. You don't 
 |----------|---------|-------------|
 | `PAPERPIPE_PQA_INDEX_DIR` | `~/.paperpipe/.pqa_index` | Root directory for PaperQA2 indices |
 | `PAPERPIPE_PQA_INDEX_NAME` | `paperpipe_<embedding>` | Index name (subfolder under index dir) |
-| `PAPERQA_EMBEDDING` | (from config) | Embedding model (must match the index you built) |
+| `PAPERQA_EMBEDDING` | (from config) | Embedding model (must match index for PaperQA2) |
 
 ### MCP tools
 
-| Tool | Description |
-|------|-------------|
-| `retrieve_chunks` | Retrieve raw chunks + citations (no LLM answering) |
-| `list_pqa_indexes` | List available PaperQA2 indices |
-| `get_pqa_index_status` | Show index stats (files, failures) |
+| Tool | Backend | Description |
+|------|---------|-------------|
+| `retrieve_chunks` | PaperQA2 | Retrieve raw chunks + citations (no LLM answering) |
+| `list_pqa_indexes` | PaperQA2 | List available PaperQA2 indices with embedding model metadata |
+| `get_pqa_index_status` | PaperQA2 | Show index stats (files, failures) |
+| `leann_search` | LEANN | Semantic search over papers (faster, simpler output) |
+| `leann_list` | LEANN | List available LEANN indexes |
 
 ### MCP usage
 
-1. Build the index first: `papi index --pqa-embedding text-embedding-3-small`
-2. In your agent, call `retrieve_chunks` with your query
-3. If retrieval looks wrong, call `get_pqa_index_status` to inspect
+1. Build indexes: `papi index --backend pqa --pqa-embedding text-embedding-3-small`
+2. In your agent: `leann_search()` (fast) or `retrieve_chunks()` (with citations)
+3. For PaperQA2: embedding model is **automatically inferred** from index metadata (or index name for backward compatibility)
 
 </details>
 

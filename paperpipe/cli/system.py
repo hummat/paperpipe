@@ -56,8 +56,7 @@ def path():
 )
 @click.option("--force", is_flag=True, help="Overwrite existing installation")
 @click.option("--copy", is_flag=True, help="Copy prompts instead of symlinking (prompts only).")
-@click.option("--name", default="paperqa", show_default=True, help="PaperQA2 MCP server name (MCP only)")
-@click.option("--leann-name", default="leann", show_default=True, help="LEANN MCP server name (MCP only)")
+@click.option("--name", default="paperqa", show_default=True, help="MCP server name (MCP only)")
 @click.option("--embedding", default=None, show_default=False, help="Embedding model id (MCP only)")
 def install(
     components: tuple[str, ...],
@@ -65,7 +64,6 @@ def install(
     force: bool,
     copy: bool,
     name: str,
-    leann_name: str,
     embedding: Optional[str],
 ) -> None:
     """Install papi integrations (skill, prompts, and/or MCP config).
@@ -102,15 +100,15 @@ def install(
         raise click.UsageError("--repo is only valid when installing mcp")
     if copy and not want_prompts:
         raise click.UsageError("--copy is only valid when installing prompts")
-    if (name != "paperqa" or leann_name != "leann" or embedding is not None) and not want_mcp:
-        raise click.UsageError("--name/--leann-name/--embedding are only valid when installing mcp")
+    if (name != "paperqa" or embedding is not None) and not want_mcp:
+        raise click.UsageError("--name/--embedding are only valid when installing mcp")
 
     if want_skill:
         _install_skill(targets=tuple([t for t in targets if t != "repo"]), force=force)
     if want_prompts:
         _install_prompts(targets=tuple([t for t in targets if t != "repo"]), force=force, copy=copy)
     if want_mcp:
-        _install_mcp(targets=targets, name=name, leann_name=leann_name, embedding=embedding, force=force)
+        _install_mcp(targets=targets, name=name, embedding=embedding, force=force)
 
 
 @click.command("uninstall")
@@ -144,9 +142,8 @@ def install(
     help="Uninstall repo-local MCP configs (.mcp.json + .gemini/settings.json) in the current directory (MCP only)",
 )
 @click.option("--force", is_flag=True, help="Remove even if the install does not match exactly")
-@click.option("--name", default="paperqa", show_default=True, help="PaperQA2 MCP server name (MCP only)")
-@click.option("--leann-name", default="leann", show_default=True, help="LEANN MCP server name (MCP only)")
-def uninstall(components: tuple[str, ...], targets: tuple[str, ...], force: bool, name: str, leann_name: str) -> None:
+@click.option("--name", default="paperqa", show_default=True, help="MCP server name (MCP only)")
+def uninstall(components: tuple[str, ...], targets: tuple[str, ...], force: bool, name: str) -> None:
     """Uninstall papi integrations (skill, prompts, and/or MCP config).
 
     By default, uninstalls everything: mcp + prompts + skill.
@@ -179,14 +176,14 @@ def uninstall(components: tuple[str, ...], targets: tuple[str, ...], force: bool
 
     if targets and "repo" in targets and not want_mcp:
         raise click.UsageError("--repo is only valid when uninstalling mcp")
-    if (name != "paperqa" or leann_name != "leann") and not want_mcp:
-        raise click.UsageError("--name/--leann-name are only valid when uninstalling mcp")
+    if name != "paperqa" and not want_mcp:
+        raise click.UsageError("--name is only valid when uninstalling mcp")
 
     non_repo_targets = tuple([t for t in targets if t != "repo"])
 
     # Default uninstall order is reverse of install: mcp -> prompts -> skill.
     if want_mcp:
-        _uninstall_mcp(targets=targets, name=name, leann_name=leann_name, force=force)
+        _uninstall_mcp(targets=targets, name=name, force=force)
     if want_prompts:
         _uninstall_prompts(targets=non_repo_targets, force=force)
     if want_skill:

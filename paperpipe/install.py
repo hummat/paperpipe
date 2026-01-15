@@ -12,7 +12,7 @@ from typing import Any, Optional
 
 import click
 
-from .config import PAPER_DB, default_pqa_embedding_model
+from .config import default_pqa_embedding_model
 from .output import echo, echo_error, echo_success, echo_warning
 
 
@@ -166,9 +166,7 @@ def _install_prompts(*, targets: tuple[str, ...], force: bool, copy: bool) -> No
         echo("Restart your CLI to pick up new prompts/commands.")
 
 
-def _install_mcp(
-    *, targets: tuple[str, ...], name: str, leann_name: str, embedding: Optional[str], force: bool
-) -> None:
+def _install_mcp(*, targets: tuple[str, ...], name: str, embedding: Optional[str], force: bool) -> None:
     @dataclass(frozen=True)
     class McpServerSpec:
         name: str
@@ -188,11 +186,7 @@ def _install_mcp(
             and importlib.util.find_spec("paperqa") is not None
         )
 
-    def _leann_mcp_is_available() -> bool:
-        return shutil.which("leann_mcp") is not None
-
     paperqa_name = (name or "").strip()
-    leann_server_name = (leann_name or "").strip()
 
     embedding_model = (embedding or "").strip() if embedding else default_pqa_embedding_model()
 
@@ -206,29 +200,13 @@ def _install_mcp(
                 command="paperqa_mcp_server",
                 args=(),
                 env={"PAPERQA_EMBEDDING": embedding_model},
-                description="PaperQA2 retrieval-only search",
-            )
-        )
-
-    if _leann_mcp_is_available():
-        if not leann_server_name:
-            raise click.UsageError("--leann-name must be non-empty")
-        servers.append(
-            McpServerSpec(
-                name=leann_server_name,
-                command="leann_mcp",
-                args=(),
-                env={},
-                description="LEANN semantic search",
-                cwd=str(PAPER_DB),
+                description="PaperQA2 and LEANN retrieval search",
             )
         )
 
     if not servers:
         echo_error("No MCP servers available to install in this environment.")
-        echo_error("Install one of:")
-        echo_error("  pip install 'paperpipe[mcp]'    # PaperQA2 MCP server (Python 3.11+)")
-        echo_error("  pip install 'paperpipe[leann]'  # LEANN MCP server (compiled)")
+        echo_error("Install: pip install 'paperpipe[mcp]' (Python 3.11+)")
         raise SystemExit(1)
 
     install_targets = set(targets) if targets else {"claude", "codex", "gemini"}
@@ -607,15 +585,12 @@ def _uninstall_prompts(*, targets: tuple[str, ...], force: bool) -> None:
         raise SystemExit(1)
 
 
-def _uninstall_mcp(*, targets: tuple[str, ...], name: str, leann_name: str, force: bool) -> None:
+def _uninstall_mcp(*, targets: tuple[str, ...], name: str, force: bool) -> None:
     paperqa_name = (name or "").strip()
-    leann_server_name = (leann_name or "").strip()
     if not paperqa_name:
         raise click.UsageError("--name must be non-empty")
-    if not leann_server_name:
-        raise click.UsageError("--leann-name must be non-empty")
 
-    server_keys = [paperqa_name, leann_server_name]
+    server_keys = [paperqa_name]
 
     uninstall_targets = set(targets) if targets else {"claude", "codex", "gemini"}
     successes: list[str] = []

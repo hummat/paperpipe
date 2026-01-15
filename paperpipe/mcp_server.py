@@ -30,8 +30,10 @@ Requires Python 3.11+ (paper-qa requirement).
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import subprocess
 import sys
 import zlib
 from pathlib import Path
@@ -143,6 +145,85 @@ def _load_files_zip_map(files_zip: Path) -> dict[str, str] | None:
     return out
 
 
+def _load_embedding_from_metadata(index_root: Path, index_name: str) -> str | None:
+    """
+    Load embedding model from paperpipe_meta.json if exists.
+
+    Returns None if file doesn't exist or is invalid.
+    """
+    meta_path = index_root / index_name / "paperpipe_meta.json"
+    if not meta_path.exists():
+        return None
+    try:
+        data = json.loads(meta_path.read_text())
+        return data.get("embedding_model") or None
+    except json.JSONDecodeError as e:
+        logger.warning("Invalid JSON in %s: %s", meta_path, e)
+        return None
+    except (OSError, IOError) as e:
+        logger.warning("Could not read %s: %s", meta_path, e)
+        return None
+
+
+def _write_index_metadata(index_root: Path, index_name: str, embedding_model: str) -> None:
+    """
+    Write paperpipe metadata after index creation.
+
+    Creates paperpipe_meta.json with embedding model, timestamp, and version.
+    Callers should wrap in try/except to ensure index operations succeed regardless of metadata write failures.
+    """
+    try:
+        from importlib.metadata import PackageNotFoundError
+        from importlib.metadata import version as get_version
+
+        version = get_version("paperpipe")
+    except (ImportError, PackageNotFoundError):
+        version = "unknown"
+
+    from datetime import datetime, timezone
+
+    metadata = {
+        "embedding_model": embedding_model,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "paperpipe_version": version,
+    }
+    meta_path = index_root / index_name / "paperpipe_meta.json"
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    meta_path.write_text(json.dumps(metadata, indent=2))
+
+
+def _write_leann_metadata(index_name: str, embedding_mode: str, embedding_model: str) -> None:
+    """
+    Write paperpipe metadata for LEANN index.
+
+    Creates paperpipe_leann_meta.json alongside LEANN's documents.leann.meta.json.
+    """
+    try:
+        from importlib.metadata import PackageNotFoundError
+        from importlib.metadata import version as get_version
+
+        version = get_version("paperpipe")
+    except (ImportError, PackageNotFoundError):
+        version = "unknown"
+
+    from datetime import datetime, timezone
+
+    if (pp := _paperpipe_module()) is None:
+        logger.warning("Cannot write LEANN metadata: paperpipe module not available")
+        return
+
+    index_dir = pp.PAPER_DB / ".leann" / "indexes" / index_name
+    metadata = {
+        "embedding_mode": embedding_mode,
+        "embedding_model": embedding_model,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "paperpipe_version": version,
+    }
+    meta_path = index_dir / "paperpipe_leann_meta.json"
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    meta_path.write_text(json.dumps(metadata, indent=2))
+
+
 def _register_tools() -> None:
     """Register all MCP tools. Must be called after _get_mcp()."""
     mcp = _get_mcp()
@@ -163,7 +244,7 @@ def _register_tools() -> None:
             query: Search query.
             k: Maximum number of chunks to return.
             search_k: Number of candidate papers to pull from the index first (lexical prefilter).
-            embedding_model: LiteLLM embedding id; must match the index's embedding model.
+            embedding_model: LiteLLM embedding id; optional, auto-inferred from index metadata if not provided.
             index_dir: Override PaperQA2 index root directory (contains index subfolders).
             index_name: Override PaperQA2 index name (subfolder under index_dir).
 
@@ -172,9 +253,32 @@ def _register_tools() -> None:
         """
         _require_python311()
 
-        embedding_model = (embedding_model or "").strip() or _default_embedding_model()
         index_root = Path(index_dir).expanduser() if index_dir else _default_index_root()
-        index_name = (index_name or "").strip() or _default_index_name(embedding_model)
+
+        # If index_name provided, try to infer embedding from it
+        if (index_name or "").strip():
+            index_name = (index_name or "").strip()
+
+            # Try metadata first
+            inferred_embedding = _load_embedding_from_metadata(index_root, index_name)
+
+            # Fall back to name parsing
+            if not inferred_embedding:
+                if (pp := _paperpipe_module()) is not None:
+                    try:
+                        inferred_embedding = pp.embedding_model_from_index_name(index_name)
+                    except Exception as e:
+                        logger.debug("Could not infer embedding from index name %r: %s", index_name, e)
+
+            # Use inferred if no explicit parameter
+            if not (embedding_model or "").strip() and inferred_embedding:
+                embedding_model = inferred_embedding
+            else:
+                embedding_model = (embedding_model or "").strip() or _default_embedding_model()
+        else:
+            # Standard flow: embedding determines index name
+            embedding_model = (embedding_model or "").strip() or _default_embedding_model()
+            index_name = _default_index_name(embedding_model)
 
         index_path = index_root / index_name
         files_zip = index_path / "files.zip"
@@ -195,7 +299,9 @@ def _register_tools() -> None:
 
         # LLM fields are irrelevant for retrieval-only, but Settings requires them.
         llm_model = (os.getenv("PAPERQA_LLM") or "gpt-4o-mini").strip()
-        settings = Settings(llm=llm_model, summary_llm=llm_model, embedding=embedding_model)
+        # Ensure embedding_model is always a string (should never be None after inference logic above)
+        embedding_model_str = embedding_model or _default_embedding_model()
+        settings = Settings(llm=llm_model, summary_llm=llm_model, embedding=embedding_model_str)
         embedding = settings.get_embedding_model()
 
         try:
@@ -259,20 +365,45 @@ def _register_tools() -> None:
             }
 
     @mcp.tool()
-    async def list_pqa_indexes(index_dir: str | None = None) -> list[str]:
-        """List available PaperQA2 index names under the index root directory."""
+    async def list_pqa_indexes(index_dir: str | None = None) -> list[dict[str, Any]]:
+        """
+        List available PaperQA2 indexes with metadata.
+
+        Returns a list of dicts with index information including embedding model.
+        """
         index_root = Path(index_dir).expanduser() if index_dir else _default_index_root()
         try:
             if not index_root.exists():
                 return []
-            out: list[str] = []
+            out: list[dict[str, Any]] = []
             for child in sorted(index_root.iterdir()):
                 if not child.is_dir():
                     continue
                 if (child / "index" / "meta.json").exists():
-                    out.append(child.name)
+                    # Try to load embedding model from metadata
+                    embedding = _load_embedding_from_metadata(index_root, child.name)
+
+                    # Fall back to name parsing if metadata doesn't exist
+                    if not embedding:
+                        if (pp := _paperpipe_module()) is not None:
+                            try:
+                                embedding = pp.embedding_model_from_index_name(child.name)
+                            except Exception:
+                                pass
+
+                    out.append(
+                        {
+                            "name": child.name,
+                            "embedding_model": embedding,
+                            "has_metadata": (child / "paperpipe_meta.json").exists(),
+                        }
+                    )
             return out
+        except PermissionError as e:
+            logger.warning("Cannot access index directory %s: %s", index_root, e)
+            return []
         except Exception:
+            logger.exception("Unexpected error listing PaperQA2 indexes")
             return []
 
     @mcp.tool()
@@ -293,6 +424,120 @@ def _register_tools() -> None:
             "index_files_total": len(mapping or {}),
             "index_files_failed": sum(1 for v in (mapping or {}).values() if v == "ERROR"),
         }
+
+    @mcp.tool()
+    async def leann_search(
+        index_name: str,
+        query: str,
+        top_k: int = 5,
+        complexity: int = 32,
+        show_metadata: bool = False,
+    ) -> dict[str, Any]:
+        """
+        Semantic search over papers using LEANN.
+
+        Faster and simpler than PaperQA2 retrieve_chunks.
+
+        Args:
+            index_name: Name of the LEANN index to search.
+            query: Search query (natural language or technical terms).
+            top_k: Number of results (1-20).
+            complexity: Search complexity level (16-128, default 32).
+            show_metadata: Include file paths and metadata.
+
+        Returns:
+            Search results from LEANN.
+        """
+        import shutil
+
+        if not shutil.which("leann"):
+            return {"ok": False, "error": "LEANN not installed. Run: pip install 'paperpipe[leann]'"}
+
+        if not index_name or not query:
+            return {"ok": False, "error": "Both index_name and query are required"}
+
+        cmd = [
+            "leann",
+            "search",
+            index_name,
+            query,
+            f"--top-k={max(1, min(int(top_k), 20))}",
+            f"--complexity={max(16, min(int(complexity), 128))}",
+            "--non-interactive",
+        ]
+        if show_metadata:
+            cmd.append("--show-metadata")
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            return {
+                "ok": result.returncode == 0,
+                "output": result.stdout if result.returncode == 0 else result.stderr,
+                "index_name": index_name,
+            }
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "error": "LEANN search timed out (30s)"}
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    @mcp.tool()
+    async def leann_list() -> dict[str, Any]:
+        """
+        List available LEANN indexes with metadata.
+
+        Returns list of dicts with index information including embedding model.
+        """
+        import shutil
+
+        if not shutil.which("leann"):
+            return {"ok": False, "error": "LEANN not installed. Run: pip install 'paperpipe[leann]'"}
+
+        if (pp := _paperpipe_module()) is None:
+            return {"ok": False, "error": "Could not load paperpipe config"}
+
+        index_root = pp.PAPER_DB / ".leann" / "indexes"
+        if not index_root.exists():
+            return {"ok": True, "indexes": []}
+
+        indexes: list[dict[str, Any]] = []
+        try:
+            for child in sorted(index_root.iterdir()):
+                if not child.is_dir():
+                    continue
+                if not (child / "documents.leann.meta.json").exists():
+                    continue
+
+                # Try to load embedding info from paperpipe metadata
+                meta_path = child / "paperpipe_leann_meta.json"
+                embedding_mode = None
+                embedding_model = None
+                has_metadata = False
+
+                if meta_path.exists():
+                    try:
+                        data = json.loads(meta_path.read_text())
+                        embedding_mode = data.get("embedding_mode")
+                        embedding_model = data.get("embedding_model")
+                        has_metadata = True
+                    except json.JSONDecodeError as e:
+                        logger.warning("Invalid JSON in %s: %s", meta_path, e)
+                        has_metadata = False
+                    except (OSError, IOError) as e:
+                        logger.warning("Could not read %s: %s", meta_path, e)
+                        has_metadata = False
+
+                indexes.append(
+                    {
+                        "name": child.name,
+                        "embedding_mode": embedding_mode,
+                        "embedding_model": embedding_model,
+                        "has_metadata": has_metadata,
+                    }
+                )
+
+            return {"ok": True, "indexes": indexes}
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
 def main() -> None:

@@ -55,12 +55,39 @@ def _leann_build_index(*, index_name: str, docs_dir: Path, force: bool, extra_ar
     if not has_embedding_mode_override:
         cmd.extend(["--embedding-mode", default_leann_embedding_mode()])
 
+    # Track embedding settings for metadata
+    embedding_model_for_meta = default_leann_embedding_model()
+    embedding_mode_for_meta = default_leann_embedding_mode()
+
+    # Check if user overrode them in extra_args
+    for i, arg in enumerate(extra_args):
+        if arg == "--embedding-model" and i + 1 < len(extra_args):
+            embedding_model_for_meta = extra_args[i + 1]
+        elif arg.startswith("--embedding-model="):
+            embedding_model_for_meta = arg.split("=", 1)[1]
+        elif arg == "--embedding-mode" and i + 1 < len(extra_args):
+            embedding_mode_for_meta = extra_args[i + 1]
+        elif arg.startswith("--embedding-mode="):
+            embedding_mode_for_meta = arg.split("=", 1)[1]
+
     cmd.extend(extra_args)
     debug("Running LEANN: %s", shlex.join(cmd))
     proc = subprocess.run(cmd, cwd=config.PAPER_DB)
     if proc.returncode != 0:
         echo_error(f"LEANN command failed (exit code {proc.returncode}).")
         raise SystemExit(proc.returncode)
+
+    # Write metadata on success
+    try:
+        from paperpipe.mcp_server import _write_leann_metadata
+
+        _write_leann_metadata(
+            index_name=index_name,
+            embedding_mode=embedding_mode_for_meta,
+            embedding_model=embedding_model_for_meta,
+        )
+    except Exception as e:
+        echo_warning(f"Failed to write LEANN index metadata: {e}")
 
 
 def _ask_leann(

@@ -249,6 +249,60 @@ def pqa_index_name_for_embedding(embedding_model: str) -> str:
     return f"paperpipe_{safe_name}"
 
 
+def embedding_model_from_index_name(index_name: str) -> str | None:
+    """
+    Reverse-engineer embedding model from paperpipe index name.
+
+    Returns None if name doesn't follow paperpipe naming convention.
+    Best-effort for ambiguous cases (multiple underscores).
+
+    Examples:
+        paperpipe_voyage_voyage-3.5 → voyage/voyage-3.5
+        paperpipe_openai_text-embedding-3-small → openai/text-embedding-3-small
+        paperpipe_gemini_gemini-embedding-001 → gemini/gemini-embedding-001
+        paperpipe_default → ""
+        custom_name → None
+    """
+    if not index_name.startswith("paperpipe_"):
+        return None
+
+    suffix = index_name[len("paperpipe_") :]
+
+    if suffix == "default":
+        return ""
+
+    # Try known provider patterns (with slashes in original model IDs)
+    # These are common LiteLLM provider prefixes
+    known_providers = [
+        "openai/",
+        "voyage/",
+        "ollama/",
+        "openrouter/",
+        "anthropic/",
+        "google/",
+        "gemini/",
+        "cohere/",
+        "huggingface/",
+    ]
+
+    for provider in known_providers:
+        safe_provider = provider.replace("/", "_")
+        if suffix.startswith(safe_provider):
+            # Found a match - reconstruct by replacing first underscore with slash
+            # e.g., "voyage_voyage-3.5" → "voyage/voyage-3.5"
+            return suffix.replace("_", "/", 1)
+
+    # Generic fallback for models without provider prefix
+    # This is ambiguous (foo_bar_baz could be foo/bar/baz or foo_bar/baz)
+    # but better than nothing for backward compatibility
+    # Most embedding models follow provider/model pattern, so replace first underscore
+    if "_" in suffix:
+        return suffix.replace("_", "/", 1)
+
+    # No underscores left, return as-is
+    return suffix
+
+
 def default_pqa_ollama_timeout() -> float:
     """
     Per-request timeout (seconds) for PaperQA2 LiteLLM router calls when using `ollama/...`.
