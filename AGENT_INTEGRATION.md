@@ -21,6 +21,9 @@ MCP Tools (if configured):
 - `retrieve_chunks(query, index_name, embedding_model, k)` - Detailed retrieval with citations
   - ⚠️ `embedding_model` MUST match the index (e.g., `paperpipe_voyage_voyage-3.5` → `voyage/voyage-3.5`)
   - Mismatch causes: `ValueError: size 1024 is different from 3072`
+- **Embedding priority** (prefer in order): Voyage AI → Google/Gemini → OpenAI → Local (Ollama)
+  - Check available indexes first: `leann_list()` or `list_pqa_indexes()`
+  - Use highest-quality available embeddings for best retrieval performance
 - Choose: `leann_search` for exploration, `retrieve_chunks` for formal citations
 
 Rules:

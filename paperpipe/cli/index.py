@@ -140,11 +140,15 @@ from ..search import (
     default=None,
     help="LEANN PDF chunk overlap in TOKENS (maps to `leann build --doc-chunk-overlap`).",
 )
+@click.option(
+    "--leann-no-recompute",
+    is_flag=True,
+    help="Disable embedding recomputation during LEANN build.",
+)
 @click.option("--search-rebuild", is_flag=True, help="Rebuild the SQLite FTS search index from scratch.")
 @click.option(
-    "--search-include-tex/--search-no-include-tex",
-    default=False,
-    show_default=True,
+    "--search-include-tex",
+    is_flag=True,
     help="Index `source.tex` contents into the FTS index (larger DB; slower build).",
 )
 @click.pass_context
@@ -173,6 +177,7 @@ def index_cmd(
     leann_num_threads: Optional[int],
     leann_doc_chunk_size: Optional[int],
     leann_doc_chunk_overlap: Optional[int],
+    leann_no_recompute: bool,
     search_rebuild: bool,
     search_include_tex: bool,
 ) -> None:
@@ -220,6 +225,9 @@ def index_cmd(
         _append_int_flag("--num-threads", leann_num_threads)
         _append_int_flag("--doc-chunk-size", leann_doc_chunk_size)
         _append_int_flag("--doc-chunk-overlap", leann_doc_chunk_overlap)
+
+        if leann_no_recompute:
+            leann_extra_args.append("--no-recompute")
 
         leann_extra_args.extend(list(ctx.args))
         _leann_build_index(index_name=leann_index, docs_dir=staging_dir, force=leann_force, extra_args=leann_extra_args)

@@ -158,9 +158,9 @@ Common LEANN ask flags:
 - `--leann-index`, `--leann-provider`, `--leann-model`
 - `--leann-host` (Ollama), `--leann-api-base`/`--leann-api-key` (OpenAI-compatible)
 - Retrieval tuning: `--leann-top-k`, `--leann-complexity`, `--leann-beam-width`, `--leann-prune-ratio`,
-  `--leann-recompute/--leann-no-recompute`, `--leann-pruning-strategy`, `--leann-thinking-budget`,
+  `--leann-no-recompute` (disable embedding recomputation), `--leann-pruning-strategy`, `--leann-thinking-budget`,
   `--leann-interactive`
-- Indexing behavior: `--leann-auto-index/--leann-no-auto-index` (default: auto-build index if missing)
+- Indexing behavior: `--leann-no-auto-index` (disable auto-build; default: auto-build index if missing)
 - Passthrough: add `-- <leann args...>` to forward extra flags directly to `leann` (useful for debugging)
 
 Embedding provider examples (indexing):

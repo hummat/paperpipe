@@ -98,7 +98,7 @@ pip install -e ".[all]"
 | `papi add --pdf file.pdf --title "..."` | Add a local PDF |
 | `papi add --from-file list.json` | Import papers from a JSON list or text file |
 | `papi list` | List papers (filter with `--tag`) |
-| `papi search "query"` | Search across titles, tags, summaries, equations (`--rg` for grep-style, `--fts` for ranked BM25) |
+| `papi search "query"` | Search across titles, tags, summaries, equations (`--rg` for grep-style, default uses ranked BM25 if indexed) |
 | `papi index --backend search` | Build/update ranked search index (`search.db`) |
 | `papi show <paper> --level eq` | Print equations (best for agent sessions) |
 | `papi show <paper> --level tex` | Print LaTeX source |
@@ -162,8 +162,8 @@ Ranked search (BM25 via SQLite FTS5, no LLM required):
 ```bash
 papi index --backend search --search-rebuild    # builds <paper_db>/search.db
 papi search "surface reconstruction"             # uses FTS if available (default)
-papi search --no-fts "surface reconstruction"    # force in-memory scan (fuzzy matching)
-papi search --no-fts --exact "exact phrase"      # disable fuzzy fallback
+papi search --no-fts "surface reconstruction"    # force in-memory scan (disables FTS, uses fuzzy matching)
+papi search --no-fts --exact "exact phrase"      # force scan with exact matching only
 ```
 
 Hybrid ranked+exact search:
@@ -356,45 +356,42 @@ Any additional arguments are passed through to `pqa` (e.g., `--agent.search_coun
 <details>
 <summary><strong>Model combination examples</strong></summary>
 
+**Indexing:**
+
 ```bash
-# Ollama (local) + Ollama embeddings
-export OLLAMA_HOST=http://127.0.0.1:11434
-export OLLAMA_API_BASE=http://127.0.0.1:11434
-papi ask "How is NeuS different from NeRF?" \
-  --pqa-llm ollama/olmo-3:7b \
-  --pqa-embedding ollama/nomic-embed-text
-
-# Gemini + Google Embeddings
-export GEMINI_API_KEY=...
-papi ask "How is NeuS different from NeRF?" \
-  --pqa-llm gemini/gemini-3-flash-preview \
-  --pqa-embedding gemini/gemini-embedding-001
-
-# Claude + Voyage Embeddings
-export OPENROUTER_API_KEY=...
-export VOYAGE_API_KEY=...
-papi ask "How is NeuS different from NeRF?" \
-  --pqa-llm openrouter/anthropic/claude-sonnet-4.5 \
-  --pqa-embedding voyage/voyage-3.5
-
-# Native Anthropic (no OpenRouter) + Voyage Embeddings
+# API keys should be in env
+export OPENAI_API_KEY=...
 export ANTHROPIC_API_KEY=...
+export GEMINI_API_KEY=...
 export VOYAGE_API_KEY=...
-papi ask "How is NeuS different from NeRF?" \
-  --pqa-llm claude-sonnet-4-5 \
-  --pqa-embedding voyage/voyage-3.5
+
+# Ollama (local) + Ollama embeddings
+papi index --backend pqa --pqa-llm ollama/olmo-3:7b --pqa-embedding ollama/nomic-embed-text
 
 # GPT + OpenAI Embeddings
-export OPENAI_API_KEY=...
-papi ask "How is NeuS different from NeRF?" \
-  --pqa-llm gpt-5.2 \
-  --pqa-embedding text-embedding-3-small
+papi index --backend pqa --pqa-llm gpt-4.1 --pqa-summary-llm gpt-4.1-mini --pqa-embedding text-embedding-3-small
 
-# OpenRouter (200+ models)
-papi ask "Explain the method" --pqa-llm "openrouter/anthropic/claude-sonnet-4" --pqa-embedding "openrouter/openai/text-embedding-3-large"
+# Gemini + Google Embeddings
+papi index --backend pqa --pqa-llm gemini/gemini-3-flash-preview --pqa-embedding gemini/gemini-embedding-001
 
-# Cheaper summarization model
-papi ask "Compare methods" --pqa-llm gpt-4o --pqa-summary-llm gpt-4o-mini
+# Claude + Voyage Embeddings
+papi index --backend pqa --pqa-llm claude-sonnet-4-5 --pqa-summary-llm claude-haiku-4-5 --pqa-embedding voyage/voyage-3.5
+```
+
+**Asking:**
+
+```bash
+# Ollama (local)
+papi ask "how is neus different from nerf?" --backend pqa --pqa-llm ollama/olmo-3:7b --pqa-embedding ollama/nomic-embed-text
+
+# GPT
+papi ask "how is neus different from nerf?" --backend pqa --pqa-llm gpt-4.1 --pqa-summary-llm gpt-4.1-mini --pqa-embedding text-embedding-3-small
+
+# Gemini
+papi ask "how is neus different from nerf?" --backend pqa --pqa-llm gemini/gemini-3-flash-preview --pqa-embedding gemini/gemini-embedding-001
+
+# Claude
+papi ask "how is neus different from nerf?" --backend pqa --pqa-llm claude-sonnet-4-5 --pqa-summary-llm claude-haiku-4-5 --pqa-embedding voyage/voyage-3.5
 ```
 
 </details>
@@ -469,53 +466,42 @@ Notes:
 <details>
 <summary><strong>Model combination examples</strong></summary>
 
-```bash
-# Ollama (local) + Ollama embeddings
-export OLLAMA_HOST=http://127.0.0.1:11434
-papi index --backend leann \
-  --leann-embedding-mode ollama \
-  --leann-embedding-model nomic-embed-text
-papi ask "How is NeuS different from NeRF?" --backend leann \
-  --leann-provider ollama \
-  --leann-model olmo-3:7b \
-  --leann-host http://127.0.0.1:11434
+**Indexing:**
 
-# Gemini + Gemini embeddings (OpenAI-compatible)
+```bash
+# API keys should be in env
+export OPENAI_API_KEY=...
+export ANTHROPIC_API_KEY=...
 export GEMINI_API_KEY=...
-papi index --backend leann \
-  --leann-embedding-mode openai \
-  --leann-embedding-model gemini-embedding-001 \
-  --leann-embedding-api-base https://generativelanguage.googleapis.com/v1beta/openai/ \
-  --leann-embedding-api-key "$GEMINI_API_KEY"
-papi ask "How is NeuS different from NeRF?" --backend leann \
-  --leann-provider openai \
-  --leann-model gemini-3-flash-preview \
-  --leann-api-base https://generativelanguage.googleapis.com/v1beta/openai/ \
-  --leann-api-key "$GEMINI_API_KEY"
+export VOYAGE_API_KEY=...
+
+# Ollama (local) + Ollama embeddings
+papi index --backend leann --leann-embedding-mode ollama --leann-embedding-model nomic-embed-text
 
 # OpenAI + OpenAI embeddings
-export OPENAI_API_KEY=...
-papi index --backend leann \
-  --leann-embedding-mode openai \
-  --leann-embedding-model text-embedding-3-small \
-  --leann-embedding-api-key "$OPENAI_API_KEY"
-papi ask "How is NeuS different from NeRF?" --backend leann \
-  --leann-provider openai \
-  --leann-model gpt-5.2 \
-  --leann-api-key "$OPENAI_API_KEY"
+papi index --backend leann --leann-embedding-mode openai --leann-embedding-model text-embedding-3-small --leann-embedding-api-key $OPENAI_API_KEY
+
+# Gemini + Gemini embeddings (OpenAI-compatible)
+papi index --backend leann --leann-embedding-mode openai --leann-embedding-model gemini-embedding-001 --leann-embedding-api-base https://generativelanguage.googleapis.com/v1beta/openai/ --leann-embedding-api-key $GEMINI_API_KEY
+
+# Voyage embeddings (OpenAI-compatible)
+papi index --backend leann --leann-embedding-mode openai --leann-embedding-model voyage-3.5 --leann-embedding-api-base https://api.voyageai.com/v1 --leann-embedding-api-key $VOYAGE_API_KEY
+```
+
+**Asking:**
+
+```bash
+# Ollama (local)
+papi ask "how is neus different from nerf?" --backend leann --leann-provider ollama --leann-model olmo-3:7b --leann-index papers_ollama_nomic-embed-text
+
+# OpenAI
+papi ask "how is neus different from nerf?" --backend leann --leann-provider openai --leann-model gpt-4.1 --leann-api-key $OPENAI_API_KEY --leann-index papers_openai_text-embedding-3-small
 
 # Anthropic + Voyage embeddings
-export ANTHROPIC_API_KEY=...
-export VOYAGE_API_KEY=...
-papi index --backend leann \
-  --leann-embedding-mode openai \
-  --leann-embedding-model voyage-3.5 \
-  --leann-embedding-api-base https://api.voyageai.com/v1 \
-  --leann-embedding-api-key "$VOYAGE_API_KEY"
-papi ask "How is NeuS different from NeRF?" --backend leann \
-  --leann-provider anthropic \
-  --leann-model claude-sonnet-4-5 \
-  --leann-api-key "$ANTHROPIC_API_KEY"
+papi ask "how is neus different from nerf?" --backend leann --leann-provider anthropic --leann-model claude-sonnet-4-5 --leann-api-key $ANTHROPIC_API_KEY --leann-index papers_openai_voyage-3.5
+
+# Gemini (OpenAI-compatible)
+papi ask "how is neus different from nerf?" --backend leann --leann-provider openai --leann-model gemini-3-flash-preview --leann-api-base https://generativelanguage.googleapis.com/v1beta/openai/ --leann-api-key $GEMINI_API_KEY --leann-index papers_openai_gemini-embedding-001
 ```
 
 </details>
@@ -523,56 +509,28 @@ papi ask "How is NeuS different from NeRF?" --backend leann \
 <details>
 <summary><strong>Embedding provider examples</strong></summary>
 
-Notes:
-- For `--leann-embedding-mode openai`, LEANN defaults the API key to `OPENAI_API_KEY` unless you pass
-  `--leann-embedding-api-key`.
-
-#### OpenAI
+**Note:** For `--leann-embedding-mode openai`, LEANN defaults the API key to `OPENAI_API_KEY` unless you pass `--leann-embedding-api-key`.
 
 ```bash
+# Ollama (local)
+papi index --backend leann --leann-embedding-mode ollama --leann-embedding-model nomic-embed-text
+
+# OpenAI
 export OPENAI_API_KEY=...
-papi index --backend leann \
-  --leann-embedding-mode openai \
-  --leann-embedding-model text-embedding-3-small
-```
+papi index --backend leann --leann-embedding-mode openai --leann-embedding-model text-embedding-3-small --leann-embedding-api-key $OPENAI_API_KEY
 
-#### GitHub Copilot embeddings (OpenAI-compatible)
-
-```bash
-export GITHUB_TOKEN=...
-papi index --backend leann \
-  --leann-embedding-mode openai \
-  --leann-embedding-model text-embedding-3-small \
-  --leann-embedding-api-base https://api.githubcopilot.com \
-  --leann-embedding-api-key "$GITHUB_TOKEN"
-```
-
-#### Voyage (OpenAI-compatible)
-
-```bash
-export VOYAGE_API_KEY=...
-papi index --backend leann \
-  --leann-embedding-mode openai \
-  --leann-embedding-model voyage-3.5 \
-  --leann-embedding-api-base https://api.voyageai.com/v1 \
-  --leann-embedding-api-key "$VOYAGE_API_KEY"
-```
-
-#### Gemini embeddings (OpenAI-compatible)
-
-```bash
+# Gemini (OpenAI-compatible)
 export GEMINI_API_KEY=...
-papi index --backend leann \
-  --leann-embedding-mode openai \
-  --leann-embedding-model gemini-embedding-001 \
-  --leann-embedding-api-base https://generativelanguage.googleapis.com/v1beta/openai/ \
-  --leann-embedding-api-key "$GEMINI_API_KEY"
+papi index --backend leann --leann-embedding-mode openai --leann-embedding-model gemini-embedding-001 --leann-embedding-api-base https://generativelanguage.googleapis.com/v1beta/openai/ --leann-embedding-api-key $GEMINI_API_KEY
+
+# Voyage (OpenAI-compatible)
+export VOYAGE_API_KEY=...
+papi index --backend leann --leann-embedding-mode openai --leann-embedding-model voyage-3.5 --leann-embedding-api-base https://api.voyageai.com/v1 --leann-embedding-api-key $VOYAGE_API_KEY
 ```
 
-Notes:
-- Gemini embeddings may hit quota/rate limits (HTTP 429). Retry after the suggested delay.
-- Some LEANN versions batch too many inputs per embeddings request for Gemini (hard limit: 100 inputs/request) and will
-  fail with HTTP 400; update LEANN or reduce chunk counts (e.g. larger `--leann-doc-chunk-size`) as a mitigation.
+**Gemini notes:**
+- May hit quota/rate limits (HTTP 429). Retry after suggested delay.
+- Some LEANN versions batch too many inputs per request for Gemini (hard limit: 100 inputs/request) and fail with HTTP 400; update LEANN or reduce chunk counts (e.g., larger `--leann-doc-chunk-size`).
 
 </details>
 

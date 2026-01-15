@@ -59,11 +59,10 @@ def list_papers(tag: Optional[str], as_json: bool):
     help="Maximum number of results to show.",
 )
 @click.option(
-    "--grep/--no-grep",
-    "--rg/--no-rg",
+    "--grep",
+    "--rg",
     "use_grep",
-    default=False,
-    show_default=True,
+    is_flag=True,
     help="Use ripgrep/grep for fast exact-match search (shows file:line hits).",
 )
 @click.option(
@@ -108,9 +107,8 @@ def list_papers(tag: Optional[str], as_json: bool):
     help="Fall back to fuzzy matching only if no exact matches were found.",
 )
 @click.option(
-    "--tex/--no-tex",
-    default=False,
-    show_default=True,
+    "--tex",
+    is_flag=True,
     help="Also search within LaTeX source (can be slower).",
 )
 @click.option(
@@ -121,9 +119,8 @@ def list_papers(tag: Optional[str], as_json: bool):
     help="Use SQLite FTS5 ranked search if `search.db` exists (falls back to scan). Use --no-fts to force scan.",
 )
 @click.option(
-    "--hybrid/--no-hybrid",
-    default=False,
-    show_default=True,
+    "--hybrid",
+    is_flag=True,
     help="Hybrid search: FTS5 ranked search + grep signal boosting papers with exact matches.",
 )
 @click.option(

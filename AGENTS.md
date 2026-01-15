@@ -29,6 +29,7 @@ For general patterns, see `docs/agent/`:
 - `architecture.md`: project layout, uv commands, module organization
 - `code_conventions.md`: Python style, typing, KISS, minimal diffs
 - `testing_patterns.md`: pytest, pyright, ruff commands
+- `releases.md`: versioning, release process, commit conventions
 
 ---
 

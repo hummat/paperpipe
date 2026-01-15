@@ -22,6 +22,8 @@ Use this skill when the user:
    - `leann_search(index_name, query, top_k)` - fast, returns snippets + file paths
    - `retrieve_chunks(query, index_name, embedding_model, k)` - slower, returns citations
    - For PaperQA2: `embedding_model` MUST match index (e.g., `paperpipe_voyage_voyage-3.5` → `"voyage/voyage-3.5"`)
+   - **Embedding priority**: Voyage AI → Google/Gemini → OpenAI → Local (Ollama)
+   - Check `leann_list()` or `list_pqa_indexes()` for available indexes; prefer higher-quality embeddings
 3. Use `papi ask` only when explicitly requested to run a RAG backend (PaperQA2 via `--backend pqa`, or LEANN via `--backend leann`).
 
 ### 1. Find the paper database location

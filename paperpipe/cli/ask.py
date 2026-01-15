@@ -193,10 +193,9 @@ from ..output import debug, echo_error, echo_progress, echo_warning
 @click.option("--leann-beam-width", type=int, default=None, show_default=False, help="LEANN search beam width.")
 @click.option("--leann-prune-ratio", type=float, default=None, show_default=False, help="LEANN search prune ratio.")
 @click.option(
-    "--leann-recompute/--leann-no-recompute",
-    default=True,
-    show_default=True,
-    help="Enable/disable embedding recomputation during LEANN ask.",
+    "--leann-no-recompute",
+    is_flag=True,
+    help="Disable embedding recomputation during LEANN ask.",
 )
 @click.option(
     "--leann-pruning-strategy",
@@ -214,10 +213,9 @@ from ..output import debug, echo_error, echo_progress, echo_warning
 )
 @click.option("--leann-interactive", is_flag=True, help="Run `leann ask --interactive` (terminal UI).")
 @click.option(
-    "--leann-auto-index/--leann-no-auto-index",
-    default=True,
-    show_default=True,
-    help="Auto-build the LEANN index if missing when running `papi ask --backend leann`.",
+    "--leann-no-auto-index",
+    is_flag=True,
+    help="Disable auto-build of the LEANN index when missing.",
 )
 @click.pass_context
 def ask(
@@ -249,11 +247,11 @@ def ask(
     leann_complexity: Optional[int],
     leann_beam_width: Optional[int],
     leann_prune_ratio: Optional[float],
-    leann_recompute: bool,
+    leann_no_recompute: bool,
     leann_pruning_strategy: Optional[str],
     leann_thinking_budget: Optional[str],
     leann_interactive: bool,
-    leann_auto_index: bool,
+    leann_no_auto_index: bool,
 ):
     """
     Query papers using PaperQA2 (default) or LEANN.
@@ -269,7 +267,7 @@ def ask(
             raise click.UsageError("--format evidence-blocks is only supported with --backend pqa.")
         config.PAPER_DB.mkdir(parents=True, exist_ok=True)
         config.PAPERS_DIR.mkdir(parents=True, exist_ok=True)
-        if leann_auto_index:
+        if not leann_no_auto_index:
             index_name = (leann_index or "").strip() or DEFAULT_LEANN_INDEX_NAME
             meta_path = _leann_index_meta_path(index_name)
             if not meta_path.exists():
@@ -289,7 +287,7 @@ def ask(
             complexity=leann_complexity,
             beam_width=leann_beam_width,
             prune_ratio=leann_prune_ratio,
-            recompute_embeddings=leann_recompute,
+            recompute_embeddings=not leann_no_recompute,
             pruning_strategy=leann_pruning_strategy,
             thinking_budget=leann_thinking_budget,
             interactive=leann_interactive,

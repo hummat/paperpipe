@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "paperpipe"
-version = "1.1.2"
+version = "1.1.3"
 description = "Unified paper database for coding agents + PaperQA2"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -32,7 +32,10 @@ dependencies = [
 llm = ["litellm>=1.0.0"]
 leann = ["leann-core>=0.3.5", "leann-backend-hnsw>=0.3.5"]
 paperqa = ["paper-qa>=5.0.0; python_version >= '3.11'"]
-paperqa-media = ["paper-qa[pypdf-media]>=5.0.0; python_version >= '3.11'"]
+paperqa-media = [
+    "paper-qa[pypdf-media]>=5.0.0; python_version >= '3.11'",
+    "pymupdf_layout",
+]
 mcp = [
     "mcp>=1.0.0; python_version >= '3.11'",
     "paper-qa>=5.0.0; python_version >= '3.11'",

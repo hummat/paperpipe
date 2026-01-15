@@ -21,7 +21,7 @@ Items below are planned for future 1.x minor releases.
 Goal: auto-generate a short, one-paragraph TL;DR when adding a paper (ideally using metadata + abstract, optionally LLM).
 
 Ideas:
-- Add `--tldr/--no-tldr` flag on `papi add` (default on).
+- ✅ Add `--no-tldr` flag on `papi add` (default: TL;DR enabled).
 - Store as `tldr.md` alongside `summary.md` and `equations.md`.
 - If LLM available, ask for a 2–3 sentence TL;DR; otherwise fall back to a heuristic (title + abstract sentence).
 - Expose in `papi show` output (optional).
@@ -88,7 +88,7 @@ Goal: make `papi search` fast and useful without requiring LLM/embedding APIs.
 
   Implemented as:
   - `papi index --backend search` — builds/updates `~/.paperpipe/search.db`
-  - `papi search --fts` (enabled by default) — queries with BM25 ranking
+  - `papi search` (FTS enabled by default) — queries with BM25 ranking (use `--no-fts` to force scan)
   - `--search-include-tex` option for indexing LaTeX source
 
 - **C) Hybrid: ripgrep + FTS5 fusion** — ✅ DONE
@@ -235,7 +235,7 @@ Implemented (see README.md → "Non-arXiv Papers").
 
 Implemented with full option support: `--fixed-strings`, `--context`, `--ignore-case`, `--max-matches`, `--json`. Falls back to `grep` if `rg` not installed.
 
-### SQLite FTS5 ranked search (`papi search --fts`, `papi index --backend search`)
+### SQLite FTS5 ranked search (`papi search`, `papi index --backend search`)
 
 Implemented with BM25 ranking, field weighting, porter stemmer. Index stored at `~/.paperpipe/search.db`.
 

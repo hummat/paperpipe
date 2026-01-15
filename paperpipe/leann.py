@@ -5,6 +5,7 @@ from __future__ import annotations
 import shlex
 import shutil
 import subprocess
+import traceback
 from pathlib import Path
 from typing import Optional
 
@@ -50,31 +51,51 @@ def _leann_build_index(*, index_name: str, docs_dir: Path, force: bool, extra_ar
     if force:
         cmd.append("--force")
 
-    if not has_embedding_model_override:
-        cmd.extend(["--embedding-model", default_leann_embedding_model()])
-    if not has_embedding_mode_override:
-        cmd.extend(["--embedding-mode", default_leann_embedding_mode()])
-
-    # Track embedding settings for metadata
-    embedding_model_for_meta = default_leann_embedding_model()
-    embedding_mode_for_meta = default_leann_embedding_mode()
-
-    # Check if user overrode them in extra_args
+    # Extract explicit overrides from extra_args first to avoid spurious fallback logs
+    embedding_model_override: Optional[str] = None
+    embedding_mode_override: Optional[str] = None
     for i, arg in enumerate(extra_args):
-        if arg == "--embedding-model" and i + 1 < len(extra_args):
-            embedding_model_for_meta = extra_args[i + 1]
+        if arg == "--embedding-model":
+            if i + 1 >= len(extra_args):
+                raise click.UsageError("--embedding-model flag requires a value")
+            embedding_model_override = extra_args[i + 1]
+            if not embedding_model_override.strip():
+                raise click.UsageError("--embedding-model flag requires a non-empty value")
         elif arg.startswith("--embedding-model="):
-            embedding_model_for_meta = arg.split("=", 1)[1]
-        elif arg == "--embedding-mode" and i + 1 < len(extra_args):
-            embedding_mode_for_meta = extra_args[i + 1]
+            embedding_model_override = arg.split("=", 1)[1]
+            if not embedding_model_override.strip():
+                raise click.UsageError("--embedding-model flag requires a non-empty value")
+        elif arg == "--embedding-mode":
+            if i + 1 >= len(extra_args):
+                raise click.UsageError("--embedding-mode flag requires a value")
+            embedding_mode_override = extra_args[i + 1]
+            if not embedding_mode_override.strip():
+                raise click.UsageError("--embedding-mode flag requires a non-empty value")
         elif arg.startswith("--embedding-mode="):
-            embedding_mode_for_meta = arg.split("=", 1)[1]
+            embedding_mode_override = arg.split("=", 1)[1]
+            if not embedding_mode_override.strip():
+                raise click.UsageError("--embedding-mode flag requires a non-empty value")
+
+    # Add defaults to command only if user didn't provide explicit overrides
+    if not has_embedding_model_override:
+        embedding_model_default = default_leann_embedding_model()
+        if embedding_model_default:
+            cmd.extend(["--embedding-model", embedding_model_default])
+    if not has_embedding_mode_override:
+        embedding_mode_default = default_leann_embedding_mode()
+        if embedding_mode_default:
+            cmd.extend(["--embedding-mode", embedding_mode_default])
+
+    # Track effective embedding settings for metadata (explicit or default)
+    embedding_model_for_meta = embedding_model_override or default_leann_embedding_model()
+    embedding_mode_for_meta = embedding_mode_override or default_leann_embedding_mode()
 
     cmd.extend(extra_args)
     debug("Running LEANN: %s", shlex.join(cmd))
     proc = subprocess.run(cmd, cwd=config.PAPER_DB)
     if proc.returncode != 0:
-        echo_error(f"LEANN command failed (exit code {proc.returncode}).")
+        echo_error(f"LEANN command failed (exit code {proc.returncode})")
+        echo_error(f"Command: {shlex.join(cmd)}")
         raise SystemExit(proc.returncode)
 
     # Write metadata on success
@@ -86,8 +107,16 @@ def _leann_build_index(*, index_name: str, docs_dir: Path, force: bool, extra_ar
             embedding_mode=embedding_mode_for_meta,
             embedding_model=embedding_model_for_meta,
         )
+    except (ImportError, ModuleNotFoundError) as e:
+        echo_warning(f"MCP server not available; skipping metadata write: {e}")
+    except (PermissionError, OSError) as e:
+        echo_error(f"Failed to write LEANN index metadata due to filesystem error: {e}")
+        echo_error("Index was built successfully but metadata is incomplete.")
+        raise SystemExit(1)
     except Exception as e:
-        echo_warning(f"Failed to write LEANN index metadata: {e}")
+        # Log unexpected errors but don't fail the build
+        echo_warning(f"Unexpected error writing LEANN index metadata: {e}")
+        debug("Metadata write failed:\n%s", traceback.format_exc())
 
 
 def _ask_leann(

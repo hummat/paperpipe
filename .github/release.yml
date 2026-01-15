@@ -1,0 +1,34 @@
+changelog:
+  exclude:
+    labels:
+      - ignore-for-release
+    authors:
+      - dependabot
+  categories:
+    - title: ⚠️ Breaking Changes
+      labels:
+        - breaking-change
+        - breaking
+    - title: Features
+      labels:
+        - feature
+        - enhancement
+        - feat
+    - title: Bug Fixes
+      labels:
+        - bug
+        - fix
+        - bugfix
+    - title: Documentation
+      labels:
+        - documentation
+        - docs
+    - title: Internal
+      labels:
+        - internal
+        - refactor
+        - chore
+        - dependencies
+    - title: Other Changes
+      labels:
+        - "*"
