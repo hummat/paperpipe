@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "paperpipe"
-version = "1.0.0"
+version = "1.1.0"
 description = "Unified paper database for coding agents + PaperQA2"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -58,7 +58,7 @@ dev = [
 ]
 
 [project.scripts]
-papi = "paperpipe:cli"
+papi = "paperpipe.cli:cli"
 
 [project.urls]
 Homepage = "https://github.com/hummat/paperpipe"

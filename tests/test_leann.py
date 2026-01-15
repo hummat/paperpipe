@@ -16,6 +16,8 @@ import paperpipe.paperqa as paperqa
 
 # Import the CLI module explicitly (avoid resolving to the package's cli function).
 cli_mod = import_module("paperpipe.cli")
+# Import the index submodule for patching _leann_build_index
+cli_index_mod = import_module("paperpipe.cli.index")
 
 
 class TestLeannCli:
@@ -42,7 +44,7 @@ class TestLeannCli:
             captured["extra_args"] = list(extra_args)
 
         monkeypatch.setattr(paperqa, "_refresh_pqa_pdf_staging_dir", fake_refresh)
-        monkeypatch.setattr(cli_mod, "_leann_build_index", fake_build)
+        monkeypatch.setattr(cli_index_mod, "_leann_build_index", fake_build)
 
         runner = CliRunner()
         result = runner.invoke(

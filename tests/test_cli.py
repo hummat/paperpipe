@@ -1455,8 +1455,7 @@ class TestInstallMcpCommand:
             and "user" in c
             and "paperqa" in c
             and "--" in c
-            and "papi" in c
-            and "mcp-server" in c
+            and "paperqa_mcp_server" in c
             for c in calls
         )
 
@@ -1467,11 +1466,11 @@ class TestInstallMcpCommand:
             assert result.exit_code == 0, result.output
 
             cfg = json.loads(Path(".mcp.json").read_text())
-            assert cfg["mcpServers"]["paperqa"]["command"] == "papi"
-            assert cfg["mcpServers"]["paperqa"]["args"] == ["mcp-server"]
+            assert cfg["mcpServers"]["paperqa"]["command"] == "paperqa_mcp_server"
+            assert cfg["mcpServers"]["paperqa"]["args"] == []
             cfg2 = json.loads((Path(".gemini") / "settings.json").read_text())
-            assert cfg2["mcpServers"]["paperqa"]["command"] == "papi"
-            assert cfg2["mcpServers"]["paperqa"]["args"] == ["mcp-server"]
+            assert cfg2["mcpServers"]["paperqa"]["command"] == "paperqa_mcp_server"
+            assert cfg2["mcpServers"]["paperqa"]["args"] == []
 
     def test_install_mcp_repo_writes_leann_when_available(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann_mcp" if cmd == "leann_mcp" else None)
@@ -1482,10 +1481,10 @@ class TestInstallMcpCommand:
             assert result.exit_code == 0, result.output
 
             cfg = json.loads(Path(".mcp.json").read_text())
-            assert cfg["mcpServers"]["paperqa"]["command"] == "papi"
-            assert cfg["mcpServers"]["paperqa"]["args"] == ["mcp-server"]
-            assert cfg["mcpServers"]["leann"]["command"] == "papi"
-            assert cfg["mcpServers"]["leann"]["args"] == ["leann-mcp-server"]
+            assert cfg["mcpServers"]["paperqa"]["command"] == "paperqa_mcp_server"
+            assert cfg["mcpServers"]["paperqa"]["args"] == []
+            assert cfg["mcpServers"]["leann"]["command"] == "leann_mcp"
+            assert cfg["mcpServers"]["leann"]["args"] == []
 
     def test_install_mcp_repo_uses_paperqa_embedding_env_override(
         self, temp_db: Path, monkeypatch: pytest.MonkeyPatch
@@ -1511,8 +1510,8 @@ class TestInstallMcpCommand:
         assert result.exit_code == 0, result.output
 
         cfg = json.loads((tmp_path / ".gemini" / "settings.json").read_text())
-        assert cfg["mcpServers"]["paperqa"]["command"] == "papi"
-        assert cfg["mcpServers"]["paperqa"]["args"] == ["mcp-server"]
+        assert cfg["mcpServers"]["paperqa"]["command"] == "paperqa_mcp_server"
+        assert cfg["mcpServers"]["paperqa"]["args"] == []
         assert cfg["mcpServers"]["paperqa"]["env"]["PAPERQA_EMBEDDING"] == "text-embedding-3-small"
 
     def test_install_mcp_gemini_runs_gemini_mcp_add(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
@@ -1539,8 +1538,7 @@ class TestInstallMcpCommand:
             and "--env" in c
             and "PAPERQA_EMBEDDING=text-embedding-3-small" in c
             and "paperqa" in c
-            and "papi" in c
-            and "mcp-server" in c
+            and "paperqa_mcp_server" in c
             for c in calls
         )
 
@@ -1582,8 +1580,7 @@ class TestInstallMcpCommand:
         assert result.exit_code == 0, result.output
         assert any(
             c[:4] == ["codex", "mcp", "add", "paperqa"]
-            and "papi" in c
-            and "mcp-server" in c
+            and "paperqa_mcp_server" in c
             and "PAPERQA_EMBEDDING=text-embedding-3-small" in " ".join(c)
             for c in calls
         )

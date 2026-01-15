@@ -3,99 +3,109 @@
 This file is the single source of truth for agent instructions in this repo.
 `CLAUDE.md` and `GEMINI.md` are symlinks to this file.
 
+## Role & Tone
+
+Expert engineering assistant. Tool, not a buddy.
+
+- No greetings, small talk, or fluff
+- Blunt, direct, high-signal; if unsure, say so
+- Share strong opinions when appropriate; be humble when wrong
+- Prioritize clarity over politeness
+
+## Output Format
+
+- Default: 3–6 sentences or ≤6 bullets
+- Simple yes/no: ≤2 sentences
+- Multi-file changes: 1 overview sentence, then ≤5 bullets:
+  - What changed
+  - Where (file:function or file:line)
+  - Risks
+  - Next steps
+  - Open questions
+
+## Conventions
+
+For general patterns, see `docs/agent/`:
+- `architecture.md`: project layout, uv commands, module organization
+- `code_conventions.md`: Python style, typing, KISS, minimal diffs
+- `testing_patterns.md`: pytest, pyright, ruff commands
+
+---
+
 ## Project Overview
 
 - **Type:** Python CLI application
 - **CLI entry point:** `papi` (defined in `pyproject.toml` via `[project.scripts]`)
 - **Goal:** Maintain a local paper database (PDF + LaTeX + summaries/equations) for coding agents and PaperQA2.
 
-## Architecture & Runtime Data Layout
+## Architecture & Runtime Data
 
-Package-based Click CLI (`paperpipe/`). Runtime state lives in `~/.paperpipe/` (do not commit generated data):
+Package-based Click CLI (`paperpipe/`). Runtime state lives in `~/.paperpipe/` (do not commit):
 
 - `~/.paperpipe/index.json`: quick lookup index mapping paper name → metadata
 - `~/.paperpipe/papers/{name}/`: per-paper directory (PDF, LaTeX, summary, equations, metadata)
 
 Key flows:
 
-- `add`: fetch arXiv or Semantic Scholar metadata → download PDF + (if available) LaTeX source → generate summary/equations/tags
-  → update index
+- `add`: fetch arXiv/Semantic Scholar metadata → download PDF + LaTeX → generate summary/equations/tags → update index
 - `regenerate`: re-run summary/equation generation for an existing paper
 - `export`: copy selected content to a destination directory
 - `ask`: route to PaperQA2 for RAG queries over the stored PDFs (if installed)
 
-## Project Structure & Module Organization
+## Project Structure
 
-- `paperpipe/`: package containing the core logic and the Click CLI (installed as `papi`).
-- `test_paperpipe.py`: pytest suite (unit tests + optional integration checks).
-- `pyproject.toml`: packaging (Hatchling), dependencies, and tool configuration (pytest markers, Ruff).
-- `README.md`: end-user documentation and CLI examples.
+```
+paperpipe/          # Click CLI package (installed as `papi`)
+tests/              # pytest suite
+pyproject.toml      # packaging (Hatchling), deps, tool config
+README.md           # end-user docs and CLI examples
+```
 
-Runtime data is stored outside the repo in `~/.paperpipe/` (PDFs, LaTeX, summaries, index). Do not commit generated paper databases.
+## Project-Specific Commands
 
-## Build, Test, and Development Commands
+```bash
+# Install
+pip install -e ".[dev]"       # editable + dev tools
+pip install -e ".[all]"       # editable + all optional features
+uv sync --group dev           # via uv (matches CI)
 
-- `pip install -e ".[dev]"`: editable install with dev tools (`pytest`, `ruff`, `pyright`).
-- `uv sync --group dev`: install dev deps via uv (matches CI).
-- `pip install -e ".[all]"`: editable install with all optional features (LLM + PaperQA2 integration).
-- `papi --help`: show CLI commands and options.
-- `pytest`: run the default test suite (note: `pyproject.toml` sets `-m 'not integration'` in `addopts`).
-- `pytest -m "integration or not integration"`: run all tests (including integration) while keeping other `addopts`.
-- `pytest -m "not integration"`: skip tests that may require network or external CLIs.
-- `pytest -m integration`: run network-dependent integration tests.
-- `ruff check .`: run lint (configured for 100-char lines and import sorting).
-- `ruff check . --fix`: apply safe auto-fixes.
-- `ruff format .`: format code.
-- `pyright`: type check (basic mode; configuration in `pyproject.toml`).
+# CLI
+papi --help
 
-## Coding Style & Naming Conventions
+# Tests (pyproject.toml sets -m 'not integration' in addopts)
+uv run pytest                              # default (skip integration)
+uv run pytest -m integration               # network-dependent tests only
+uv run pytest -m "integration or not integration"  # all tests
+```
 
-- Python >= 3.10; 4-space indentation; keep lines ≤ 120 chars (see `[tool.ruff]`).
-- Use type hints for public helpers and any non-trivial return values.
-- Naming: `snake_case` for functions/variables, `UPPER_SNAKE_CASE` for constants, tests as `test_*`.
-- Keep CLI behavior stable: when adding flags/commands, update `README.md` examples.
+## Project-Specific Style
 
-## LLM & PaperQA2 Integration Notes
+- Python >= 3.10; lines ≤ 120 chars (see `[tool.ruff]`)
+- Keep CLI behavior stable; update `README.md` when adding flags/commands
 
-- PaperQA2 integration uses the `pqa` CLI if installed.
-- PaperQA2 model selection uses LiteLLM identifiers (via `papi ask --pqa-llm/--pqa-embedding`).
-- Summaries/equations/tags are generated via LiteLLM when available; otherwise paperpipe
-  falls back to simpler non-LLM extraction (metadata-based summaries, regex equation extraction).
-- Common API keys paperpipe checks for:
-  - Google: `GEMINI_API_KEY` (or `GOOGLE_API_KEY`)
-  - Anthropic: `ANTHROPIC_API_KEY`
-  - OpenAI: `OPENAI_API_KEY` (or `AZURE_OPENAI_API_KEY`)
-  - Voyage: `VOYAGE_API_KEY` (for Voyage embeddings)
-  - OpenRouter: `OPENROUTER_API_KEY` (access 200+ models via unified API)
+## LLM & PaperQA2 Integration
 
-## Testing Guidelines
+- PaperQA2 uses `pqa` CLI if installed; model selection via LiteLLM identifiers
+- Summaries/equations/tags generated via LiteLLM; fallback to regex/metadata if unavailable
+- API keys checked: `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `VOYAGE_API_KEY`, `OPENROUTER_API_KEY`
 
-- Prefer unit tests that use `tmp_path`/`monkeypatch` to avoid touching `~/.paperpipe/`.
-- Mark network/external-tool tests with `@pytest.mark.integration` (and `@pytest.mark.slow` when appropriate).
-- New functionality should include a focused test covering success + a common failure mode.
-- Versioning (pre-1.0): treat minor as breaking/behavior changes and patch as bugfix/internal/no behavior change.
-- Pre-1.0 stability: no backward compatibility guarantees unless explicitly requested.
+## Testing Notes
 
-## Test Markers
+- Use `tmp_path`/`monkeypatch` to avoid touching `~/.paperpipe/`
+- Mark network tests with `@pytest.mark.integration` (and `@pytest.mark.slow` if long-running)
+- New functionality: test success + one common failure mode
+- Pre-1.0: minor = breaking/behavior change, patch = bugfix/internal
 
-- `@pytest.mark.integration`: requires network access (arXiv / model APIs / external CLIs)
-- `@pytest.mark.slow`: long-running tests (e.g., LLM calls)
+## Commit Guidelines
 
-## Commit & Pull Request Guidelines
+- Short, imperative subjects (optionally `feat:`, `fix:`, etc.)
+- PRs: what/why, how to test, CLI/database behavior changes
 
-- Git history currently contains only `Initial commit` (no established conventions yet).
-- Use short, imperative commit subjects (optionally Conventional Commits like `feat: …`, `fix: …`).
-- PRs should include: what/why, how to test (`pytest`, `ruff check .`), and any behavior changes to the CLI or database format.
+## Agent Workflow
 
-## Agent-Specific Instructions
+1. **Before editing**: read files first; understand existing code
+2. **After code changes**: run `uv run ruff format .` → `uv run ruff check .` → `uv run pyright` → `uv run pytest -m "not integration"`
+3. **Doc check**: explicitly verify if docs/prompts need updating (even if "no doc impact")
+4. **CLI changes**: update `README.md`, `AGENT_INTEGRATION.md`, `skill/SKILL.md`, `skill/commands.md`
 
-- When Python code or tooling (`pyproject.toml`, CI) is touched, run `uv run ruff format .` (first),
-  then `uv run ruff check .`, `uv run pyright`, and `uv run pytest -m "not integration"` (or note what you skipped).
-- Always use `uv run` for running dev tools (`ruff`, `pyright`, `pytest`) to ensure consistent environments.
-- In sandboxed/offline environments, `uv run` may fail (e.g., it needs to fetch build requirements like `hatchling`,
-  or cannot use the default `~/.cache/uv`); in that case either re-run with network/permissions or fall back to
-  a pre-provisioned venv (`.venv/bin/ruff`, `.venv/bin/pyright`, `.venv/bin/pytest`). If needed, set
-  `UV_CACHE_DIR=$PWD/.uv-cache` and `UV_LINK_MODE=copy` to avoid cache/FS issues.
-- For any code change, explicitly check whether any docs/prompts need updating (even if the conclusion is “no doc impact”).
-- When changing CLI surface area (commands/options/output) or user-facing behavior (env vars, database layout),
-  update `README.md`, `AGENT_INTEGRATION.md`, `skill/SKILL.md`, and `skill/commands.md` as needed.
+If `uv run` fails (sandbox/offline): fall back to `.venv/bin/*` or set `UV_CACHE_DIR=$PWD/.uv-cache` and `UV_LINK_MODE=copy`.

@@ -12,7 +12,7 @@ from typing import Any, Optional
 
 import click
 
-from .config import default_pqa_embedding_model
+from .config import PAPER_DB, default_pqa_embedding_model
 from .output import echo, echo_error, echo_success, echo_warning
 
 
@@ -176,6 +176,7 @@ def _install_mcp(
         args: tuple[str, ...]
         env: dict[str, str]
         description: str
+        cwd: Optional[str] = None
 
     def _paperqa_mcp_is_available() -> bool:
         if sys.version_info < (3, 11):
@@ -202,8 +203,8 @@ def _install_mcp(
         servers.append(
             McpServerSpec(
                 name=paperqa_name,
-                command="papi",
-                args=("mcp-server",),
+                command="paperqa_mcp_server",
+                args=(),
                 env={"PAPERQA_EMBEDDING": embedding_model},
                 description="PaperQA2 retrieval-only search",
             )
@@ -215,10 +216,11 @@ def _install_mcp(
         servers.append(
             McpServerSpec(
                 name=leann_server_name,
-                command="papi",
-                args=("leann-mcp-server",),
+                command="leann_mcp",
+                args=(),
                 env={},
                 description="LEANN semantic search",
+                cwd=str(PAPER_DB),
             )
         )
 
@@ -313,6 +315,8 @@ def _install_mcp(
             gemini_dest = Path.cwd() / ".gemini" / "settings.json"
             for spec in servers:
                 entry: dict[str, Any] = {"command": spec.command, "args": list(spec.args), "env": dict(spec.env)}
+                if spec.cwd is not None:
+                    entry["cwd"] = spec.cwd
                 claude_status = upsert_mcp_servers(claude_dest, where="repo/claude", server_key=spec.name, entry=entry)
                 if claude_status == "written":
                     echo_success(f"repo: wrote {claude_dest} ({spec.name!r})")
@@ -419,6 +423,8 @@ def _install_mcp(
                         "args": list(spec.args),
                         "env": dict(spec.env),
                     }
+                    if spec.cwd is not None:
+                        gemini_entry["cwd"] = spec.cwd
                     status = upsert_mcp_servers(dest, where="gemini", server_key=spec.name, entry=gemini_entry)
                     if status == "written":
                         echo_success(f"gemini: configured {spec.name!r} in {dest}")

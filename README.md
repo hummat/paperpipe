@@ -257,55 +257,29 @@ This is what makes verification possible — the agent can compare your code sym
 ### MCP servers
 
 paperpipe provides MCP servers for retrieval-only workflows:
-- **PaperQA2 retrieval** (`papi mcp-server`): raw chunks + citations over the cached index
-- **LEANN search** (`papi leann-mcp-server`): wraps LEANN's MCP server
+- **PaperQA2 retrieval**: raw chunks + citations over the cached index (via `paperqa_mcp_server`)
+- **LEANN search**: semantic code search over paper content (via `leann_mcp`)
 
-**Claude Code** (project `.mcp.json`):
-```json
-{
-  "mcpServers": {
-    "paperqa": {
-      "command": "papi",
-      "args": ["mcp-server"],
-      "env": { "PAPERQA_EMBEDDING": "text-embedding-3-small" }
-    },
-    "leann": {
-      "command": "papi",
-      "args": ["leann-mcp-server"],
-      "env": {}
-    }
-  }
-}
-```
+MCP servers are configured automatically when you run `papi install mcp`. The install command creates the appropriate configuration files for your agent (Claude Code, Codex CLI, or Gemini CLI).
 
-**Claude Code** (user scope via CLI):
+**Installation**:
 ```bash
-claude mcp add --transport stdio --env PAPERQA_EMBEDDING=text-embedding-3-small --scope user paperqa -- papi mcp-server
+# Install MCP servers for all supported agents (user scope)
+papi install mcp
+
+# Install for specific agents
+papi install mcp --claude
+papi install mcp --codex
+papi install mcp --gemini
+
+# Install repo-local MCP configs (project scope)
+papi install mcp --repo
+
+# Customize embedding model
+papi install mcp --embedding text-embedding-3-small
 ```
 
-**Codex CLI**:
-```bash
-codex mcp add paperqa --env PAPERQA_EMBEDDING=text-embedding-3-small -- papi mcp-server
-codex mcp add leann -- papi leann-mcp-server
-```
-
-**Gemini CLI** (`~/.gemini/settings.json` or `.gemini/settings.json`):
-```json
-{
-  "mcpServers": {
-    "paperqa": {
-      "command": "papi",
-      "args": ["mcp-server"],
-      "env": { "PAPERQA_EMBEDDING": "text-embedding-3-small" }
-    },
-    "leann": {
-      "command": "papi",
-      "args": ["leann-mcp-server"],
-      "env": {}
-    }
-  }
-}
-```
+The MCP servers are automatically launched by your agent when needed. You don't need to manually start them.
 
 ### MCP environment variables
 
