@@ -274,7 +274,7 @@ def _ensure_search_index_schema(conn: sqlite3.Connection) -> None:
         if existing != config._SEARCH_DB_SCHEMA_VERSION:
             raise click.ClickException(
                 f"Search index schema version mismatch (have {existing}, need {config._SEARCH_DB_SCHEMA_VERSION}). "
-                "Run `papi search-index --rebuild` (or delete `search.db`)."
+                "Run `papi index --backend search --search-rebuild` (or delete `search.db`)."
             )
     else:
         conn.execute(
@@ -449,7 +449,9 @@ def _maybe_update_search_index(*, name: str, old_name: Optional[str] = None) -> 
             _search_index_upsert(conn, name=name, index=load_index())
     except Exception as exc:
         debug("Search index update failed for %s: %s", name, str(exc))
-        echo_warning(f"Search index update failed for {name}: {exc}. Rebuild with `papi search-index --rebuild`.")
+        echo_warning(
+            f"Search index update failed for {name}: {exc}. Rebuild with `papi index --backend search --search-rebuild`."
+        )
 
 
 def _maybe_delete_from_search_index(*, name: str) -> None:
@@ -462,7 +464,9 @@ def _maybe_delete_from_search_index(*, name: str) -> None:
             _search_index_delete(conn, name=name)
     except Exception as exc:
         debug("Search index delete failed for %s: %s", name, str(exc))
-        echo_warning(f"Search index delete failed for {name}: {exc}. Rebuild with `papi search-index --rebuild`.")
+        echo_warning(
+            f"Search index delete failed for {name}: {exc}. Rebuild with `papi index --backend search --search-rebuild`."
+        )
 
 
 _AUDIT_EQUATIONS_TITLE_RE = re.compile(r'paper\s+\*\*["“](.+?)["”]\*\*', flags=re.IGNORECASE)

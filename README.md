@@ -99,7 +99,7 @@ pip install -e ".[all]"
 | `papi add --from-file list.json` | Import papers from a JSON list or text file |
 | `papi list` | List papers (filter with `--tag`) |
 | `papi search "query"` | Search across titles, tags, summaries, equations (`--grep` exact, `--fts` ranked BM25) |
-| `papi search-index` | Build/update ranked search index (`search.db`) |
+| `papi index --backend search` | Build/update ranked search index (`search.db`) |
 | `papi show <paper> --level eq` | Print equations (best for agent sessions) |
 | `papi show <paper> --level tex` | Print LaTeX source |
 | `papi show <paper> --level summary` | Print summary |
@@ -160,7 +160,7 @@ papi search --grep --fixed-strings "λ=0.1"
 Ranked search (BM25 via SQLite FTS5, no LLM required):
 
 ```bash
-papi search-index --rebuild           # builds <paper_db>/search.db
+papi index --backend search --search-rebuild           # builds <paper_db>/search.db
 papi search --fts "surface reconstruction"
 # Force the old in-memory scan (slower, no sqlite):
 papi search --no-fts "surface reconstruction"
@@ -650,8 +650,6 @@ Or env vars: `PAPERPIPE_LEANN_LLM_PROVIDER`, `PAPERPIPE_LEANN_LLM_MODEL`, `PAPER
 
 ```bash
 papi index --backend leann
-# or:
-papi leann-index
 
 # Override common LEANN build knobs (maps to `leann build ...`):
 papi index --backend leann --leann-embedding-mode ollama --leann-embedding-model nomic-embed-text

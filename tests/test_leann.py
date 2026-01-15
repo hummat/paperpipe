@@ -130,7 +130,7 @@ class TestLeannCommands:
         (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
 
         runner = CliRunner()
-        result = runner.invoke(cli_mod.cli, ["leann-index"])
+        result = runner.invoke(cli_mod.cli, ["index", "--backend", "leann"])
         assert result.exit_code == 0, result.output
 
         cmd, kwargs = calls[0]
@@ -171,7 +171,7 @@ class TestLeannCommands:
         (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
 
         runner = CliRunner()
-        result = runner.invoke(cli_mod.cli, ["leann-index"])
+        result = runner.invoke(cli_mod.cli, ["index", "--backend", "leann"])
         assert result.exit_code == 0, result.output
 
         cmd, kwargs = calls[0]
@@ -183,7 +183,7 @@ class TestLeannCommands:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann" if cmd == "leann" else None)
 
         runner = CliRunner()
-        result = runner.invoke(cli_mod.cli, ["leann-index", "--file-types", ".txt"])
+        result = runner.invoke(cli_mod.cli, ["index", "--backend", "leann", "--file-types", ".txt"])
         assert result.exit_code != 0
         assert "PDF-only" in result.output
 

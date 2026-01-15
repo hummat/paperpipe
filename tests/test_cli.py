@@ -171,13 +171,19 @@ class TestCli:
         paperpipe.save_index({"geom-paper": {"arxiv_id": None, "title": "Surface Reconstruction", "tags": []}})
 
         runner = CliRunner()
-        result = runner.invoke(cli_mod.cli, ["search-index", "--rebuild"])
+        result = runner.invoke(cli_mod.cli, ["index", "--backend", "search", "--search-rebuild"])
         assert result.exit_code == 0, result.output
         assert (temp_db / "search.db").exists()
 
         result = runner.invoke(cli_mod.cli, ["search", "--fts", "surface"])
         assert result.exit_code == 0, result.output
         assert "geom-paper" in result.output
+
+    def test_index_search_include_tex_requires_rebuild(self, temp_db: Path) -> None:
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["index", "--backend", "search", "--search-include-tex"])
+        assert result.exit_code != 0
+        assert "--search-include-tex only applies with --search-rebuild" in result.output
 
     def test_search_hybrid_boosts_grep_hits(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         if not conftest.fts5_available():
@@ -203,7 +209,7 @@ class TestCli:
         )
 
         runner = CliRunner()
-        result = runner.invoke(cli_mod.cli, ["search-index", "--rebuild"])
+        result = runner.invoke(cli_mod.cli, ["index", "--backend", "search", "--search-rebuild"])
         assert result.exit_code == 0, result.output
 
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/rg" if cmd == "rg" else None)
@@ -234,7 +240,7 @@ class TestCli:
         paperpipe.save_index({"paper-b": {"arxiv_id": None, "title": "Unrelated", "tags": []}})
 
         runner = CliRunner()
-        result = runner.invoke(cli_mod.cli, ["search-index", "--rebuild"])
+        result = runner.invoke(cli_mod.cli, ["index", "--backend", "search", "--search-rebuild"])
         assert result.exit_code == 0, result.output
 
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/rg" if cmd == "rg" else None)
@@ -254,7 +260,7 @@ class TestCli:
         runner = CliRunner()
         result = runner.invoke(cli_mod.cli, ["search", "--hybrid", "x"])
         assert result.exit_code != 0
-        assert "search-index" in result.output
+        assert "index --backend search" in result.output
 
     def test_search_mode_env_scan_forces_scan(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         if not conftest.fts5_available():
@@ -269,7 +275,7 @@ class TestCli:
 
         paperpipe.save_index({"p": {"arxiv_id": None, "title": "Surface Reconstruction", "tags": ["tag"]}})
         runner = CliRunner()
-        result = runner.invoke(cli_mod.cli, ["search-index", "--rebuild"])
+        result = runner.invoke(cli_mod.cli, ["index", "--backend", "search", "--search-rebuild"])
         assert result.exit_code == 0, result.output
 
         monkeypatch.setenv("PAPERPIPE_SEARCH_MODE", "scan")
@@ -294,7 +300,7 @@ class TestCli:
         result = runner.invoke(cli_mod.cli, ["search", "--fts", "x"])
         assert result.exit_code != 0
         assert "schema version mismatch" in result.output.lower()
-        assert "search-index --rebuild" in result.output
+        assert "index --backend search --search-rebuild" in result.output
 
     def test_show_nonexistent(self, temp_db: Path):
         runner = CliRunner()

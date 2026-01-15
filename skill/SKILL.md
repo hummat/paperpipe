@@ -38,7 +38,7 @@ Or search for specific topics:
 ```bash
 papi search "surface reconstruction"
 papi search --grep --fixed-strings "AdamW"
-papi search-index --rebuild
+papi index --backend search --search-rebuild
 papi search --fts "surface reconstruction"
 ```
 
@@ -75,7 +75,7 @@ export PAPERPIPE_LLM_TEMPERATURE=0.3
 
 ```bash
 papi search --grep --fixed-strings "query"  # exact text search (fast, no LLM)
-papi search-index --rebuild                 # build/update ranked search index (SQLite FTS5 / BM25)
+papi index --backend search --search-rebuild  # build/update ranked search index (SQLite FTS5 / BM25)
 papi search --fts "query"                   # ranked search (BM25)
 papi search --hybrid "query"                # ranked + exact-hit boost (FTS + grep)
 papi index               # build/update PaperQA2 index (backend: pqa)

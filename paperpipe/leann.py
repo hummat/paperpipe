@@ -93,7 +93,7 @@ def _ask_leann(
     meta_path = _leann_index_meta_path(index_name)
     if not meta_path.exists():
         echo_error(f"LEANN index {index_name!r} not found at {meta_path}")
-        echo_error("Build it first: papi leann-index (or: papi index --backend leann)")
+        echo_error("Build it first: papi index --backend leann")
         raise SystemExit(1)
 
     cmd: list[str] = ["leann", "ask", index_name, query]

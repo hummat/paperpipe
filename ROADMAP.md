@@ -90,9 +90,9 @@ Goal: make `papi search` fast and useful without requiring LLM/embedding APIs.
 - **B) SQLite FTS5 for ranked search (BM25)** — ✅ DONE
 
   Implemented as:
-  - `papi search-index` — builds/updates `~/.paperpipe/search.db`
+  - `papi index --backend search` — builds/updates `~/.paperpipe/search.db`
   - `papi search --fts` (enabled by default) — queries with BM25 ranking
-  - `--include-tex` option for indexing LaTeX source
+  - `--search-include-tex` option for indexing LaTeX source
 
 - **C) Hybrid: ripgrep + FTS5 fusion** — ✅ DONE
 
@@ -256,7 +256,7 @@ Implemented (see README.md → "Non-arXiv Papers").
 
 Implemented with full option support: `--fixed-strings`, `--context`, `--ignore-case`, `--max-matches`, `--json`. Falls back to `grep` if `rg` not installed.
 
-### SQLite FTS5 ranked search (`papi search --fts`, `papi search-index`)
+### SQLite FTS5 ranked search (`papi search --fts`, `papi index --backend search`)
 
 Implemented with BM25 ranking, field weighting, porter stemmer. Index stored at `~/.paperpipe/search.db`.
 

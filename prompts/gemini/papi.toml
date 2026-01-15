@@ -5,7 +5,7 @@ Task: Given the user's question/context: {{args}}
 Output the exact shell command(s) to run next, choosing the cheapest thing that can answer.
 
 Rules:
-- Prefer: `papi search` (use `--grep --fixed-strings` for exact hits; use `--fts` after `papi search-index --rebuild` for ranked BM25; use `--hybrid` for ranked+exact)
+- Prefer: `papi search` (use `--grep --fixed-strings` for exact hits; use `--fts` after `papi index --backend search --search-rebuild` for ranked BM25; use `--hybrid` for ranked+exact)
   / `papi list` / `papi show ... --level eq|tex|summary` / `papi notes` / `papi export`.
 - Recommend `papi ask` only if the user explicitly asked for RAG/synthesis OR `search/show` cannot answer.
 - If you need machine-readable citations/snippets, use `papi ask --format evidence-blocks` (JSON output).

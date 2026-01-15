@@ -1146,7 +1146,7 @@ def search(
                 hybrid = False
             else:
                 raise click.ClickException(
-                    "Hybrid search requires `search.db`. Build it first: `papi search-index --rebuild`."
+                    "Hybrid search requires `search.db`. Build it first: `papi index --backend search --search-rebuild`."
                 )
 
         if hybrid:
@@ -1288,35 +1288,6 @@ def search(
         if matched_fields:
             click.echo(f"  Matches: {', '.join(matched_fields[:6])}")
         click.echo()
-
-
-@cli.command("search-index")
-@click.option("--rebuild", is_flag=True, help="Rebuild the SQLite FTS search index from scratch.")
-@click.option(
-    "--include-tex/--no-include-tex",
-    default=False,
-    show_default=True,
-    help="Index `source.tex` contents into the FTS index (larger DB; slower build).",
-)
-def search_index(rebuild: bool, include_tex: bool) -> None:
-    """Build/update the local SQLite FTS5 search index (no LLM required)."""
-    if not rebuild and include_tex:
-        raise click.UsageError("--include-tex only applies with --rebuild")
-
-    db_path = _search_db_path()
-    if rebuild or not db_path.exists():
-        count = _search_index_rebuild(include_tex=include_tex)
-        echo_success(f"Built search index for {count} paper(s) at {db_path}")
-        return
-
-    with _sqlite_connect(db_path) as conn:
-        _ensure_search_index_schema(conn)
-        idx = load_index()
-        count = 0
-        for name in sorted(idx.keys()):
-            _search_index_upsert(conn, name=name, index=idx)
-            count += 1
-        echo_success(f"Updated search index for {count} paper(s) at {db_path}")
 
 
 @cli.command()
@@ -1523,33 +1494,13 @@ def export(papers: tuple[str, ...], level: str, dest: Optional[str]):
     raise SystemExit(1)
 
 
-@cli.command("leann-index", context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))
-@click.option("--index", "index_name", default="papers", show_default=True, help="LEANN index name.")
-@click.option("--force", is_flag=True, help="Force rebuild existing LEANN index.")
-@click.pass_context
-def leann_index(ctx: click.Context, index_name: str, force: bool) -> None:
-    """Build/update a LEANN index over your paper PDFs (PDF-only)."""
-    index_name = _effective_leann_index_name(ctx=ctx, param_name="index_name", raw_index_name=index_name)
-    if not index_name:
-        raise click.UsageError("--index must be non-empty")
-
-    config.PAPER_DB.mkdir(parents=True, exist_ok=True)
-    config.PAPERS_DIR.mkdir(parents=True, exist_ok=True)
-
-    staging_dir = (config.PAPER_DB / ".pqa_papers").expanduser()
-    paperqa._refresh_pqa_pdf_staging_dir(staging_dir=staging_dir)
-    _leann_build_index(index_name=index_name, docs_dir=staging_dir, force=force, extra_args=list(ctx.args))
-
-    echo_success(f"Built LEANN index {index_name!r} under {config.PAPER_DB / '.leann' / 'indexes' / index_name}")
-
-
 @cli.command("index", context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))
 @click.option(
     "--backend",
-    type=click.Choice(["pqa", "leann"], case_sensitive=False),
+    type=click.Choice(["pqa", "leann", "search"], case_sensitive=False),
     default="pqa",
     show_default=True,
-    help="Which backend to index for: PaperQA2 (`pqa`) or LEANN (`leann`).",
+    help="Which backend to index for: PaperQA2 (`pqa`), LEANN (`leann`), or SQLite FTS5 (`search`).",
 )
 @click.option(
     "--pqa-llm",
@@ -1643,6 +1594,13 @@ def leann_index(ctx: click.Context, index_name: str, force: bool) -> None:
     default=None,
     help="LEANN PDF chunk overlap in TOKENS (maps to `leann build --doc-chunk-overlap`).",
 )
+@click.option("--search-rebuild", is_flag=True, help="Rebuild the SQLite FTS search index from scratch.")
+@click.option(
+    "--search-include-tex/--search-no-include-tex",
+    default=False,
+    show_default=True,
+    help="Index `source.tex` contents into the FTS index (larger DB; slower build).",
+)
 @click.pass_context
 def index_cmd(
     ctx: click.Context,
@@ -1669,8 +1627,10 @@ def index_cmd(
     leann_num_threads: Optional[int],
     leann_doc_chunk_size: Optional[int],
     leann_doc_chunk_overlap: Optional[int],
+    search_rebuild: bool,
+    search_include_tex: bool,
 ) -> None:
-    """Build/update the retrieval index for PaperQA2 (default) or LEANN."""
+    """Build/update the retrieval index for PaperQA2 (default), LEANN, or SQLite FTS5."""
     backend_norm = (backend or "pqa").strip().lower()
     if backend_norm == "leann":
         leann_index = _effective_leann_index_name(
@@ -1718,6 +1678,26 @@ def index_cmd(
         leann_extra_args.extend(list(ctx.args))
         _leann_build_index(index_name=leann_index, docs_dir=staging_dir, force=leann_force, extra_args=leann_extra_args)
         echo_success(f"Built LEANN index {leann_index!r} under {config.PAPER_DB / '.leann' / 'indexes' / leann_index}")
+        return
+
+    if backend_norm == "search":
+        if not search_rebuild and search_include_tex:
+            raise click.UsageError("--search-include-tex only applies with --search-rebuild")
+
+        db_path = _search_db_path()
+        if search_rebuild or not db_path.exists():
+            count = _search_index_rebuild(include_tex=search_include_tex)
+            echo_success(f"Built search index for {count} paper(s) at {db_path}")
+            return
+
+        with _sqlite_connect(db_path) as conn:
+            _ensure_search_index_schema(conn)
+            idx = load_index()
+            count = 0
+            for name in sorted(idx.keys()):
+                _search_index_upsert(conn, name=name, index=idx)
+                count += 1
+            echo_success(f"Updated search index for {count} paper(s) at {db_path}")
         return
 
     if backend_norm != "pqa":

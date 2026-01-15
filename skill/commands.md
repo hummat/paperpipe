@@ -10,7 +10,7 @@
 | `papi tags` | List all tags with counts |
 | `papi search "query"` | Search by title, tag, or content (scan) |
 | `papi search --grep QUERY` | Exact text search (ripgrep/grep) |
-| `papi search-index --rebuild` | Build ranked search index (`search.db`) |
+| `papi index --backend search --search-rebuild` | Build ranked search index (`search.db`) |
 | `papi search --fts "query"` | Ranked search (SQLite FTS5 / BM25; requires `search.db`) |
 | `papi search --hybrid "query"` | Ranked search with exact-hit boost (FTS + grep) |
 | `papi show <papers...>` | Show paper details or print stored content |
@@ -127,8 +127,7 @@ See `README.md` → “PaperQA2 configuration” → “Model combinations” fo
 
 | Command | Description |
 |---------|-------------|
-| `papi leann-index` | Build/update LEANN index over staged PDFs (`<paper_db>/.pqa_papers/*.pdf`, PDF-only) |
-| `papi index --backend leann` | Same as `papi leann-index` (plus `leann build` passthrough) |
+| `papi index --backend leann` | Build/update LEANN index over staged PDFs (`<paper_db>/.pqa_papers/*.pdf`, PDF-only) |
 | `papi ask "q" --backend leann` | Ask using LEANN RAG |
 | `papi ask "q" --backend leann --leann-provider ollama --leann-model qwen3:8b` | Use local Ollama model |
 
