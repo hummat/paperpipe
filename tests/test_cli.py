@@ -84,8 +84,8 @@ class TestCli:
         assert cmd[0] == "/usr/bin/rg"
         assert "--context" in cmd and "2" in cmd
         assert "--max-count" in cmd and "200" in cmd
-        assert "--glob" in cmd and "*/summary.md" in cmd
-        assert "*/source.tex" not in cmd
+        assert "--glob" in cmd and "**/summary.md" in cmd
+        assert "**/source.tex" not in cmd
 
     def test_search_grep_falls_back_to_grep(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/bin/grep" if cmd == "grep" else None)
@@ -3258,6 +3258,26 @@ class TestAddCommandIntegration:
 
     # NOTE: test_add_paper_already_exists moved to unit tests (TestAddCommand)
     # NOTE: test_remove_paper covered by unit tests (TestRemoveCommand)
+
+
+@pytest.mark.integration
+class TestSemanticScholarIntegration:
+    """Integration tests for Semantic Scholar API (requires network)."""
+
+    def test_fetch_semantic_scholar_metadata(self):
+        """Test fetching metadata from Semantic Scholar."""
+        from paperpipe.cli.helpers import _fetch_semantic_scholar_metadata
+
+        # "Attention Is All You Need" S2 paper ID
+        s2_id = "204e3073870fae3d05bcbc2f6a8e263d9b72e776"
+        meta = _fetch_semantic_scholar_metadata(s2_id)
+
+        if meta is None:
+            pytest.skip("Semantic Scholar API rate limited or unavailable")
+
+        assert "Attention" in meta["title"]
+        assert len(meta["authors"]) > 0
+        assert meta.get("arxiv_id") == "1706.03762"
 
 
 @pytest.mark.integration
