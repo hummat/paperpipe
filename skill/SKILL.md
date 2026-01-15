@@ -42,7 +42,8 @@ Or search for specific topics:
 
 ```bash
 papi search "surface reconstruction"          # FTS if search.db exists, else scan
-papi search --rg "AdamW"                      # exact text search (case-insensitive)
+papi search --rg "AdamW"                      # exact text search (case-insensitive literal)
+papi search --rg --regex "Adam(W|Optimizer)"  # regex patterns (use --regex flag)
 papi index --backend search --search-rebuild  # build search.db for FTS
 ```
 
@@ -78,7 +79,8 @@ export PAPERPIPE_LLM_TEMPERATURE=0.3
 ### 5. For cross-paper questions
 
 ```bash
-papi search --rg "query"                      # exact text search (case-insensitive, literal; fast, no LLM)
+papi search --rg "query"                      # exact text search (case-insensitive literal; fast, no LLM)
+papi search --rg --regex "pattern"            # regex patterns (use --regex flag for OR, wildcards, etc.)
 papi index --backend search --search-rebuild  # build/update search.db
 papi search "query"                           # ranked search if search.db exists (BM25), else scan
 papi search --hybrid "query"                  # ranked + exact-hit boost (FTS + grep)

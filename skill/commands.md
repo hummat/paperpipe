@@ -9,7 +9,8 @@
 | `papi list --tag TAG` | List papers filtered by tag |
 | `papi tags` | List all tags with counts |
 | `papi search "query"` | Search (FTS if `search.db` exists, else scan with fuzzy fallback) |
-| `papi search --rg QUERY` | Exact text search via ripgrep (case-insensitive, literal by default) |
+| `papi search --rg QUERY` | Exact text search via ripgrep (case-insensitive literal by default) |
+| `papi search --rg --regex PATTERN` | Regex patterns via ripgrep (use `--regex` for OR, wildcards, etc.) |
 | `papi index --backend search --search-rebuild` | Build ranked search index (`search.db`) |
 | `papi search --hybrid "query"` | Ranked search with exact-hit boost (FTS + grep) |
 | `papi show <papers...>` | Show paper details or print stored content |

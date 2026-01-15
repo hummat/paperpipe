@@ -18,18 +18,18 @@ This repo implements methods from scientific papers. Papers are managed via `pap
 
 MCP Tools (if configured):
 - `leann_search(index_name, query, top_k)` - Fast semantic search, returns snippets + file paths
-- `retrieve_chunks(query, index_name, embedding_model, k)` - Detailed retrieval with citations
-  - ⚠️ `embedding_model` MUST match the index (e.g., `paperpipe_voyage_voyage-3.5` → `voyage/voyage-3.5`)
-  - Mismatch causes: `ValueError: size 1024 is different from 3072`
+- `retrieve_chunks(query, index_name, k)` - Detailed retrieval with formal citations (DOI, page numbers)
+  - `embedding_model` is optional (auto-inferred from index metadata)
+  - If specified, must match index's embedding model (check via `list_pqa_indexes()`)
 - **Embedding priority** (prefer in order): Voyage AI → Google/Gemini → OpenAI → Local (Ollama)
-  - Check available indexes first: `leann_list()` or `list_pqa_indexes()`
-  - Use highest-quality available embeddings for best retrieval performance
-- Choose: `leann_search` for exploration, `retrieve_chunks` for formal citations
+  - Check available indexes: `leann_list()` or `list_pqa_indexes()`
+- **When to use:** `leann_search` for exploration, `retrieve_chunks` for verification/citations
 
 Rules:
 - For "does this match the paper?", use `papi show <paper> -l eq` / `-l tex` and compare symbols step-by-step.
 - For "which paper mentions X?":
-  - Exact string hits (fast): `papi search --rg "X"` (case-insensitive, literal by default)
+  - Exact string hits (fast): `papi search --rg "X"` (case-insensitive literal by default)
+  - Regex patterns: `papi search --rg --regex "pattern"` (for complex patterns like `BRDF\|material`)
   - Ranked search (BM25): `papi index --backend search --search-rebuild` then `papi search "X"`
   - Hybrid (ranked + exact boost): `papi search --hybrid "X"`
   - MCP semantic search: `leann_search()` or `retrieve_chunks()`
