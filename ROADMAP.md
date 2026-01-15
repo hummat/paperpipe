@@ -40,16 +40,16 @@ Goal: improve RAG quality for paper implementation workflows without adding new 
 
 **What to expose:**
 
-- **A) LEANN metadata filtering**
+- **A) LEANN metadata filtering** — ⏸️ BLOCKED ON UPSTREAM
   - LEANN has rich post-search filtering (`==`, `!=`, `<`, `>`, `in`, `contains`, `starts_with`, etc.) that paperpipe doesn't surface.
   - Add `--leann-filter` option to `papi ask --backend leann` (e.g., `--leann-filter "paper_name in ['lora', 'attention']"`).
-  - Status (Jan 2026): LEANN supports filtering in its Python API (`metadata_filters=...`) but the `leann ask` CLI does not expose it yet. Cleanest path: PR to LEANN to add a CLI flag (likely JSON), then paperpipe can pass through.
+  - Status (Jan 2026): LEANN supports filtering in its Python API (`metadata_filters=...`) but the `leann ask` CLI does not expose it yet. **Blocked**: needs PR to LEANN to add CLI flag first.
 
-- **B) LEANN + grep fusion for hybrid-ish retrieval**
+- **B) LEANN + grep fusion for hybrid-ish retrieval** — ⏸️ BLOCKED ON UPSTREAM
   - LEANN has grep search (`use_grep=True`) for exact text matching.
   - For papers, exact string hits matter: hyperparams ("λ=0.1"), symbols ("Eq. 7"), dataset names.
   - Expose via `--leann-grep` or similar; fuse grep + vector results.
-  - Status (Jan 2026): LEANN supports grep in its Python API (`use_grep=True`) but the `leann ask` CLI does not expose it yet. Cleanest path: PR to LEANN to add `--use-grep`, then paperpipe can pass through.
+  - Status (Jan 2026): LEANN supports grep in its Python API (`use_grep=True`) but the `leann ask` CLI does not expose it yet. **Blocked**: needs PR to LEANN to add `--use-grep` first.
 
 - **C) PaperQA2 "fake" agent mode** — ✅ DONE
   - Implemented as `papi ask --pqa-agent-type fake`.
@@ -60,11 +60,8 @@ Goal: improve RAG quality for paper implementation workflows without adding new 
   - Useful for agent integrations that want to enforce "no claim without citation".
   - Status (Jan 2026): implemented for PaperQA2 backend only (`--backend pqa`). LEANN does not currently expose the same citation/evidence structure in paperpipe.
 
-- **E) Optional API reranking for LEANN**
-  - LEANN's "reranking" is ANN-internal (approx → exact distance), not cross-encoder.
-  - Add optional `--leann-rerank cohere|voyage` that calls an external reranker after retrieval.
-  - Medium complexity: ~50-100 lines; retrieve `top_k=50` → rerank → keep `top_n=10`.
-  - Requires API key; clearly optional.
+- **E) Optional API reranking for LEANN** — moved to Reconsidered
+  - See "Reconsidered" section below.
 
 **Not doing:**
 - Adding Weaviate/Qdrant/Vespa as backends (duplicates PaperQA2's Qdrant option, high complexity).
@@ -98,19 +95,8 @@ Goal: make `papi search` fast and useful without requiring LLM/embedding APIs.
 
   Implemented as `papi search --hybrid "query"` (optionally `--show-grep-hits`).
 
-**Remaining:**
-
-- **D) Optional: reuse PaperQA2's tantivy index**
-
-  **Utility: MEDIUM** — avoids duplicate indexing if user already ran `papi ask`.
-  **Complexity: MEDIUM** — need to understand PaperQA2's index format.
-  **Deps:** `paperqa` must be installed.
-
-  [tantivy-py](https://github.com/quickwit-oss/tantivy-py) is what PaperQA2 uses internally. If the index exists at `~/.paperpipe/.pqa_index/`, we could query it directly for `papi search`.
-
-  Deferred until FTS5 is implemented — may not be worth the complexity.
-
 **Not doing:**
+- **D) Reuse PaperQA2's tantivy index** — FTS5 is now implemented and sufficient. Not worth the added complexity/dependency.
 - Adding tantivy as a standalone dep for `papi search` (FTS5 is good enough, no new deps).
 
 ### 3) Local LLM via Ollama (core + `papi ask`) — ✅ DONE
@@ -120,8 +106,6 @@ Implemented:
 - Reachability check with clear error message: "Start Ollama (`ollama serve`) or set OLLAMA_HOST..."
 - Works for both core generation (`papi add/regenerate`) and RAG (`papi ask --pqa-llm ollama/...`)
 - LEANN defaults to Ollama (`DEFAULT_LEANN_EMBEDDING_MODE = "ollama"`)
-
-**Remaining:** Documentation/examples for local-only workflows.
 
 ### 4) `papi ask`: PaperQA2 output stream hygiene — PARTIAL
 
@@ -154,41 +138,7 @@ Goal: easy citation export for LaTeX workflows.
 - `papi bibtex PAPER...` → prints BibTeX entries
 - Options: `--to library.bib`, `--key-style name|doi|arxiv|slug`
 
-## Completed
-
-### `papi import-bib` (bulk ingest from BibTeX) — ✅ DONE
-
-**Utility: MEDIUM** — useful for bootstrapping from existing libraries.
-**Complexity: MEDIUM** — BibTeX parsing is irregular, needs `bibtexparser` dependency.
-
-- `papi import-bib /path/to/library.bib`
-- Alternative: `papi add --from-file papers.bib` (for consistency with existing import workflows)
-- Creates metadata-only entries (PDF via `papi attach` later).
-- Dedup order: `doi` > `arxiv_id` > bibtex key.
-- Optional extra: `paperpipe[bibtex]`.
-
-### `papi add` Semantic Scholar support — ✅ DONE
-
-**Utility: MEDIUM** — expands paper sources beyond arXiv.
-**Complexity: LOW-MEDIUM** — similar to existing arXiv integration, needs Semantic Scholar API key.
-
-- `papi add semantic-scholar-id`
-- Fetch metadata from Semantic Scholar API
-- Download PDF if available
-- Generate summary/equations/tags as with arXiv papers
-- Store in same format with consistent metadata schema
-
-### Integration tests for MCP server
-
-**Utility: MEDIUM** — improves confidence in MCP server changes.
-**Complexity: LOW** — mark tests with `@pytest.mark.integration`, test basic retrieval.
-
-Currently `paperpipe/mcp_server.py` (161 lines) is excluded from coverage. Should add basic integration tests:
-- Server startup and initialization
-- `retrieve_chunks` with mock index
-- `list_pqa_indexes` and `get_pqa_index_status`
-
-### `papi rebuild-index` (recovery)
+### 7) `papi rebuild-index` (recovery)
 
 **Utility: HIGH** (for recovery) — but rare need.
 **Complexity: LOW** — iterate paper dirs, rebuild `index.json`.
@@ -196,19 +146,30 @@ Currently `paperpipe/mcp_server.py` (161 lines) is excluded from coverage. Shoul
 - Recover `index.json` from on-disk paper directories.
 - Useful when index is corrupted or manually edited.
 
+## Reconsidered (moved from "Later")
+
+### Optional API reranking for LEANN
+
+**Utility: MEDIUM** — better retrieval quality via cross-encoder.
+**Complexity: MEDIUM** (~50-100 lines).
+
+- LEANN's "reranking" is ANN-internal (approx → exact distance), not cross-encoder.
+- Would add optional `--leann-rerank cohere|voyage` that calls an external reranker after retrieval.
+- Requires API key; clearly optional.
+
+Moved here: no user demand, adds API complexity without clear benefit over existing PaperQA2 reranking.
+
 ### `papi rename OLD NEW`
 
-**Utility: LOW** — users can do this manually.
+**Utility: LOW** — users can do this manually (rename dir + edit index.json).
 **Complexity: LOW** — rename dir + update index.
 
-### Refactor: split `paperpipe.py` into a `src/` package
+### Refactor: split into multi-file package
 
 **Utility: MEDIUM** — maintainability for contributors.
 **Complexity: MEDIUM** — mechanical but tedious, risk of regressions.
 
-Deferred until the single-file approach becomes a real bottleneck. Current size (~3500 lines) is still manageable.
-
-## Reconsidered (moved from "Later")
+Deferred until the current structure becomes a real bottleneck.
 
 ### `papi stats`
 
@@ -258,6 +219,14 @@ High complexity. Users can export from Zotero to BibTeX and use `papi import-bib
 
 ## Completed
 
+### `papi import-bib` (bulk ingest from BibTeX)
+
+Implemented with `bibtexparser` dependency. Supports `papi import-bib /path/to/library.bib` and `papi add --from-file papers.bib`.
+
+### `papi add` Semantic Scholar support
+
+Implemented. Fetch metadata from Semantic Scholar API, download PDF if available, generate summary/equations/tags.
+
 ### Non-arXiv ingestion via `papi add --pdf` (MVP)
 
 Implemented (see README.md → "Non-arXiv Papers").
@@ -278,13 +247,9 @@ Implemented with env var normalization (`OLLAMA_HOST`, etc.), reachability check
 
 Implemented — passes through to `pqa --agent.agent_type`.
 
-### Import/Export via `papi list --json` and `papi add --from-file` — ✅ DONE
+### Import/Export via `papi list --json` and `papi add --from-file`
 
-Implemented (Jan 2026):
-- `papi list --json` provides full export capability to JSON format
-- `papi add --from-file` imports papers from JSON files (exported via `papi list --json`) or text files (one arXiv ID per line)
-- Preserves custom names and tags during import
-- Composable with existing filtering options (e.g., `papi list --tag "cv" --json`)
+Implemented (Jan 2026). Full JSON export, import from JSON or text files, preserves custom names and tags.
 
 ---
 
