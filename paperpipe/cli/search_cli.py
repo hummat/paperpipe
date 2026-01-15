@@ -69,7 +69,7 @@ def list_papers(tag: Optional[str], as_json: bool):
 @click.option(
     "--fixed-strings/--regex",
     "fixed_strings",
-    default=False,
+    default=True,
     show_default=True,
     help="In --grep mode, treat QUERY as a literal string instead of a regex.",
 )
@@ -90,7 +90,8 @@ def list_papers(tag: Optional[str], as_json: bool):
 )
 @click.option(
     "--ignore-case/--case-sensitive",
-    default=False,
+    "ignore_case",
+    default=True,
     show_default=True,
     help="In --grep mode, ignore case when matching QUERY.",
 )

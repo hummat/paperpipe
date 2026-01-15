@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "paperpipe"
-version = "1.1.0"
+version = "1.1.1"
 description = "Unified paper database for coding agents + PaperQA2"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -59,6 +59,7 @@ dev = [
 
 [project.scripts]
 papi = "paperpipe.cli:cli"
+paperqa_mcp_server = "paperpipe.mcp_server:main"
 
 [project.urls]
 Homepage = "https://github.com/hummat/paperpipe"
@@ -68,7 +69,6 @@ Repository = "https://github.com/hummat/paperpipe"
 [tool.hatch.build.targets.wheel]
 only-include = [
     "paperpipe",
-    "paperqa_mcp_server.py",
     "README.md",
     "ROADMAP.md",
     "LICENSE",
@@ -80,7 +80,6 @@ only-include = [
 [tool.hatch.build.targets.sdist]
 only-include = [
     "paperpipe",
-    "paperqa_mcp_server.py",
     "pyproject.toml",
     "README.md",
     "ROADMAP.md",
@@ -91,7 +90,7 @@ only-include = [
 ]
 
 [tool.pytest.ini_options]
-addopts = "--cov=paperpipe --cov-report=term-missing --cov-fail-under=75 -m 'not integration' -W ignore::DeprecationWarning:bibtexparser -W ignore::DeprecationWarning:pyparsing"
+addopts = "--cov=paperpipe --cov-report=term-missing --cov-fail-under=75 -m 'not integration' -W ignore::DeprecationWarning:bibtexparser -W ignore::DeprecationWarning:pyparsing --cov-config=pyproject.toml"
 markers = [
     "integration: marks tests as integration tests (may require network/external services)",
     "slow: marks tests as slow",
@@ -105,7 +104,7 @@ filterwarnings = [
 
 [tool.coverage.run]
 source = ["paperpipe"]
-omit = ["test_*.py"]
+omit = ["test_*.py", "paperpipe/mcp_server.py"]
 
 [tool.coverage.report]
 exclude_lines = ["if __name__ == .__main__.:", "pragma: no cover"]
@@ -119,7 +118,7 @@ select = ["E", "F", "I", "W"]
 ignore = ["E501"]
 
 [tool.pyright]
-include = ["paperpipe", "paperqa_mcp_server.py", "tests"]
+include = ["paperpipe", "tests"]
 exclude = [
     "__pycache__",
     ".git",

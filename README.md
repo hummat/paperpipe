@@ -98,7 +98,7 @@ pip install -e ".[all]"
 | `papi add --pdf file.pdf --title "..."` | Add a local PDF |
 | `papi add --from-file list.json` | Import papers from a JSON list or text file |
 | `papi list` | List papers (filter with `--tag`) |
-| `papi search "query"` | Search across titles, tags, summaries, equations (`--grep` exact, `--fts` ranked BM25) |
+| `papi search "query"` | Search across titles, tags, summaries, equations (`--rg` for grep-style, `--fts` for ranked BM25) |
 | `papi index --backend search` | Build/update ranked search index (`search.db`) |
 | `papi show <paper> --level eq` | Print equations (best for agent sessions) |
 | `papi show <paper> --level tex` | Print LaTeX source |
@@ -152,18 +152,18 @@ papi add 0123456789abcdef0123456789abcdef01234567  # S2 paper ID
 Exact text search (fast, no LLM required):
 
 ```bash
-papi search --grep "AdamW"
-papi search --grep "Eq\\. 7"          # regex mode (escape if needed)
-papi search --grep --fixed-strings "λ=0.1"
+papi search --rg "AdamW"              # case-insensitive, literal string (default)
+papi search --rg --case-sensitive "NeRF"  # match exact case
+papi search --rg --regex "Eq\\. [0-9]+"   # regex mode (opt-in)
 ```
 
 Ranked search (BM25 via SQLite FTS5, no LLM required):
 
 ```bash
-papi index --backend search --search-rebuild           # builds <paper_db>/search.db
-papi search --fts "surface reconstruction"
-# Force the old in-memory scan (slower, no sqlite):
-papi search --no-fts "surface reconstruction"
+papi index --backend search --search-rebuild    # builds <paper_db>/search.db
+papi search "surface reconstruction"             # uses FTS if available (default)
+papi search --no-fts "surface reconstruction"    # force in-memory scan (fuzzy matching)
+papi search --no-fts --exact "exact phrase"      # disable fuzzy fallback
 ```
 
 Hybrid ranked+exact search:

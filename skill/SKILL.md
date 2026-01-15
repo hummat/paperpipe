@@ -36,10 +36,9 @@ papi list
 Or search for specific topics:
 
 ```bash
-papi search "surface reconstruction"
-papi search --grep --fixed-strings "AdamW"
-papi index --backend search --search-rebuild
-papi search --fts "surface reconstruction"
+papi search "surface reconstruction"          # FTS if search.db exists, else scan
+papi search --rg "AdamW"                      # exact text search (case-insensitive)
+papi index --backend search --search-rebuild  # build search.db for FTS
 ```
 
 ### 2b. Audit generated content (optional)
@@ -74,10 +73,10 @@ export PAPERPIPE_LLM_TEMPERATURE=0.3
 ### 5. For cross-paper questions
 
 ```bash
-papi search --grep --fixed-strings "query"  # exact text search (fast, no LLM)
-papi index --backend search --search-rebuild  # build/update ranked search index (SQLite FTS5 / BM25)
-papi search --fts "query"                   # ranked search (BM25)
-papi search --hybrid "query"                # ranked + exact-hit boost (FTS + grep)
+papi search --rg "query"                      # exact text search (case-insensitive, literal; fast, no LLM)
+papi index --backend search --search-rebuild  # build/update search.db
+papi search "query"                           # ranked search if search.db exists (BM25), else scan
+papi search --hybrid "query"                  # ranked + exact-hit boost (FTS + grep)
 papi index               # build/update PaperQA2 index (backend: pqa)
 papi ask "question"      # PaperQA2 RAG (backend: pqa, if installed)
 papi ask "question" --pqa-agent-type fake   # cheaper/deterministic retrieval

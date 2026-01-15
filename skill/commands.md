@@ -8,10 +8,9 @@
 | `papi list` | List all papers with tags |
 | `papi list --tag TAG` | List papers filtered by tag |
 | `papi tags` | List all tags with counts |
-| `papi search "query"` | Search by title, tag, or content (scan) |
-| `papi search --grep QUERY` | Exact text search (ripgrep/grep) |
+| `papi search "query"` | Search (FTS if `search.db` exists, else scan with fuzzy fallback) |
+| `papi search --rg QUERY` | Exact text search via ripgrep (case-insensitive, literal by default) |
 | `papi index --backend search --search-rebuild` | Build ranked search index (`search.db`) |
-| `papi search --fts "query"` | Ranked search (SQLite FTS5 / BM25; requires `search.db`) |
 | `papi search --hybrid "query"` | Ranked search with exact-hit boost (FTS + grep) |
 | `papi show <papers...>` | Show paper details or print stored content |
 | `papi notes <paper>` | Open or print per-paper implementation notes |

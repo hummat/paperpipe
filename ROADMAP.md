@@ -178,6 +178,16 @@ Goal: easy citation export for LaTeX workflows.
 - Generate summary/equations/tags as with arXiv papers
 - Store in same format with consistent metadata schema
 
+### Integration tests for MCP server
+
+**Utility: MEDIUM** — improves confidence in MCP server changes.
+**Complexity: LOW** — mark tests with `@pytest.mark.integration`, test basic retrieval.
+
+Currently `paperpipe/mcp_server.py` (161 lines) is excluded from coverage. Should add basic integration tests:
+- Server startup and initialization
+- `retrieve_chunks` with mock index
+- `list_pqa_indexes` and `get_pqa_index_status`
+
 ### `papi rebuild-index` (recovery)
 
 **Utility: HIGH** (for recovery) — but rare need.

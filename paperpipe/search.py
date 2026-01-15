@@ -36,9 +36,9 @@ def _search_grep(
     if max_matches < 1:
         raise click.UsageError("--max-matches must be >= 1")
 
-    include_globs = ["*/summary.md", "*/equations.md", "*/notes.md", "*/meta.json"]
+    include_globs = ["**/summary.md", "**/equations.md", "**/notes.md", "**/meta.json"]
     if include_tex:
-        include_globs.append("*/source.tex")
+        include_globs.append("**/source.tex")
 
     if not config.PAPERS_DIR.exists():
         click.echo("No papers directory found.")
@@ -170,9 +170,9 @@ def _collect_grep_matches(
     ignore_case: bool,
     include_tex: bool,
 ) -> list[dict[str, object]]:
-    include_globs = ["*/summary.md", "*/equations.md", "*/notes.md", "*/meta.json"]
+    include_globs = ["**/summary.md", "**/equations.md", "**/notes.md", "**/meta.json"]
     if include_tex:
-        include_globs.append("*/source.tex")
+        include_globs.append("**/source.tex")
 
     if not config.PAPERS_DIR.exists():
         return []

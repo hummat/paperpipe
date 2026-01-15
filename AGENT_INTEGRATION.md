@@ -19,8 +19,8 @@ This repo implements methods from scientific papers. Papers are managed via `pap
 Rules:
 - For “does this match the paper?”, use `papi show <paper> -l eq` / `-l tex` and compare symbols step-by-step.
 - For "which paper mentions X?":
-  - Exact string hits (fast): `papi search --grep --fixed-strings "X"`
-  - Ranked search (BM25): `papi index --backend search --search-rebuild` then `papi search --fts "X"`
+  - Exact string hits (fast): `papi search --rg "X"` (case-insensitive, literal by default)
+  - Ranked search (BM25): `papi index --backend search --search-rebuild` then `papi search "X"`
   - Hybrid (ranked + exact boost): `papi search --hybrid "X"`
 - If the agent can’t read `~/.paperpipe/`, export context into the repo: `papi export <papers...> --level equations --to ./paper-context/`.
 - Use `papi ask "..."` only when you explicitly want RAG synthesis (PaperQA2 default if installed; optional `--backend leann`).
