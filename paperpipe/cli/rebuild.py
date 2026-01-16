@@ -135,6 +135,12 @@ def rebuild_index(dry_run: bool, backup: bool, validate: bool) -> None:
     if not paper_dirs:
         echo_warning("No paper directories found.")
         if not dry_run:
+            # Backup before overwriting with empty index
+            if backup and config.INDEX_FILE.exists():
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                backup_path = config.PAPER_DB / f"index.json.backup.{timestamp}"
+                if _backup_index(backup_path):
+                    echo_progress(f"Backed up existing index to {backup_path}")
             save_index({})
             echo_success("Created empty index.")
         return

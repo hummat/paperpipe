@@ -3981,6 +3981,28 @@ class TestRebuildIndexCommand:
         assert result.exit_code == 0
         assert "No paper directories found" in result.output
 
+    def test_rebuild_index_empty_papers_dir_backs_up_existing_index(self, temp_db: Path):
+        """Test that empty rebuild still backs up existing index."""
+        # Save an existing index with data
+        paperpipe.save_index({"existing-paper": {"title": "Existing Paper", "tags": []}})
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["rebuild-index"])
+
+        assert result.exit_code == 0
+        assert "No paper directories found" in result.output
+        assert "Backed up existing index" in result.output
+
+        # Verify backup was created
+        backups = list(temp_db.glob("index.json.backup.*"))
+        assert len(backups) == 1
+        backup_content = json.loads(backups[0].read_text())
+        assert "existing-paper" in backup_content
+
+        # Verify index is now empty
+        index = paperpipe.load_index()
+        assert index == {}
+
     def test_rebuild_index_preserves_all_metadata_fields(self, temp_db: Path):
         """Test that all common metadata fields are preserved."""
         paper1 = temp_db / "papers" / "full-meta"
