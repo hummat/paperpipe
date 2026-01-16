@@ -209,12 +209,24 @@ def add(
                             # Simple dict {"name": "arxiv_id"} style? unlikely but possible
                             tasks.append((info, key, tags))
                 elif isinstance(data, list):
-                    # JSON list of IDs?
+                    # JSON list of IDs or objects?
                     for item in data:
                         if isinstance(item, str):
                             tasks.append((item, None, tags))
                         elif isinstance(item, dict) and "arxiv_id" in item:
-                            tasks.append((item["arxiv_id"], item.get("name"), item.get("tags")))
+                            # Normalize tags from list to comma-separated string
+                            item_tags = item.get("tags", [])
+                            if isinstance(item_tags, list):
+                                item_tags_str = ",".join(item_tags)
+                            else:
+                                item_tags_str = str(item_tags) if item_tags else ""
+
+                            # Merge with CLI tags if present
+                            final_tags = item_tags_str
+                            if tags:
+                                final_tags = f"{final_tags},{tags}" if final_tags else tags
+
+                            tasks.append((item["arxiv_id"], item.get("name"), final_tags))
             except json.JSONDecodeError:
                 # Fallback: Treat as line-separated text file
                 # Filter empty lines and comments

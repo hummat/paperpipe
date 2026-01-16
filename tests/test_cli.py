@@ -1131,6 +1131,81 @@ class TestAddCommand:
         assert "paper2" in index
         assert "tag2" in index["paper2"]["tags"]
 
+    def test_add_from_file_json_list_with_tags(self, temp_db: Path, monkeypatch):
+        """Test adding papers from a JSON list of objects with tags (common export format)."""
+        papers_json = temp_db / "papers.json"
+        # JSON list format with tags as arrays (the natural JSON shape)
+        papers_json.write_text(
+            json.dumps(
+                [
+                    {"arxiv_id": "1111.1111", "name": "paper-one", "tags": ["ml", "transformers"]},
+                    {"arxiv_id": "2222.2222", "tags": ["nlp"]},  # name is optional
+                    {"arxiv_id": "3333.3333"},  # tags is optional
+                ]
+            )
+        )
+
+        def mock_fetch(arxiv_id):
+            return {
+                "arxiv_id": arxiv_id,
+                "title": f"Title {arxiv_id}",
+                "authors": [],
+                "abstract": "Abstract",
+                "primary_category": "cs.AI",
+                "categories": ["cs.AI"],
+                "published": "2023-01-01",
+                "pdf_url": f"http://arxiv.org/pdf/{arxiv_id}",
+                "updated": "2023-01-01",
+            }
+
+        monkeypatch.setattr(paper_mod, "fetch_arxiv_metadata", mock_fetch)
+        monkeypatch.setattr(paper_mod, "download_pdf", lambda *args: True)
+        monkeypatch.setattr(paper_mod, "download_source", lambda *args, **kwargs: None)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["add", "--from-file", str(papers_json), "--no-llm"])
+        assert result.exit_code == 0, result.output
+
+        index = paperpipe.load_index()
+        assert "paper-one" in index
+        assert "ml" in index["paper-one"]["tags"]
+        assert "transformers" in index["paper-one"]["tags"]
+        # Second paper should have its tags
+        paper2_name = [k for k in index if index[k].get("arxiv_id") == "2222.2222"][0]
+        assert "nlp" in index[paper2_name]["tags"]
+
+    def test_add_from_file_json_list_merges_cli_tags(self, temp_db: Path, monkeypatch):
+        """Test that CLI --tags are merged with JSON list tags."""
+        papers_json = temp_db / "papers.json"
+        papers_json.write_text(json.dumps([{"arxiv_id": "1111.1111", "tags": ["from-json"]}]))
+
+        def mock_fetch(arxiv_id):
+            return {
+                "arxiv_id": arxiv_id,
+                "title": f"Title {arxiv_id}",
+                "authors": [],
+                "abstract": "Abstract",
+                "primary_category": "cs.AI",
+                "categories": ["cs.AI"],
+                "published": "2023-01-01",
+                "pdf_url": f"http://arxiv.org/pdf/{arxiv_id}",
+                "updated": "2023-01-01",
+            }
+
+        monkeypatch.setattr(paper_mod, "fetch_arxiv_metadata", mock_fetch)
+        monkeypatch.setattr(paper_mod, "download_pdf", lambda *args: True)
+        monkeypatch.setattr(paper_mod, "download_source", lambda *args, **kwargs: None)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["add", "--from-file", str(papers_json), "--tags", "from-cli", "--no-llm"])
+        assert result.exit_code == 0, result.output
+
+        index = paperpipe.load_index()
+        paper_name = list(index.keys())[0]
+        # Both JSON tags and CLI tags should be present
+        assert "from-json" in index[paper_name]["tags"]
+        assert "from-cli" in index[paper_name]["tags"]
+
     def test_add_from_file_text(self, temp_db: Path, monkeypatch):
         """Test adding papers from a text file (one ID per line)."""
         papers_txt = temp_db / "papers.txt"
