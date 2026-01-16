@@ -51,7 +51,7 @@ from ..search import _maybe_delete_from_search_index, _maybe_update_search_index
 @click.option("--tags", "-t", help="Additional comma-separated tags (applied to all papers)")
 @click.option("--no-llm", is_flag=True, help="Skip LLM-based generation")
 @click.option("--tldr/--no-tldr", default=True, show_default=True, help="Generate a one-paragraph TL;DR.")
-@click.option("--no-figures", is_flag=True, help="Skip figure extraction from LaTeX/PDF")
+@click.option("--figures", is_flag=True, help="Extract figures from LaTeX source or PDF")
 @click.option(
     "--duplicate",
     is_flag=True,
@@ -79,7 +79,7 @@ def add(
     tags: Optional[str],
     no_llm: bool,
     tldr: bool,
-    no_figures: bool,
+    figures: bool,
     duplicate: bool,
     update: bool,
     from_file: Optional[Path],
@@ -250,7 +250,7 @@ def add(
             tldr,
             duplicate,
             update,
-            no_figures,
+            figures,
             index,
             existing_names,
             base_to_names,

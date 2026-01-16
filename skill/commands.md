@@ -22,7 +22,7 @@
 | `papi add --pdf PATH --title TEXT` | Add local PDF |
 | `papi add --from-file <file>` | Import from JSON/BibTeX/text |
 | `papi add <id> --update` | Refresh existing paper |
-| `papi add <id> --no-figures` | Skip figure extraction |
+| `papi add <id> --figures` | Extract figures from LaTeX/PDF |
 | `papi regenerate <name> [--all]` | Regenerate summaries/equations |
 | `papi remove <name>` | Remove a paper |
 | `papi audit [--regenerate]` | Flag/fix issues in generated content |

@@ -344,7 +344,7 @@ class TestExtractFiguresFromPdf:
 class TestFigureExtractionIntegration:
     """Integration tests for figure extraction in add command."""
 
-    def test_download_source_extracts_figures_by_default(self, tmp_path, monkeypatch):
+    def test_download_source_extracts_figures_when_enabled(self, tmp_path, monkeypatch):
         """Test that download_source extracts figures when extract_figures=True."""
         import requests
 
@@ -377,15 +377,15 @@ class TestFigureExtractionIntegration:
         paper_dir = tmp_path / "test_paper"
         paper_dir.mkdir()
 
-        # Call download_source with extract_figures=True (default)
+        # Call download_source with extract_figures=True (opt-in)
         result = paper_mod.download_source("1234.5678", paper_dir, extract_figures=True)
 
         assert result is not None
         assert (paper_dir / "source.tex").exists()
         assert (paper_dir / "figures" / "fig.png").exists()
 
-    def test_download_source_skips_figures_when_disabled(self, tmp_path, monkeypatch):
-        """Test that download_source skips figures when extract_figures=False."""
+    def test_download_source_skips_figures_by_default(self, tmp_path, monkeypatch):
+        """Test that download_source skips figures by default (extract_figures=False)."""
         import requests
 
         # Create a mock tarball with figure
@@ -416,10 +416,10 @@ class TestFigureExtractionIntegration:
         paper_dir = tmp_path / "test_paper"
         paper_dir.mkdir()
 
-        # Call download_source with extract_figures=False
-        result = paper_mod.download_source("1234.5678", paper_dir, extract_figures=False)
+        # Call download_source without explicit extract_figures (defaults to False)
+        result = paper_mod.download_source("1234.5678", paper_dir)
 
         assert result is not None
         assert (paper_dir / "source.tex").exists()
-        # Figures should NOT be extracted
+        # Figures should NOT be extracted by default
         assert not (paper_dir / "figures").exists()

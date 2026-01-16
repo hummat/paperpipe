@@ -74,7 +74,7 @@ def download_pdf(arxiv_id: str, dest: Path) -> bool:
     return dest.exists()
 
 
-def download_source(arxiv_id: str, paper_dir: Path, *, extract_figures: bool = True) -> Optional[str]:
+def download_source(arxiv_id: str, paper_dir: Path, *, extract_figures: bool = False) -> Optional[str]:
     """Download and extract LaTeX source from arXiv. Optionally extract figures."""
     import requests
 
@@ -795,7 +795,7 @@ def _add_single_paper(
     tldr: bool,
     duplicate: bool,
     update: bool,
-    no_figures: bool,
+    extract_figures: bool,
     index: dict,
     existing_names: set[str],
     base_to_names: dict[str, list[str]],
@@ -846,7 +846,7 @@ def _add_single_paper(
             tags=tags,
             no_llm=no_llm,
             tldr=tldr,
-            no_figures=no_figures,
+            extract_figures=extract_figures,
             index=index,
             base_to_names=base_to_names,
         )
@@ -897,15 +897,15 @@ def _add_single_paper(
     except Exception as e:
         echo_warning(f"Could not download PDF: {e}")
 
-    # 4. Download LaTeX source (and extract figures if available)
+    # 4. Download LaTeX source (and extract figures if requested)
     echo_progress("  Downloading LaTeX source...")
-    tex_content = download_source(arxiv_id, paper_dir, extract_figures=not no_figures)
+    tex_content = download_source(arxiv_id, paper_dir, extract_figures=extract_figures)
     if tex_content:
         echo_progress(f"  Found LaTeX source ({len(tex_content) // 1000}k chars)")
     else:
         echo_progress("  No LaTeX source available (PDF-only submission)")
         # Fallback: extract figures from PDF if no LaTeX source
-        if not no_figures and pdf_path.exists():
+        if extract_figures and pdf_path.exists():
             echo_warning(
                 "  Extracting figures from PDF (LaTeX source unavailable). "
                 "PDF extraction uses generic filenames and may miss vector graphics."
@@ -1096,7 +1096,7 @@ def _update_existing_paper(
     tags: Optional[str],
     no_llm: bool,
     tldr: bool = True,
-    no_figures: bool = False,
+    extract_figures: bool = False,
     index: dict,
     base_to_names: dict[str, list[str]],
 ) -> tuple[bool, Optional[str]]:
@@ -1131,13 +1131,13 @@ def _update_existing_paper(
 
     # Download LaTeX source (only overwrites if source is valid)
     echo_progress("  Downloading LaTeX source...")
-    tex_content = download_source(arxiv_id, paper_dir, extract_figures=not no_figures)
+    tex_content = download_source(arxiv_id, paper_dir, extract_figures=extract_figures)
     if not tex_content:
         source_path = paper_dir / "source.tex"
         if source_path.exists():
             tex_content = source_path.read_text(errors="ignore")
         # Fallback: extract figures from PDF if no LaTeX source
-        if not no_figures and pdf_path.exists():
+        if extract_figures and pdf_path.exists():
             echo_warning(
                 "  Extracting figures from PDF (LaTeX source unavailable). "
                 "PDF extraction uses generic filenames and may miss vector graphics."
@@ -1233,7 +1233,6 @@ def _regenerate_one_paper(
     summary_path = paper_dir / "summary.md"
     equations_path = paper_dir / "equations.md"
     tldr_path = paper_dir / "tldr.md"
-    figures_dir = paper_dir / "figures"
     pdf_path = paper_dir / "paper.pdf"
 
     # Determine what needs regeneration
@@ -1257,8 +1256,8 @@ def _regenerate_one_paper(
         do_tags = not meta.get("tags")
         do_name = _is_arxiv_id_name(name)
         do_tldr = not tldr_path.exists() or tldr_path.stat().st_size == 0
-        # Extract figures if directory missing or empty
-        do_figures = not figures_dir.exists() or not any(figures_dir.iterdir())
+        # Figure extraction is opt-in only (via --overwrite figures or --overwrite all)
+        do_figures = False
 
     if not (do_summary or do_equations or do_tags or do_name or do_tldr or do_figures):
         echo_progress(f"  {name}: nothing to regenerate")
