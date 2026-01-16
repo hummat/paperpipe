@@ -37,6 +37,7 @@ uv tool install paperpipe
 uv tool install paperpipe --with "paperpipe[llm]"      # better summaries via LLMs
 uv tool install paperpipe --with "paperpipe[paperqa]"  # RAG via PaperQA2
 uv tool install paperpipe --with "paperpipe[leann]"    # local RAG via LEANN
+uv tool install paperpipe --with "paperpipe[figures]"  # figure extraction from LaTeX/PDF
 uv tool install paperpipe --with "paperpipe[mcp]"      # MCP server integrations (Python 3.11+)
 uv tool install paperpipe --with "paperpipe[all]"      # everything
 ```
@@ -50,6 +51,7 @@ pip install 'paperpipe[llm]'
 pip install 'paperpipe[paperqa]'
 pip install 'paperpipe[paperqa-media]'  # PaperQA2 + multimodal PDF parsing (installs Pillow)
 pip install 'paperpipe[leann]'
+pip install 'paperpipe[figures]'        # figure extraction from LaTeX/PDF
 pip install 'paperpipe[mcp]'
 pip install 'paperpipe[all]'
 ```
@@ -80,7 +82,10 @@ pip install -e ".[all]"
 │       ├── summary.md                # coding-oriented summary
 │       ├── tldr.md                   # one-paragraph TL;DR
 │       ├── meta.json                 # metadata + tags
-│       └── notes.md                  # your implementation notes
+│       ├── notes.md                  # your implementation notes
+│       └── figures/                  # extracted figures (if available)
+│           ├── figure1.png
+│           └── figure2.pdf
 ```
 
 **Why this structure matters:**
@@ -88,6 +93,7 @@ pip install -e ".[all]"
 - `source.tex` — Original LaTeX. Use when you need exact notation or the equation extraction missed something.
 - `summary.md` — High-level overview focused on implementation (not literature review). Use for understanding the approach.
 - `tldr.md` — Quick 2-3 sentence overview of the paper's contribution.
+- `figures/` — Architecture diagrams, network structures, and result plots extracted from LaTeX source or PDF.
 - `.pqa_papers/` — Staged PDFs only (no markdown) so RAG backends don't index generated content.
 
 ## Core commands

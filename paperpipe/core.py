@@ -366,7 +366,7 @@ def categories_to_tags(categories: list[str]) -> list[str]:
     return config.normalize_tags(tags)
 
 
-_VALID_REGENERATE_FIELDS = {"all", "summary", "equations", "tags", "name", "tldr"}
+_VALID_REGENERATE_FIELDS = {"all", "summary", "equations", "tags", "name", "tldr", "figures"}
 
 
 def _parse_overwrite_option(overwrite: Optional[str]) -> tuple[set[str], bool]:

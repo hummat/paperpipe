@@ -74,8 +74,8 @@ def download_pdf(arxiv_id: str, dest: Path) -> bool:
     return dest.exists()
 
 
-def download_source(arxiv_id: str, paper_dir: Path) -> Optional[str]:
-    """Download and extract LaTeX source from arXiv."""
+def download_source(arxiv_id: str, paper_dir: Path, *, extract_figures: bool = False) -> Optional[str]:
+    """Download and extract LaTeX source from arXiv. Optionally extract figures."""
     import requests
 
     source_url = f"https://arxiv.org/e-print/{arxiv_id}"
@@ -133,6 +133,10 @@ def download_source(arxiv_id: str, paper_dir: Path) -> Optional[str]:
                     combined_parts.append(f"\n\n% --- file: {name} ---\n")
                     combined_parts.append(tex_by_name[name])
                 tex_content = "".join(combined_parts)[:1_500_000]
+
+                # Extract figures if requested
+                if extract_figures and tex_content:
+                    _extract_figures_from_latex(tex_content, tar, paper_dir)
     except tarfile.ReadError:
         # Might be a single gzipped file or plain tex
         import gzip
@@ -160,6 +164,192 @@ def download_source(arxiv_id: str, paper_dir: Path) -> Optional[str]:
         return tex_content
 
     return None
+
+
+def _extract_figures_from_latex(tex_content: str, tar: tarfile.TarFile, paper_dir: Path) -> int:
+    """Extract figures referenced in LaTeX source from tarball.
+
+    Scans tex_content for \\includegraphics commands and extracts matching files
+    from the tarball. Only files that are both referenced AND present in the
+    tarball will be extracted.
+
+    Args:
+        tex_content: LaTeX source to scan for \\includegraphics commands
+        tar: Open tarball file containing LaTeX source and figures
+        paper_dir: Paper directory where figures/ subdirectory will be created
+
+    Returns:
+        Count of successfully extracted figures
+
+    Behavior:
+        - Matches tarball files by basename (ignores directory structure in tarball)
+        - If LaTeX omits file extension, tries .pdf, .png, .jpg, .eps in order
+        - Logs warnings for extraction errors (corrupt files, permission issues)
+        - Creates figures/ directory only if at least one file is extracted
+    """
+    # Parse \includegraphics commands to find image references
+    # Note: Simple regex - may miss commands inside macros or spanning multiple lines
+    pattern = r"\\includegraphics(?:\[.*?\])?\{([^}]+)\}"
+    matches = re.findall(pattern, tex_content)
+
+    if not matches:
+        return 0
+
+    # Common image extensions supported by LaTeX (pdflatex, xelatex, lualatex)
+    image_exts = {".png", ".jpg", ".jpeg", ".pdf", ".eps", ".ps", ".gif", ".bmp"}
+
+    figures_dir = paper_dir / "figures"
+    extracted_count = 0
+
+    for ref in matches:
+        # LaTeX allows omitting file extension, so we need to try with and without
+        ref = ref.strip()
+        if not ref:  # Skip empty references
+            continue
+        candidates = [ref]
+
+        # If no extension, try common ones in LaTeX's typical precedence order
+        if not any(ref.lower().endswith(ext) for ext in image_exts):
+            for ext in [".pdf", ".png", ".jpg", ".eps"]:
+                candidates.append(ref + ext)
+
+        # Try to find and extract the file from tarball
+        for candidate in candidates:
+            # Normalize path (LaTeX may use / or relative paths)
+            candidate_path = candidate.replace("\\", "/")
+
+            # Try to find matching member (with or without leading path components)
+            found = False
+            for member in tar.getmembers():
+                if not member.isfile():
+                    continue
+
+                member_name = member.name.replace("\\", "/")
+                # Check if member path ends with candidate or matches exactly
+                if member_name == candidate_path or member_name.endswith("/" + candidate_path):
+                    # Extract the file
+                    if not figures_dir.exists():
+                        try:
+                            figures_dir.mkdir(parents=True)
+                        except (PermissionError, OSError) as e:
+                            echo_warning(f"  Cannot create figures directory: {e}")
+                            return extracted_count
+
+                    try:
+                        file_obj = tar.extractfile(member)
+                        if file_obj:
+                            # Use basename to avoid directory structure
+                            dest_name = Path(member_name).name
+                            dest_path = figures_dir / dest_name
+
+                            # Write file
+                            dest_path.write_bytes(file_obj.read())
+                            extracted_count += 1
+                            found = True
+                            break
+                    except (tarfile.TarError, KeyError) as e:
+                        echo_warning(f"  Corrupted tarball member '{member_name}': {e}")
+                        continue
+                    except (OSError, MemoryError) as e:
+                        echo_warning(f"  Failed to extract figure '{Path(member_name).name}': {e}")
+                        continue
+
+            if found:
+                break
+
+    if extracted_count > 0:
+        echo_progress(f"  Extracted {extracted_count} figure(s) from LaTeX source")
+
+    return extracted_count
+
+
+def _extract_figures_from_pdf(pdf_path: Path, paper_dir: Path) -> int:
+    """Extract images from PDF using PyMuPDF (pymupdf package).
+
+    Extracts all embedded images from the PDF that are larger than 1KB.
+    Requires PyMuPDF to be installed; returns 0 if unavailable.
+
+    Args:
+        pdf_path: Path to PDF file to extract from
+        paper_dir: Paper directory where figures/ subdirectory will be created
+
+    Returns:
+        Count of successfully extracted images, or 0 if PyMuPDF unavailable
+        or extraction fails
+
+    Behavior:
+        - Filters out images < 1KB (likely logos/icons/decorative elements)
+        - Names extracted files as figure_01.ext, figure_02.ext, etc.
+        - Creates figures/ directory only if at least one image is extracted
+        - Logs warnings for specific extraction errors
+    """
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        return 0
+
+    # Try to open the PDF
+    try:
+        doc = fitz.open(pdf_path)
+    except Exception as e:
+        # Handle corrupt/encrypted PDFs, permission errors, etc.
+        echo_warning(f"  Cannot open PDF for figure extraction: {e}")
+        return 0
+
+    figures_dir = paper_dir / "figures"
+    extracted_count = 0
+
+    try:
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            try:
+                image_list = page.get_images()
+            except Exception as e:
+                echo_warning(f"  Error reading images from page {page_num + 1}: {e}")
+                continue
+
+            for img in image_list:
+                try:
+                    xref = img[0]
+                    base_image = doc.extract_image(xref)
+                    image_bytes = base_image.get("image")
+                    image_ext = base_image.get("ext")
+
+                    if not image_bytes or not image_ext:
+                        continue
+
+                    # Filter out tiny images (likely logos/icons/headers)
+                    # 1KB threshold excludes most non-content images
+                    if len(image_bytes) < 1024:
+                        continue
+
+                    if not figures_dir.exists():
+                        try:
+                            figures_dir.mkdir(parents=True)
+                        except (PermissionError, OSError) as e:
+                            echo_warning(f"  Cannot create figures directory: {e}")
+                            return extracted_count
+
+                    # Generate filename
+                    dest_name = f"figure_{extracted_count + 1:02d}.{image_ext}"
+                    dest_path = figures_dir / dest_name
+
+                    try:
+                        dest_path.write_bytes(image_bytes)
+                        extracted_count += 1
+                    except (OSError, MemoryError) as e:
+                        echo_warning(f"  Failed to write {dest_name}: {e}")
+                        continue
+                except (IndexError, TypeError, KeyError):
+                    # Malformed image entry or extraction error - skip silently
+                    continue
+    finally:
+        doc.close()
+
+    if extracted_count > 0:
+        echo_progress(f"  Extracted {extracted_count} figure(s) from PDF")
+
+    return extracted_count
 
 
 def extract_equations_simple(tex_content: str) -> str:
@@ -605,6 +795,7 @@ def _add_single_paper(
     tldr: bool,
     duplicate: bool,
     update: bool,
+    extract_figures: bool,
     index: dict,
     existing_names: set[str],
     base_to_names: dict[str, list[str]],
@@ -655,6 +846,7 @@ def _add_single_paper(
             tags=tags,
             no_llm=no_llm,
             tldr=tldr,
+            extract_figures=extract_figures,
             index=index,
             base_to_names=base_to_names,
         )
@@ -705,13 +897,22 @@ def _add_single_paper(
     except Exception as e:
         echo_warning(f"Could not download PDF: {e}")
 
-    # 4. Download LaTeX source
+    # 4. Download LaTeX source (and extract figures if requested)
     echo_progress("  Downloading LaTeX source...")
-    tex_content = download_source(arxiv_id, paper_dir)
+    tex_content = download_source(arxiv_id, paper_dir, extract_figures=extract_figures)
     if tex_content:
         echo_progress(f"  Found LaTeX source ({len(tex_content) // 1000}k chars)")
     else:
         echo_progress("  No LaTeX source available (PDF-only submission)")
+        # Fallback: extract figures from PDF if no LaTeX source
+        if extract_figures and pdf_path.exists():
+            echo_warning(
+                "  Extracting figures from PDF (LaTeX source unavailable). "
+                "PDF extraction uses generic filenames and may miss vector graphics."
+            )
+            count = _extract_figures_from_pdf(pdf_path, paper_dir)
+            if count == 0:
+                echo_progress("  No figures found in PDF")
 
     # 5. Generate tags
     auto_tags = categories_to_tags(meta["categories"])
@@ -895,6 +1096,7 @@ def _update_existing_paper(
     tags: Optional[str],
     no_llm: bool,
     tldr: bool = True,
+    extract_figures: bool = False,
     index: dict,
     base_to_names: dict[str, list[str]],
 ) -> tuple[bool, Optional[str]]:
@@ -929,11 +1131,20 @@ def _update_existing_paper(
 
     # Download LaTeX source (only overwrites if source is valid)
     echo_progress("  Downloading LaTeX source...")
-    tex_content = download_source(arxiv_id, paper_dir)
+    tex_content = download_source(arxiv_id, paper_dir, extract_figures=extract_figures)
     if not tex_content:
         source_path = paper_dir / "source.tex"
         if source_path.exists():
             tex_content = source_path.read_text(errors="ignore")
+        # Fallback: extract figures from PDF if no LaTeX source
+        if extract_figures and pdf_path.exists():
+            echo_warning(
+                "  Extracting figures from PDF (LaTeX source unavailable). "
+                "PDF extraction uses generic filenames and may miss vector graphics."
+            )
+            count = _extract_figures_from_pdf(pdf_path, paper_dir)
+            if count == 0:
+                echo_progress("  No figures found in PDF")
 
     # Tags: merge prior tags + new auto tags + optional user tags (+ LLM tags if used)
     auto_tags = categories_to_tags(meta.get("categories", []))
@@ -1022,6 +1233,7 @@ def _regenerate_one_paper(
     summary_path = paper_dir / "summary.md"
     equations_path = paper_dir / "equations.md"
     tldr_path = paper_dir / "tldr.md"
+    pdf_path = paper_dir / "paper.pdf"
 
     # Determine what needs regeneration
     if overwrite_all:
@@ -1030,20 +1242,24 @@ def _regenerate_one_paper(
         do_tags = True
         do_name = True
         do_tldr = True
+        do_figures = True
     elif overwrite_fields:
         do_summary = "summary" in overwrite_fields
         do_equations = "equations" in overwrite_fields
         do_tags = "tags" in overwrite_fields
         do_name = "name" in overwrite_fields
         do_tldr = "tldr" in overwrite_fields
+        do_figures = "figures" in overwrite_fields
     else:
         do_summary = not summary_path.exists() or summary_path.stat().st_size == 0
         do_equations = not equations_path.exists() or equations_path.stat().st_size == 0
         do_tags = not meta.get("tags")
         do_name = _is_arxiv_id_name(name)
         do_tldr = not tldr_path.exists() or tldr_path.stat().st_size == 0
+        # Figure extraction is opt-in only (via --overwrite figures or --overwrite all)
+        do_figures = False
 
-    if not (do_summary or do_equations or do_tags or do_name or do_tldr):
+    if not (do_summary or do_equations or do_tags or do_name or do_tldr or do_figures):
         echo_progress(f"  {name}: nothing to regenerate")
         return True, None
 
@@ -1058,6 +1274,8 @@ def _regenerate_one_paper(
         actions.append("name")
     if do_tldr:
         actions.append("tldr")
+    if do_figures:
+        actions.append("figures")
     echo_progress(f"Regenerating {name}: {', '.join(actions)}")
 
     new_name: Optional[str] = None
@@ -1127,6 +1345,22 @@ def _regenerate_one_paper(
     if llm_tags:
         meta["tags"] = normalize_tags([*meta.get("tags", []), *llm_tags])
         updated_meta = True
+
+    # Extract figures if requested
+    if do_figures:
+        if pdf_path.exists():
+            # We don't have the original LaTeX tarball, only source.tex (text)
+            # So we can only extract from PDF
+            echo_warning(
+                "  Extracting figures from PDF (source tarball not cached during add). "
+                "LaTeX-based extraction preserves original filenames and formats. "
+                "Use 'papi add --update' to re-download source and extract from LaTeX."
+            )
+            count = _extract_figures_from_pdf(pdf_path, paper_dir)
+            if count == 0:
+                echo_progress("  No figures found in PDF")
+        else:
+            echo_warning("  Cannot extract figures: no PDF file found")
 
     if updated_meta:
         meta_path.write_text(json.dumps(meta, indent=2))

@@ -922,7 +922,7 @@ class TestAddCommand:
             return True
 
         monkeypatch.setattr(paper_mod, "download_pdf", fake_download_pdf)
-        monkeypatch.setattr(paper_mod, "download_source", lambda _arxiv_id, _paper_dir: None)
+        monkeypatch.setattr(paper_mod, "download_source", lambda *args, **kwargs: None)
 
         runner = CliRunner()
         result = runner.invoke(cli_mod.cli, ["add", "1706.03762", "--duplicate", "--no-llm"])
@@ -979,7 +979,7 @@ class TestAddCommand:
             dest.write_bytes(b"%PDF")
             return True
 
-        def fake_download_source(_arxiv_id: str, pdir: Path):
+        def fake_download_source(_arxiv_id: str, pdir: Path, **kwargs):
             tex = r"\begin{document}\begin{equation}E=mc^2\end{equation}\end{document}"
             (pdir / "source.tex").write_text(tex)
             return tex
@@ -998,6 +998,95 @@ class TestAddCommand:
         assert meta["added"] == "x"  # preserved
         assert "computer-vision" in meta["tags"]
         assert "old-tag" in meta["tags"]
+
+    def test_add_figures_flag_enables_extraction(self, temp_db: Path, monkeypatch):
+        """Test --figures flag enables figure extraction during add."""
+        from datetime import datetime
+
+        # Track whether extract_figures was passed as True
+        extract_figures_args = []
+
+        def mock_fetch(arxiv_id: str):
+            return {
+                "arxiv_id": arxiv_id,
+                "title": "Test Paper",
+                "authors": [],
+                "abstract": "Abstract",
+                "primary_category": "cs.CL",
+                "categories": ["cs.CL"],
+                "published": datetime(2023, 1, 1).isoformat(),
+                "updated": datetime(2023, 1, 1).isoformat(),
+                "doi": None,
+                "journal_ref": None,
+                "pdf_url": "https://arxiv.org/pdf/1706.03762",
+            }
+
+        monkeypatch.setattr(paper_mod, "fetch_arxiv_metadata", mock_fetch)
+
+        def fake_download_pdf(_arxiv_id: str, dest: Path):
+            dest.write_bytes(b"%PDF")
+            return True
+
+        def fake_download_source(_arxiv_id: str, pdir: Path, *, extract_figures=False):
+            extract_figures_args.append(extract_figures)
+            tex = r"\begin{document}\includegraphics{fig.png}\end{document}"
+            (pdir / "source.tex").write_text(tex)
+            return tex
+
+        monkeypatch.setattr(paper_mod, "download_pdf", fake_download_pdf)
+        monkeypatch.setattr(paper_mod, "download_source", fake_download_source)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["add", "1706.03762", "--figures", "--no-llm"])
+
+        assert result.exit_code == 0
+        # Verify extract_figures=True was passed to download_source
+        assert extract_figures_args == [True]
+
+    def test_add_without_figures_flag_skips_extraction(self, temp_db: Path, monkeypatch):
+        """Test that figure extraction is skipped by default (without --figures flag)."""
+        from datetime import datetime
+
+        # Track whether extract_figures was passed
+        extract_figures_args = []
+
+        def mock_fetch(arxiv_id: str):
+            return {
+                "arxiv_id": arxiv_id,
+                "title": "Test Paper No Figures",
+                "authors": [],
+                "abstract": "Abstract",
+                "primary_category": "cs.CL",
+                "categories": ["cs.CL"],
+                "published": datetime(2023, 1, 1).isoformat(),
+                "updated": datetime(2023, 1, 1).isoformat(),
+                "doi": None,
+                "journal_ref": None,
+                "pdf_url": "https://arxiv.org/pdf/1706.03763",
+            }
+
+        monkeypatch.setattr(paper_mod, "fetch_arxiv_metadata", mock_fetch)
+
+        def fake_download_pdf(_arxiv_id: str, dest: Path):
+            dest.write_bytes(b"%PDF")
+            return True
+
+        def fake_download_source(_arxiv_id: str, pdir: Path, *, extract_figures=False):
+            extract_figures_args.append(extract_figures)
+            tex = r"\begin{document}\includegraphics{fig.png}\end{document}"
+            (pdir / "source.tex").write_text(tex)
+            return tex
+
+        monkeypatch.setattr(paper_mod, "download_pdf", fake_download_pdf)
+        monkeypatch.setattr(paper_mod, "download_source", fake_download_source)
+
+        runner = CliRunner()
+        # No --figures flag = figures extraction disabled
+        result = runner.invoke(cli_mod.cli, ["add", "1706.03763", "--no-llm"])
+
+        assert result.exit_code == 0
+        # Verify extract_figures=False was passed to download_source (default)
+        assert extract_figures_args == [False]
 
     def test_add_from_file_json(self, temp_db: Path, monkeypatch):
         """Test adding papers from a JSON file (export format)."""
@@ -1027,7 +1116,7 @@ class TestAddCommand:
 
         monkeypatch.setattr(paper_mod, "fetch_arxiv_metadata", mock_fetch)
         monkeypatch.setattr(paper_mod, "download_pdf", lambda *args: True)
-        monkeypatch.setattr(paper_mod, "download_source", lambda *args: None)
+        monkeypatch.setattr(paper_mod, "download_source", lambda *args, **kwargs: None)
 
         runner = CliRunner()
         result = runner.invoke(cli_mod.cli, ["add", "--from-file", str(papers_json), "--no-llm"])
@@ -1063,7 +1152,7 @@ class TestAddCommand:
 
         monkeypatch.setattr(paper_mod, "fetch_arxiv_metadata", mock_fetch)
         monkeypatch.setattr(paper_mod, "download_pdf", lambda *args: True)
-        monkeypatch.setattr(paper_mod, "download_source", lambda *args: None)
+        monkeypatch.setattr(paper_mod, "download_source", lambda *args, **kwargs: None)
 
         runner = CliRunner()
         result = runner.invoke(cli_mod.cli, ["add", "--from-file", str(papers_txt), "--no-llm", "--tags", "batch"])
@@ -1115,7 +1204,7 @@ class TestAddCommand:
 
         monkeypatch.setattr(paper_mod, "fetch_arxiv_metadata", mock_fetch)
         monkeypatch.setattr(paper_mod, "download_pdf", lambda *args: True)
-        monkeypatch.setattr(paper_mod, "download_source", lambda *args: None)
+        monkeypatch.setattr(paper_mod, "download_source", lambda *args, **kwargs: None)
 
         runner = CliRunner()
         result = runner.invoke(cli_mod.cli, ["add", "--from-file", str(papers_bib), "--no-llm"])
@@ -1215,7 +1304,7 @@ class TestAddCommand:
 
         monkeypatch.setattr(paper_mod, "fetch_arxiv_metadata", mock_fetch)
         monkeypatch.setattr(paper_mod, "download_pdf", lambda *args: True)
-        monkeypatch.setattr(paper_mod, "download_source", lambda *args: None)
+        monkeypatch.setattr(paper_mod, "download_source", lambda *args, **kwargs: None)
 
         runner = CliRunner()
         result = runner.invoke(cli_mod.cli, ["add", "https://www.semanticscholar.org/paper/test-id", "--no-llm"])
@@ -2020,6 +2109,113 @@ class TestExport:
         with runner.isolated_filesystem():
             result = runner.invoke(cli_mod.cli, ["export", "test-paper", "--level", "full", "--to", "."])
             assert "No LaTeX source" in result.output
+
+    def test_export_with_figures_flag(self, temp_db: Path):
+        """Test --figures flag exports figures directory."""
+        paper_dir = temp_db / "papers" / "test-paper"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "summary.md").write_text("# Test Summary")
+
+        # Create figures directory with files
+        figures_dir = paper_dir / "figures"
+        figures_dir.mkdir()
+        (figures_dir / "fig1.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+        (figures_dir / "fig2.pdf").write_bytes(b"%PDF-1.4\n")
+
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            result = runner.invoke(
+                cli_mod.cli, ["export", "test-paper", "--level", "summary", "--to", ".", "--figures"]
+            )
+            assert result.exit_code == 0
+            assert Path("test-paper_summary.md").exists()
+            assert Path("test-paper_figures").exists()
+            assert (Path("test-paper_figures") / "fig1.png").exists()
+            assert (Path("test-paper_figures") / "fig2.pdf").exists()
+
+    def test_export_without_figures_flag(self, temp_db: Path):
+        """Test figures not exported when --figures flag omitted."""
+        paper_dir = temp_db / "papers" / "test-paper"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "summary.md").write_text("# Test Summary")
+
+        # Create figures directory
+        figures_dir = paper_dir / "figures"
+        figures_dir.mkdir()
+        (figures_dir / "fig1.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            result = runner.invoke(cli_mod.cli, ["export", "test-paper", "--level", "summary", "--to", "."])
+            assert result.exit_code == 0
+            assert Path("test-paper_summary.md").exists()
+            # Figures should NOT be exported
+            assert not Path("test-paper_figures").exists()
+
+    def test_export_figures_when_no_figures_directory(self, temp_db: Path):
+        """Test --figures flag gracefully handles missing figures directory."""
+        paper_dir = temp_db / "papers" / "test-paper"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "summary.md").write_text("# Test Summary")
+        # No figures directory
+
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            result = runner.invoke(
+                cli_mod.cli, ["export", "test-paper", "--level", "summary", "--to", ".", "--figures"]
+            )
+            assert result.exit_code == 0
+            assert Path("test-paper_summary.md").exists()
+            # No error, just no figures directory created
+            assert not Path("test-paper_figures").exists()
+
+    def test_export_figures_overwrites_existing(self, temp_db: Path):
+        """Test --figures overwrites existing figures directory."""
+        paper_dir = temp_db / "papers" / "test-paper"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "summary.md").write_text("# Test Summary")
+
+        figures_dir = paper_dir / "figures"
+        figures_dir.mkdir()
+        (figures_dir / "new.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            # Create old figures directory
+            old_figures = Path("test-paper_figures")
+            old_figures.mkdir()
+            (old_figures / "old.png").write_bytes(b"old data")
+
+            result = runner.invoke(
+                cli_mod.cli, ["export", "test-paper", "--level", "summary", "--to", ".", "--figures"]
+            )
+            assert result.exit_code == 0
+
+            # Old file should be gone, new file should exist
+            assert not (old_figures / "old.png").exists()
+            assert (old_figures / "new.png").exists()
+
+    def test_export_multiple_papers_with_figures(self, temp_db: Path):
+        """Test exporting multiple papers with figures."""
+        for name in ["paper1", "paper2"]:
+            paper_dir = temp_db / "papers" / name
+            paper_dir.mkdir(parents=True)
+            (paper_dir / "summary.md").write_text(f"# {name} Summary")
+
+            figures_dir = paper_dir / "figures"
+            figures_dir.mkdir()
+            (figures_dir / "fig.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            result = runner.invoke(
+                cli_mod.cli, ["export", "paper1", "paper2", "--level", "summary", "--to", ".", "--figures"]
+            )
+            assert result.exit_code == 0
+            assert Path("paper1_summary.md").exists()
+            assert Path("paper2_summary.md").exists()
+            assert (Path("paper1_figures") / "fig.png").exists()
+            assert (Path("paper2_figures") / "fig.png").exists()
 
 
 class TestAskCommand:
@@ -3098,6 +3294,205 @@ class TestRegenerateCommand:
         result = runner.invoke(cli_mod.cli, ["regenerate", "p1", "-o", "invalid"])
         assert result.exit_code != 0
         assert "invalid" in result.output.lower()
+
+    def test_regenerate_extracts_figures_with_overwrite_flag(self, temp_db: Path, monkeypatch):
+        """Test that regenerate extracts figures from PDF when --overwrite figures is passed."""
+        import sys
+
+        papers_dir = temp_db / "papers"
+        (papers_dir / "p1").mkdir(parents=True)
+        (papers_dir / "p1" / "meta.json").write_text(
+            json.dumps({"arxiv_id": "1", "title": "Paper 1", "authors": [], "abstract": ""})
+        )
+        (papers_dir / "p1" / "source.tex").write_text("\\begin{equation}x=1\\end{equation}")
+        (papers_dir / "p1" / "summary.md").write_text("summary")
+        (papers_dir / "p1" / "equations.md").write_text("equations")
+
+        # Create a PDF
+        pdf_path = papers_dir / "p1" / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\nfake pdf")
+
+        # Mock PyMuPDF module
+        class MockPage:
+            def get_images(self):
+                return [(1, 0, 0, 0, 0, 0, 0)]
+
+        class MockDoc:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def __len__(self):
+                return 1
+
+            def __getitem__(self, idx):
+                return MockPage()
+
+            def extract_image(self, xref):
+                return {"image": b"fake image data" + b"x" * 1024, "ext": "png"}
+
+            def close(self):
+                pass
+
+        mock_fitz = type("MockFitz", (), {"open": MockDoc})()
+        monkeypatch.setitem(sys.modules, "fitz", mock_fitz)
+
+        paperpipe.save_index({"p1": {"arxiv_id": "1", "title": "Paper 1", "tags": [], "added": "x"}})
+
+        runner = CliRunner()
+        # Figure extraction requires --overwrite figures (opt-in)
+        result = runner.invoke(cli_mod.cli, ["regenerate", "p1", "--no-llm", "--overwrite", "figures"])
+        assert result.exit_code == 0
+        # Should extract figures and show warning about PDF extraction
+        assert "Extracting figures from PDF" in result.output
+        assert "source tarball not cached during add" in result.output
+        assert (papers_dir / "p1" / "figures").exists()
+
+    def test_regenerate_skips_figures_by_default(self, temp_db: Path, monkeypatch):
+        """Test that regenerate skips figure extraction by default (opt-in only)."""
+        import sys
+
+        papers_dir = temp_db / "papers"
+        (papers_dir / "p1").mkdir(parents=True)
+        (papers_dir / "p1" / "meta.json").write_text(
+            json.dumps({"arxiv_id": "1", "title": "Paper 1", "authors": [], "abstract": ""})
+        )
+        (papers_dir / "p1" / "source.tex").write_text("\\begin{equation}x=1\\end{equation}")
+        (papers_dir / "p1" / "summary.md").write_text("summary")
+        (papers_dir / "p1" / "equations.md").write_text("equations")
+
+        # Create a PDF
+        pdf_path = papers_dir / "p1" / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\nfake pdf")
+
+        # Mock PyMuPDF - should NOT be called since figure extraction is opt-in
+        extract_called = []
+
+        class MockDoc:
+            def __init__(self, *args, **kwargs):
+                extract_called.append(True)
+
+        mock_fitz = type("MockFitz", (), {"open": MockDoc})()
+        monkeypatch.setitem(sys.modules, "fitz", mock_fitz)
+
+        paperpipe.save_index({"p1": {"arxiv_id": "1", "title": "Paper 1", "tags": [], "added": "x"}})
+
+        runner = CliRunner()
+        # No --overwrite figures = no figure extraction
+        result = runner.invoke(cli_mod.cli, ["regenerate", "p1", "--no-llm"])
+        assert result.exit_code == 0
+        # Should NOT extract figures (opt-in only)
+        assert "Extracting figures" not in result.output
+        # Mock should not have been called
+        assert len(extract_called) == 0
+        # No figures directory should be created
+        assert not (papers_dir / "p1" / "figures").exists()
+
+    def test_regenerate_overwrite_figures_forces_extraction(self, temp_db: Path, monkeypatch):
+        """Test that --overwrite figures forces re-extraction even when figures exist."""
+        import sys
+
+        papers_dir = temp_db / "papers"
+        (papers_dir / "p1").mkdir(parents=True)
+        (papers_dir / "p1" / "meta.json").write_text(
+            json.dumps({"arxiv_id": "1", "title": "Paper 1", "authors": [], "abstract": ""})
+        )
+        (papers_dir / "p1" / "source.tex").write_text("\\begin{equation}x=1\\end{equation}")
+        (papers_dir / "p1" / "summary.md").write_text("summary")
+        (papers_dir / "p1" / "equations.md").write_text("equations")
+
+        # Create figures directory with existing figure
+        figures_dir = papers_dir / "p1" / "figures"
+        figures_dir.mkdir()
+        (figures_dir / "old.png").write_bytes(b"old figure")
+
+        # Create a PDF
+        pdf_path = papers_dir / "p1" / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\nfake pdf")
+
+        # Mock PyMuPDF module
+        class MockPage:
+            def get_images(self):
+                return [(1, 0, 0, 0, 0, 0, 0)]
+
+        class MockDoc:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def __len__(self):
+                return 1
+
+            def __getitem__(self, idx):
+                return MockPage()
+
+            def extract_image(self, xref):
+                return {"image": b"new image data" + b"x" * 1024, "ext": "png"}
+
+            def close(self):
+                pass
+
+        mock_fitz = type("MockFitz", (), {"open": MockDoc})()
+        monkeypatch.setitem(sys.modules, "fitz", mock_fitz)
+
+        paperpipe.save_index({"p1": {"arxiv_id": "1", "title": "Paper 1", "tags": [], "added": "x"}})
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["regenerate", "p1", "--no-llm", "-o", "figures"])
+        assert result.exit_code == 0
+        # Should extract figures with warning
+        assert "Extracting figures from PDF" in result.output
+        assert (figures_dir / "figure_01.png").exists()
+
+    def test_regenerate_figures_warning_message(self, temp_db: Path, monkeypatch):
+        """Test that warning mentions using 'papi add --update' for LaTeX extraction."""
+        import sys
+
+        papers_dir = temp_db / "papers"
+        (papers_dir / "p1").mkdir(parents=True)
+        (papers_dir / "p1" / "meta.json").write_text(
+            json.dumps({"arxiv_id": "1", "title": "Paper 1", "authors": [], "abstract": ""})
+        )
+        (papers_dir / "p1" / "source.tex").write_text("\\begin{equation}x=1\\end{equation}")
+        (papers_dir / "p1" / "summary.md").write_text("summary")
+        (papers_dir / "p1" / "equations.md").write_text("equations")
+
+        # Create a PDF
+        pdf_path = papers_dir / "p1" / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\nfake pdf")
+
+        # Mock PyMuPDF module
+        class MockPage:
+            def get_images(self):
+                return [(1, 0, 0, 0, 0, 0, 0)]
+
+        class MockDoc:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def __len__(self):
+                return 1
+
+            def __getitem__(self, idx):
+                return MockPage()
+
+            def extract_image(self, xref):
+                return {"image": b"fake" + b"x" * 1024, "ext": "png"}
+
+            def close(self):
+                pass
+
+        mock_fitz = type("MockFitz", (), {"open": MockDoc})()
+        monkeypatch.setitem(sys.modules, "fitz", mock_fitz)
+
+        paperpipe.save_index({"p1": {"arxiv_id": "1", "title": "Paper 1", "tags": [], "added": "x"}})
+
+        runner = CliRunner()
+        # Need --overwrite figures to trigger figure extraction (opt-in)
+        result = runner.invoke(cli_mod.cli, ["regenerate", "p1", "--no-llm", "--overwrite", "figures"])
+        assert result.exit_code == 0
+        # Check for warning message
+        assert "Extracting figures from PDF" in result.output
+        assert "source tarball not cached" in result.output
+        assert "papi add --update" in result.output
 
 
 class TestRemoveCommand:

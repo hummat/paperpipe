@@ -66,7 +66,9 @@ Located at `{db}/papers/{name}/`:
 | `summary.md` | Understanding approach |
 | `source.tex` | Exact definitions |
 | `notes.md` | Implementation gotchas |
+| `figures/` | Architecture diagrams, plots |
 
 If agent can't read `~/.paperpipe/`, export to repo: `papi export <papers...> --level equations --to ./paper-context/`
+Use `--figures` to include extracted figures in export.
 
 See `commands.md` for full reference.

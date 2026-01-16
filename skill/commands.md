@@ -22,6 +22,7 @@
 | `papi add --pdf PATH --title TEXT` | Add local PDF |
 | `papi add --from-file <file>` | Import from JSON/BibTeX/text |
 | `papi add <id> --update` | Refresh existing paper |
+| `papi add <id> --figures` | Extract figures from LaTeX/PDF |
 | `papi regenerate <name> [--all]` | Regenerate summaries/equations |
 | `papi remove <name>` | Remove a paper |
 | `papi audit [--regenerate]` | Flag/fix issues in generated content |
@@ -32,6 +33,7 @@
 |---------|-------------|
 | `papi export <names...> --to ./dir` | Export to directory |
 | `papi export ... --level summary\|equations\|full` | Control export depth |
+| `papi export ... --figures` | Include extracted figures |
 
 ## RAG Queries
 
@@ -55,3 +57,4 @@ Located at `<paper_db>/papers/{name}/`:
 | `source.tex` | Exact definitions |
 | `notes.md` | Implementation gotchas |
 | `paper.pdf` | RAG backends |
+| `figures/` | Architecture diagrams, plots |
