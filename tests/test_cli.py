@@ -922,7 +922,7 @@ class TestAddCommand:
             return True
 
         monkeypatch.setattr(paper_mod, "download_pdf", fake_download_pdf)
-        monkeypatch.setattr(paper_mod, "download_source", lambda _arxiv_id, _paper_dir: None)
+        monkeypatch.setattr(paper_mod, "download_source", lambda *args, **kwargs: None)
 
         runner = CliRunner()
         result = runner.invoke(cli_mod.cli, ["add", "1706.03762", "--duplicate", "--no-llm"])
@@ -979,7 +979,7 @@ class TestAddCommand:
             dest.write_bytes(b"%PDF")
             return True
 
-        def fake_download_source(_arxiv_id: str, pdir: Path):
+        def fake_download_source(_arxiv_id: str, pdir: Path, **kwargs):
             tex = r"\begin{document}\begin{equation}E=mc^2\end{equation}\end{document}"
             (pdir / "source.tex").write_text(tex)
             return tex
@@ -1027,7 +1027,7 @@ class TestAddCommand:
 
         monkeypatch.setattr(paper_mod, "fetch_arxiv_metadata", mock_fetch)
         monkeypatch.setattr(paper_mod, "download_pdf", lambda *args: True)
-        monkeypatch.setattr(paper_mod, "download_source", lambda *args: None)
+        monkeypatch.setattr(paper_mod, "download_source", lambda *args, **kwargs: None)
 
         runner = CliRunner()
         result = runner.invoke(cli_mod.cli, ["add", "--from-file", str(papers_json), "--no-llm"])
@@ -1063,7 +1063,7 @@ class TestAddCommand:
 
         monkeypatch.setattr(paper_mod, "fetch_arxiv_metadata", mock_fetch)
         monkeypatch.setattr(paper_mod, "download_pdf", lambda *args: True)
-        monkeypatch.setattr(paper_mod, "download_source", lambda *args: None)
+        monkeypatch.setattr(paper_mod, "download_source", lambda *args, **kwargs: None)
 
         runner = CliRunner()
         result = runner.invoke(cli_mod.cli, ["add", "--from-file", str(papers_txt), "--no-llm", "--tags", "batch"])
@@ -1115,7 +1115,7 @@ class TestAddCommand:
 
         monkeypatch.setattr(paper_mod, "fetch_arxiv_metadata", mock_fetch)
         monkeypatch.setattr(paper_mod, "download_pdf", lambda *args: True)
-        monkeypatch.setattr(paper_mod, "download_source", lambda *args: None)
+        monkeypatch.setattr(paper_mod, "download_source", lambda *args, **kwargs: None)
 
         runner = CliRunner()
         result = runner.invoke(cli_mod.cli, ["add", "--from-file", str(papers_bib), "--no-llm"])
@@ -1215,7 +1215,7 @@ class TestAddCommand:
 
         monkeypatch.setattr(paper_mod, "fetch_arxiv_metadata", mock_fetch)
         monkeypatch.setattr(paper_mod, "download_pdf", lambda *args: True)
-        monkeypatch.setattr(paper_mod, "download_source", lambda *args: None)
+        monkeypatch.setattr(paper_mod, "download_source", lambda *args, **kwargs: None)
 
         runner = CliRunner()
         result = runner.invoke(cli_mod.cli, ["add", "https://www.semanticscholar.org/paper/test-id", "--no-llm"])

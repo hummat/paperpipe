@@ -41,7 +41,8 @@ mcp = [
     "paper-qa>=5.0.0; python_version >= '3.11'",
 ]
 bibtex = ["bibtexparser>=1.4.0"]
-all = ["paperpipe[llm,leann,paperqa,paperqa-media,mcp,bibtex]"]
+figures = ["pymupdf>=1.24.0"]
+all = ["paperpipe[llm,leann,paperqa,paperqa-media,mcp,bibtex,figures]"]
 dev = [
     "build>=1.0.0",
     "pyright>=1.1.385",

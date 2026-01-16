@@ -161,7 +161,12 @@ def audit(
     type=click.Path(),
     help="Destination directory",
 )
-def export(papers: tuple[str, ...], level: str, dest: Optional[str]):
+@click.option(
+    "--figures",
+    is_flag=True,
+    help="Also export figures directory if it exists",
+)
+def export(papers: tuple[str, ...], level: str, dest: Optional[str], figures: bool):
     """Export paper context for a coding session."""
     level_norm = (level or "").strip().lower()
     if level_norm == "eq":
@@ -214,6 +219,16 @@ def export(papers: tuple[str, ...], level: str, dest: Optional[str]):
 
         dest_file = dest_path / f"{name}{out_suffix}"
         shutil.copy(src, dest_file)
+
+        # Export figures if requested
+        if figures:
+            figures_dir = paper_dir / "figures"
+            if figures_dir.exists() and figures_dir.is_dir():
+                dest_figures_dir = dest_path / f"{name}_figures"
+                if dest_figures_dir.exists():
+                    shutil.rmtree(dest_figures_dir)
+                shutil.copytree(figures_dir, dest_figures_dir)
+
         successes += 1
 
     if failures == 0:
