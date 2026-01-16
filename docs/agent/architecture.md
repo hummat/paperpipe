@@ -16,7 +16,7 @@
 ```
 
 ## Conventions
-- **Flat layout**: package code directly under `paperpipe/`
+- **Package layout**: core modules under `paperpipe/`; CLI commands in `paperpipe/cli/`
 - **Entry point**: `__main__.py` for CLI; use `if __name__ == "__main__":`
 - **Config**: all tool config in `pyproject.toml` (ruff, pyright, pytest, coverage)
 - **Dependencies**: managed via `uv`; lock file is `uv.lock`

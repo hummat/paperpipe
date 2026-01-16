@@ -3,33 +3,14 @@
 This file is the single source of truth for agent instructions in this repo.
 `CLAUDE.md` and `GEMINI.md` are symlinks to this file.
 
-## Role & Tone
-
-Expert engineering assistant. Tool, not a buddy.
-
-- No greetings, small talk, or fluff
-- Blunt, direct, high-signal; if unsure, say so
-- Share strong opinions when appropriate; be humble when wrong
-- Prioritize clarity over politeness
-
-## Output Format
-
-- Default: 3–6 sentences or ≤6 bullets
-- Simple yes/no: ≤2 sentences
-- Multi-file changes: 1 overview sentence, then ≤5 bullets:
-  - What changed
-  - Where (file:function or file:line)
-  - Risks
-  - Next steps
-  - Open questions
-
 ## Conventions
 
-For general patterns, see `docs/agent/`:
-- `architecture.md`: project layout, uv commands, module organization
-- `code_conventions.md`: Python style, typing, KISS, minimal diffs
-- `testing_patterns.md`: pytest, pyright, ruff commands
-- `releases.md`: versioning, release process, commit conventions
+Read relevant `docs/agent/` files before proceeding:
+- `workflow.md` — **read before starting any feature** (issues, branching, PRs)
+- `code_conventions.md` — **read before writing code** (style, typing, minimal diffs)
+- `architecture.md` — read before adding modules/restructuring
+- `testing_patterns.md` — read before writing tests
+- `releases.md` — read before releasing
 
 ---
 
@@ -53,16 +34,7 @@ Key flows:
 - `export`: copy selected content to a destination directory
 - `ask`: route to PaperQA2 for RAG queries over the stored PDFs (if installed)
 
-## Project Structure
-
-```
-paperpipe/          # Click CLI package (installed as `papi`)
-tests/              # pytest suite
-pyproject.toml      # packaging (Hatchling), deps, tool config
-README.md           # end-user docs and CLI examples
-```
-
-## Project-Specific Commands
+## Commands
 
 ```bash
 # Install
@@ -102,10 +74,10 @@ uv run pytest -m "integration or not integration"  # all tests
 - Short, imperative subjects (optionally `feat:`, `fix:`, etc.)
 - PRs: what/why, how to test, CLI/database behavior changes
 
-## Agent Workflow
+## Code Workflow
 
 1. **Before editing**: read files first; understand existing code
-2. **After code changes**: run `uv run ruff format .` → `uv run ruff check .` → `uv run pyright` → `uv run pytest -m "not integration"`
+2. **After code changes**: `uv run ruff format .` → `uv run ruff check .` → `uv run pyright` → `uv run pytest -m "not integration"` (order matters: format may change code that later tools re-check)
 3. **Doc check**: explicitly verify if docs/prompts need updating (even if "no doc impact")
 4. **CLI changes**: update `README.md`, `AGENT_INTEGRATION.md`, `skill/SKILL.md`, `skill/commands.md`
 

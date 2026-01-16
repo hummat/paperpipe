@@ -1,23 +1,8 @@
 # Testing Patterns
 
-## Toolchain
-- **Runner**: pytest
-- **Coverage**: pytest-cov (threshold in `pyproject.toml`)
-- **Types**: pyright
-- **Lint/format**: ruff
+Toolchain: pytest, pytest-cov, pyright, ruff (config in `pyproject.toml`).
 
-## Commands
-```bash
-uv run pytest                      # run all tests
-uv run pytest tests/test_foo.py    # run single file
-uv run pytest -k "test_name"       # run by name pattern
-uv run pytest --cov                # with coverage
-uv run pyright                     # type check
-uv run ruff check .                # lint
-uv run ruff format .               # format
-```
-
-## Test organization
+## Organization
 - Tests live in `tests/`
 - File naming: `test_<module>.py`
 - Function naming: `test_<behavior>_<scenario>()`
