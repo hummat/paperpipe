@@ -2021,6 +2021,113 @@ class TestExport:
             result = runner.invoke(cli_mod.cli, ["export", "test-paper", "--level", "full", "--to", "."])
             assert "No LaTeX source" in result.output
 
+    def test_export_with_figures_flag(self, temp_db: Path):
+        """Test --figures flag exports figures directory."""
+        paper_dir = temp_db / "papers" / "test-paper"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "summary.md").write_text("# Test Summary")
+
+        # Create figures directory with files
+        figures_dir = paper_dir / "figures"
+        figures_dir.mkdir()
+        (figures_dir / "fig1.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+        (figures_dir / "fig2.pdf").write_bytes(b"%PDF-1.4\n")
+
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            result = runner.invoke(
+                cli_mod.cli, ["export", "test-paper", "--level", "summary", "--to", ".", "--figures"]
+            )
+            assert result.exit_code == 0
+            assert Path("test-paper_summary.md").exists()
+            assert Path("test-paper_figures").exists()
+            assert (Path("test-paper_figures") / "fig1.png").exists()
+            assert (Path("test-paper_figures") / "fig2.pdf").exists()
+
+    def test_export_without_figures_flag(self, temp_db: Path):
+        """Test figures not exported when --figures flag omitted."""
+        paper_dir = temp_db / "papers" / "test-paper"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "summary.md").write_text("# Test Summary")
+
+        # Create figures directory
+        figures_dir = paper_dir / "figures"
+        figures_dir.mkdir()
+        (figures_dir / "fig1.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            result = runner.invoke(cli_mod.cli, ["export", "test-paper", "--level", "summary", "--to", "."])
+            assert result.exit_code == 0
+            assert Path("test-paper_summary.md").exists()
+            # Figures should NOT be exported
+            assert not Path("test-paper_figures").exists()
+
+    def test_export_figures_when_no_figures_directory(self, temp_db: Path):
+        """Test --figures flag gracefully handles missing figures directory."""
+        paper_dir = temp_db / "papers" / "test-paper"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "summary.md").write_text("# Test Summary")
+        # No figures directory
+
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            result = runner.invoke(
+                cli_mod.cli, ["export", "test-paper", "--level", "summary", "--to", ".", "--figures"]
+            )
+            assert result.exit_code == 0
+            assert Path("test-paper_summary.md").exists()
+            # No error, just no figures directory created
+            assert not Path("test-paper_figures").exists()
+
+    def test_export_figures_overwrites_existing(self, temp_db: Path):
+        """Test --figures overwrites existing figures directory."""
+        paper_dir = temp_db / "papers" / "test-paper"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "summary.md").write_text("# Test Summary")
+
+        figures_dir = paper_dir / "figures"
+        figures_dir.mkdir()
+        (figures_dir / "new.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            # Create old figures directory
+            old_figures = Path("test-paper_figures")
+            old_figures.mkdir()
+            (old_figures / "old.png").write_bytes(b"old data")
+
+            result = runner.invoke(
+                cli_mod.cli, ["export", "test-paper", "--level", "summary", "--to", ".", "--figures"]
+            )
+            assert result.exit_code == 0
+
+            # Old file should be gone, new file should exist
+            assert not (old_figures / "old.png").exists()
+            assert (old_figures / "new.png").exists()
+
+    def test_export_multiple_papers_with_figures(self, temp_db: Path):
+        """Test exporting multiple papers with figures."""
+        for name in ["paper1", "paper2"]:
+            paper_dir = temp_db / "papers" / name
+            paper_dir.mkdir(parents=True)
+            (paper_dir / "summary.md").write_text(f"# {name} Summary")
+
+            figures_dir = paper_dir / "figures"
+            figures_dir.mkdir()
+            (figures_dir / "fig.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+
+        runner = CliRunner()
+        with runner.isolated_filesystem():
+            result = runner.invoke(
+                cli_mod.cli, ["export", "paper1", "paper2", "--level", "summary", "--to", ".", "--figures"]
+            )
+            assert result.exit_code == 0
+            assert Path("paper1_summary.md").exists()
+            assert Path("paper2_summary.md").exists()
+            assert (Path("paper1_figures") / "fig.png").exists()
+            assert (Path("paper2_figures") / "fig.png").exists()
+
 
 class TestAskCommand:
     def test_ask_constructs_correct_command(self, temp_db: Path, monkeypatch):
