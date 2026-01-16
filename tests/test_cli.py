@@ -3441,6 +3441,8 @@ class TestRegenerateCommand:
         # Should extract figures with warning
         assert "Extracting figures from PDF" in result.output
         assert (figures_dir / "figure_01.png").exists()
+        # Old figures should be cleared (stale file removal)
+        assert not (figures_dir / "old.png").exists(), "Stale figures should be cleared on overwrite"
 
     def test_regenerate_figures_warning_message(self, temp_db: Path, monkeypatch):
         """Test that warning mentions using 'papi add --update' for LaTeX extraction."""

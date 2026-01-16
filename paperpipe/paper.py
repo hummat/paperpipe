@@ -166,6 +166,20 @@ def download_source(arxiv_id: str, paper_dir: Path, *, extract_figures: bool = F
     return None
 
 
+def _clear_figures_directory(paper_dir: Path) -> None:
+    """Remove existing figures directory to ensure clean extraction.
+
+    Called before re-extracting figures during --overwrite to prevent stale
+    files from previous extractions persisting alongside new ones.
+    """
+    figures_dir = paper_dir / "figures"
+    if figures_dir.exists():
+        try:
+            shutil.rmtree(figures_dir)
+        except (PermissionError, OSError) as e:
+            echo_warning(f"  Could not clear existing figures directory: {e}")
+
+
 def _extract_figures_from_latex(tex_content: str, tar: tarfile.TarFile, paper_dir: Path) -> int:
     """Extract figures referenced in LaTeX source from tarball.
 
@@ -1348,6 +1362,8 @@ def _regenerate_one_paper(
 
     # Extract figures if requested
     if do_figures:
+        # Clear existing figures to prevent stale files from previous extractions
+        _clear_figures_directory(paper_dir)
         if pdf_path.exists():
             # We don't have the original LaTeX tarball, only source.tex (text)
             # So we can only extract from PDF
