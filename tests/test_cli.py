@@ -1131,6 +1131,81 @@ class TestAddCommand:
         assert "paper2" in index
         assert "tag2" in index["paper2"]["tags"]
 
+    def test_add_from_file_json_list_with_tags(self, temp_db: Path, monkeypatch):
+        """Test adding papers from a JSON list of objects with tags (common export format)."""
+        papers_json = temp_db / "papers.json"
+        # JSON list format with tags as arrays (the natural JSON shape)
+        papers_json.write_text(
+            json.dumps(
+                [
+                    {"arxiv_id": "1111.1111", "name": "paper-one", "tags": ["ml", "transformers"]},
+                    {"arxiv_id": "2222.2222", "tags": ["nlp"]},  # name is optional
+                    {"arxiv_id": "3333.3333"},  # tags is optional
+                ]
+            )
+        )
+
+        def mock_fetch(arxiv_id):
+            return {
+                "arxiv_id": arxiv_id,
+                "title": f"Title {arxiv_id}",
+                "authors": [],
+                "abstract": "Abstract",
+                "primary_category": "cs.AI",
+                "categories": ["cs.AI"],
+                "published": "2023-01-01",
+                "pdf_url": f"http://arxiv.org/pdf/{arxiv_id}",
+                "updated": "2023-01-01",
+            }
+
+        monkeypatch.setattr(paper_mod, "fetch_arxiv_metadata", mock_fetch)
+        monkeypatch.setattr(paper_mod, "download_pdf", lambda *args: True)
+        monkeypatch.setattr(paper_mod, "download_source", lambda *args, **kwargs: None)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["add", "--from-file", str(papers_json), "--no-llm"])
+        assert result.exit_code == 0, result.output
+
+        index = paperpipe.load_index()
+        assert "paper-one" in index
+        assert "ml" in index["paper-one"]["tags"]
+        assert "transformers" in index["paper-one"]["tags"]
+        # Second paper should have its tags
+        paper2_name = [k for k in index if index[k].get("arxiv_id") == "2222.2222"][0]
+        assert "nlp" in index[paper2_name]["tags"]
+
+    def test_add_from_file_json_list_merges_cli_tags(self, temp_db: Path, monkeypatch):
+        """Test that CLI --tags are merged with JSON list tags."""
+        papers_json = temp_db / "papers.json"
+        papers_json.write_text(json.dumps([{"arxiv_id": "1111.1111", "tags": ["from-json"]}]))
+
+        def mock_fetch(arxiv_id):
+            return {
+                "arxiv_id": arxiv_id,
+                "title": f"Title {arxiv_id}",
+                "authors": [],
+                "abstract": "Abstract",
+                "primary_category": "cs.AI",
+                "categories": ["cs.AI"],
+                "published": "2023-01-01",
+                "pdf_url": f"http://arxiv.org/pdf/{arxiv_id}",
+                "updated": "2023-01-01",
+            }
+
+        monkeypatch.setattr(paper_mod, "fetch_arxiv_metadata", mock_fetch)
+        monkeypatch.setattr(paper_mod, "download_pdf", lambda *args: True)
+        monkeypatch.setattr(paper_mod, "download_source", lambda *args, **kwargs: None)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["add", "--from-file", str(papers_json), "--tags", "from-cli", "--no-llm"])
+        assert result.exit_code == 0, result.output
+
+        index = paperpipe.load_index()
+        paper_name = list(index.keys())[0]
+        # Both JSON tags and CLI tags should be present
+        assert "from-json" in index[paper_name]["tags"]
+        assert "from-cli" in index[paper_name]["tags"]
+
     def test_add_from_file_text(self, temp_db: Path, monkeypatch):
         """Test adding papers from a text file (one ID per line)."""
         papers_txt = temp_db / "papers.txt"
@@ -1362,6 +1437,112 @@ class TestAddCommand:
         result = runner.invoke(cli_mod.cli, ["add", "https://www.semanticscholar.org/paper/test-id", "--no-llm"])
         # Should handle rate limiting gracefully
         assert result.exit_code != 0
+
+    def test_add_semantic_scholar_no_arxiv_id_fails(self, temp_db: Path, monkeypatch):
+        """Test that S2 papers without arXiv IDs fail with non-zero exit code."""
+
+        # Mock Semantic Scholar API response WITHOUT arXiv ID
+        def mock_semantic_scholar_request(url, params=None, timeout=None):
+            class MockResponse:
+                def __init__(self):
+                    self.status_code = 200
+                    self._json = {
+                        "title": "Non-arXiv Paper",
+                        "authors": [{"name": "John Doe"}],
+                        "abstract": "This paper is not on arXiv.",
+                        "year": 2023,
+                        "venue": "Some Journal",
+                        "url": "https://www.semanticscholar.org/paper/no-arxiv-id",
+                        "externalIds": {"DOI": "10.1234/no-arxiv"},  # No ArXiv key
+                    }
+
+                def json(self):
+                    return self._json
+
+                def raise_for_status(self):
+                    pass
+
+            return MockResponse()
+
+        monkeypatch.setattr("requests.get", mock_semantic_scholar_request)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["add", "https://www.semanticscholar.org/paper/no-arxiv-id", "--no-llm"])
+
+        # Should fail with non-zero exit code
+        assert result.exit_code != 0
+        assert "does not have an arXiv ID" in result.output
+        assert "No papers to add" in result.output
+
+    def test_add_semantic_scholar_mixed_with_arxiv_reports_failures(self, temp_db: Path, monkeypatch):
+        """Test that mixing S2 papers (some with, some without arXiv IDs) reports failures correctly."""
+
+        call_count = [0]
+
+        def mock_semantic_scholar_request(url, params=None, timeout=None):
+            call_count[0] += 1
+
+            class MockResponse:
+                def __init__(self, has_arxiv: bool):
+                    self.status_code = 200
+                    external_ids = {"DOI": "10.1234/test"}
+                    if has_arxiv:
+                        external_ids["ArXiv"] = "2401.00001"
+                    self._json = {
+                        "title": "Test Paper",
+                        "authors": [{"name": "John Doe"}],
+                        "abstract": "Abstract",
+                        "year": 2024,
+                        "externalIds": external_ids,
+                    }
+
+                def json(self):
+                    return self._json
+
+                def raise_for_status(self):
+                    pass
+
+            # First call has arXiv ID, second doesn't
+            return MockResponse(has_arxiv=(call_count[0] == 1))
+
+        monkeypatch.setattr("requests.get", mock_semantic_scholar_request)
+
+        # Mock arXiv fetch for the one that has an arXiv ID
+        def mock_fetch(arxiv_id):
+            return {
+                "arxiv_id": arxiv_id,
+                "title": f"Title {arxiv_id}",
+                "authors": [],
+                "abstract": "Abstract",
+                "primary_category": "cs.AI",
+                "categories": ["cs.AI"],
+                "published": "2024-01-01",
+                "pdf_url": f"http://arxiv.org/pdf/{arxiv_id}",
+                "updated": "2024-01-01",
+            }
+
+        monkeypatch.setattr(paper_mod, "fetch_arxiv_metadata", mock_fetch)
+        monkeypatch.setattr(paper_mod, "download_pdf", lambda *args: True)
+        monkeypatch.setattr(paper_mod, "download_source", lambda *args, **kwargs: None)
+
+        runner = CliRunner()
+        # Add two S2 papers: first has arXiv ID, second doesn't
+        result = runner.invoke(
+            cli_mod.cli,
+            [
+                "add",
+                "https://www.semanticscholar.org/paper/has-arxiv",
+                "https://www.semanticscholar.org/paper/no-arxiv",
+                "--no-llm",
+            ],
+        )
+
+        # Should exit with failure due to the paper without arXiv ID
+        assert result.exit_code != 0
+        assert "does not have an arXiv ID" in result.output
+        # Should still report the successful addition
+        assert "added 1" in result.output
+        assert "1 failed" in result.output
 
 
 class TestAddMultiplePapers:
@@ -3441,6 +3622,8 @@ class TestRegenerateCommand:
         # Should extract figures with warning
         assert "Extracting figures from PDF" in result.output
         assert (figures_dir / "figure_01.png").exists()
+        # Old figures should be cleared (stale file removal)
+        assert not (figures_dir / "old.png").exists(), "Stale figures should be cleared on overwrite"
 
     def test_regenerate_figures_warning_message(self, temp_db: Path, monkeypatch):
         """Test that warning mentions using 'papi add --update' for LaTeX extraction."""
@@ -3835,3 +4018,233 @@ class TestAskErrorHandling:
         # Also verify that the ERROR marker was cleared from the index file
         mapping = paperqa._paperqa_load_index_files_map(files_zip)
         assert mapping == {}, "ERROR markers should be cleared"
+
+
+class TestRebuildIndexCommand:
+    def test_rebuild_index_basic(self, temp_db: Path):
+        """Test basic rebuild-index from paper directories."""
+        # Create some paper directories with meta.json
+        paper1 = temp_db / "papers" / "paper-one"
+        paper1.mkdir(parents=True)
+        (paper1 / "meta.json").write_text(
+            json.dumps({"title": "First Paper", "authors": ["Alice"], "tags": ["ml"], "added": "2024-01-01"})
+        )
+        (paper1 / "paper.pdf").touch()
+
+        paper2 = temp_db / "papers" / "paper-two"
+        paper2.mkdir(parents=True)
+        (paper2 / "meta.json").write_text(
+            json.dumps({"title": "Second Paper", "arxiv_id": "2401.00001", "tags": [], "added": "2024-01-02"})
+        )
+        (paper2 / "paper.pdf").touch()
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["rebuild-index"])
+
+        assert result.exit_code == 0
+        assert "Rebuilt index with 2 paper(s)" in result.output
+
+        # Verify the index was rebuilt correctly
+        index = paperpipe.load_index()
+        assert "paper-one" in index
+        assert "paper-two" in index
+        assert index["paper-one"]["title"] == "First Paper"
+        assert index["paper-two"]["arxiv_id"] == "2401.00001"
+
+    def test_rebuild_index_dry_run(self, temp_db: Path):
+        """Test dry run doesn't modify the index."""
+        paper1 = temp_db / "papers" / "paper-one"
+        paper1.mkdir(parents=True)
+        (paper1 / "meta.json").write_text(json.dumps({"title": "First Paper"}))
+
+        # Save a different index
+        paperpipe.save_index({"old-paper": {"title": "Old"}})
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["rebuild-index", "--dry-run"])
+
+        assert result.exit_code == 0
+        assert "Dry run" in result.output
+        assert "paper-one" in result.output
+
+        # Verify the original index is unchanged
+        index = paperpipe.load_index()
+        assert "old-paper" in index
+        assert "paper-one" not in index
+
+    def test_rebuild_index_with_backup(self, temp_db: Path):
+        """Test that backup is created when --backup is used."""
+        paper1 = temp_db / "papers" / "paper-one"
+        paper1.mkdir(parents=True)
+        (paper1 / "meta.json").write_text(json.dumps({"title": "First Paper"}))
+
+        # Save an existing index
+        paperpipe.save_index({"old-paper": {"title": "Old"}})
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["rebuild-index", "--backup"])
+
+        assert result.exit_code == 0
+        assert "Backed up existing index" in result.output
+
+        # Find the backup file
+        backups = list(temp_db.glob("index.json.backup.*"))
+        assert len(backups) == 1
+        backup_content = json.loads(backups[0].read_text())
+        assert "old-paper" in backup_content
+
+    def test_rebuild_index_no_backup(self, temp_db: Path):
+        """Test that backup is skipped when --no-backup is used."""
+        paper1 = temp_db / "papers" / "paper-one"
+        paper1.mkdir(parents=True)
+        (paper1 / "meta.json").write_text(json.dumps({"title": "First Paper"}))
+
+        paperpipe.save_index({"old-paper": {"title": "Old"}})
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["rebuild-index", "--no-backup"])
+
+        assert result.exit_code == 0
+        assert "Backed up" not in result.output
+
+        # Verify no backup was created
+        backups = list(temp_db.glob("index.json.backup.*"))
+        assert len(backups) == 0
+
+    def test_rebuild_index_with_validation(self, temp_db: Path):
+        """Test validation reports issues."""
+        # Paper with missing PDF
+        paper1 = temp_db / "papers" / "paper-no-pdf"
+        paper1.mkdir(parents=True)
+        (paper1 / "meta.json").write_text(json.dumps({"title": "Missing PDF"}))
+        # No paper.pdf
+
+        # Paper with all files
+        paper2 = temp_db / "papers" / "paper-complete"
+        paper2.mkdir(parents=True)
+        (paper2 / "meta.json").write_text(json.dumps({"title": "Complete Paper"}))
+        (paper2 / "paper.pdf").touch()
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["rebuild-index", "--validate"])
+
+        assert result.exit_code == 0
+        assert "Validation issues" in result.output
+        assert "paper-no-pdf" in result.output
+        assert "missing paper.pdf" in result.output
+
+    def test_rebuild_index_skips_invalid_directories(self, temp_db: Path):
+        """Test that directories without meta.json are skipped."""
+        # Valid paper
+        paper1 = temp_db / "papers" / "valid-paper"
+        paper1.mkdir(parents=True)
+        (paper1 / "meta.json").write_text(json.dumps({"title": "Valid Paper"}))
+
+        # Invalid directory (no meta.json)
+        invalid = temp_db / "papers" / "invalid-dir"
+        invalid.mkdir(parents=True)
+        (invalid / "some-file.txt").write_text("not a paper")
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["rebuild-index"])
+
+        assert result.exit_code == 0
+        assert "Skipped 1 directory" in result.output
+        assert "invalid-dir" in result.output
+
+        index = paperpipe.load_index()
+        assert "valid-paper" in index
+        assert "invalid-dir" not in index
+
+    def test_rebuild_index_empty_papers_dir(self, temp_db: Path):
+        """Test handling of empty papers directory."""
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["rebuild-index"])
+
+        assert result.exit_code == 0
+        assert "No paper directories found" in result.output
+
+    def test_rebuild_index_empty_papers_dir_backs_up_existing_index(self, temp_db: Path):
+        """Test that empty rebuild still backs up existing index."""
+        # Save an existing index with data
+        paperpipe.save_index({"existing-paper": {"title": "Existing Paper", "tags": []}})
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["rebuild-index"])
+
+        assert result.exit_code == 0
+        assert "No paper directories found" in result.output
+        assert "Backed up existing index" in result.output
+
+        # Verify backup was created
+        backups = list(temp_db.glob("index.json.backup.*"))
+        assert len(backups) == 1
+        backup_content = json.loads(backups[0].read_text())
+        assert "existing-paper" in backup_content
+
+        # Verify index is now empty
+        index = paperpipe.load_index()
+        assert index == {}
+
+    def test_rebuild_index_preserves_all_metadata_fields(self, temp_db: Path):
+        """Test that all common metadata fields are preserved."""
+        paper1 = temp_db / "papers" / "full-meta"
+        paper1.mkdir(parents=True)
+        meta = {
+            "title": "Full Metadata Test",
+            "authors": ["Alice", "Bob"],
+            "arxiv_id": "2401.00001",
+            "doi": "10.1234/test",
+            "tags": ["ml", "nlp"],
+            "added": "2024-01-01T00:00:00",
+            "year": 2024,
+            "venue": "NeurIPS",
+            "tldr": "A test paper.",
+            "abstract": "This is the abstract.",
+            "url": "https://example.com/paper",
+            "semantic_scholar_id": "abc123",
+            "citation_count": 42,
+            "categories": ["cs.LG", "cs.CL"],
+        }
+        (paper1 / "meta.json").write_text(json.dumps(meta))
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["rebuild-index"])
+
+        assert result.exit_code == 0
+
+        index = paperpipe.load_index()
+        entry = index["full-meta"]
+        assert entry["title"] == "Full Metadata Test"
+        assert entry["authors"] == ["Alice", "Bob"]
+        assert entry["arxiv_id"] == "2401.00001"
+        assert entry["doi"] == "10.1234/test"
+        assert entry["tags"] == ["ml", "nlp"]
+        assert entry["year"] == 2024
+        assert entry["venue"] == "NeurIPS"
+        assert entry["tldr"] == "A test paper."
+        assert entry["semantic_scholar_id"] == "abc123"
+        assert entry["citation_count"] == 42
+
+    def test_rebuild_index_handles_corrupt_meta_json(self, temp_db: Path):
+        """Test handling of corrupt meta.json files."""
+        # Valid paper
+        paper1 = temp_db / "papers" / "valid-paper"
+        paper1.mkdir(parents=True)
+        (paper1 / "meta.json").write_text(json.dumps({"title": "Valid Paper"}))
+
+        # Corrupt meta.json
+        corrupt = temp_db / "papers" / "corrupt-paper"
+        corrupt.mkdir(parents=True)
+        (corrupt / "meta.json").write_text("not valid json {")
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["rebuild-index"])
+
+        assert result.exit_code == 0
+        assert "Skipped" in result.output
+        assert "corrupt-paper" in result.output
+
+        index = paperpipe.load_index()
+        assert "valid-paper" in index
+        assert "corrupt-paper" not in index
