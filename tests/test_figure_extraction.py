@@ -1,8 +1,8 @@
 """Tests for figure extraction from LaTeX and PDF sources."""
 
+import importlib.util
 import io
 import tarfile
-from pathlib import Path
 
 import pytest
 
@@ -191,6 +191,48 @@ class TestExtractFiguresFromLatex:
         assert (paper_dir / "figures" / "exists.png").exists()
         assert not (paper_dir / "figures" / "missing.png").exists()
 
+    def test_handles_duplicate_figure_names_from_different_dirs(self, tmp_path):
+        """Test that figures from different directories with same name overwrite each other.
+
+        This is a known limitation: figures are flattened to basename, so
+        figures/plot.png and results/plot.png both become plot.png.
+        The last one processed wins. This test documents the behavior.
+        """
+        tar_buffer = io.BytesIO()
+        with tarfile.open(fileobj=tar_buffer, mode="w:gz") as tar:
+            # Two different files with same basename
+            png1_data = b"\x89PNG\r\n\x1a\nfirst_image_data"
+            png1_info = tarfile.TarInfo(name="figs/plot.png")
+            png1_info.size = len(png1_data)
+            tar.addfile(png1_info, io.BytesIO(png1_data))
+
+            png2_data = b"\x89PNG\r\n\x1a\nsecond_image_data"
+            png2_info = tarfile.TarInfo(name="results/plot.png")
+            png2_info.size = len(png2_data)
+            tar.addfile(png2_info, io.BytesIO(png2_data))
+
+            tex_content = r"""
+            \begin{document}
+            \includegraphics{figs/plot.png}
+            \includegraphics{results/plot.png}
+            \end{document}
+            """
+
+        tar_buffer.seek(0)
+        paper_dir = tmp_path / "test_paper"
+        paper_dir.mkdir()
+
+        with tarfile.open(fileobj=tar_buffer, mode="r:gz") as tar:
+            count = paper_mod._extract_figures_from_latex(tex_content, tar, paper_dir)
+
+        # Both references are found, but they overwrite each other
+        # so only 1 file exists (the second one processed)
+        assert count == 2  # Count says 2 were "extracted"
+        assert (paper_dir / "figures" / "plot.png").exists()
+        # Only one file exists (second one overwrote first)
+        figure_files = list((paper_dir / "figures").iterdir())
+        assert len(figure_files) == 1
+
     def test_handles_tarball_with_directory_prefix(self, tmp_path):
         """Test extraction when tarball has directory prefix (real arXiv behavior)."""
         tar_buffer = io.BytesIO()
@@ -242,9 +284,7 @@ class TestExtractFiguresFromPdf:
     )
     def test_extracts_images_from_pdf(self, tmp_path, monkeypatch):
         """Test basic PDF image extraction with mocked PyMuPDF."""
-        try:
-            import fitz
-        except ImportError:
+        if importlib.util.find_spec("fitz") is None:
             pytest.skip("PyMuPDF not installed")
 
         # Create a minimal PDF with an image (mocked)
@@ -288,9 +328,7 @@ class TestExtractFiguresFromPdf:
 
     def test_handles_pdf_open_failure(self, tmp_path, monkeypatch):
         """Test returns 0 when PDF cannot be opened."""
-        try:
-            import fitz
-        except ImportError:
+        if importlib.util.find_spec("fitz") is None:
             pytest.skip("PyMuPDF not installed")
 
         paper_dir = tmp_path / "test_paper"

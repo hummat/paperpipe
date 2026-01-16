@@ -15,7 +15,7 @@ from ..core import (
     _resolve_paper_name_from_ref,
     load_index,
 )
-from ..output import echo_error, echo_progress, echo_success
+from ..output import echo_error, echo_progress, echo_success, echo_warning
 from ..paper import _regenerate_one_paper
 from ..search import _audit_paper_dir, _parse_selection_spec
 
@@ -225,9 +225,14 @@ def export(papers: tuple[str, ...], level: str, dest: Optional[str], figures: bo
             figures_dir = paper_dir / "figures"
             if figures_dir.exists() and figures_dir.is_dir():
                 dest_figures_dir = dest_path / f"{name}_figures"
-                if dest_figures_dir.exists():
-                    shutil.rmtree(dest_figures_dir)
-                shutil.copytree(figures_dir, dest_figures_dir)
+                try:
+                    if dest_figures_dir.exists():
+                        shutil.rmtree(dest_figures_dir)
+                    shutil.copytree(figures_dir, dest_figures_dir)
+                except OSError as e:
+                    # Handles PermissionError, shutil.Error (both OSError subclasses)
+                    echo_warning(f"  Failed to export figures for {name}: {e}")
+                    # Don't count as failure since main content was exported
 
         successes += 1
 

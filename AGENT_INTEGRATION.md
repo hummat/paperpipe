@@ -14,7 +14,7 @@ This repo implements methods from scientific papers. Papers are managed via `pap
   - Definitions (LaTeX): `papi show <paper> -l tex`
   - Overview: `papi show <paper> -l summary`
   - Quick TL;DR: `papi show <paper> -l tldr`
-- Direct files (if needed): `<paper_db>/papers/{paper}/equations.md`, `source.tex`, `summary.md`, `tldr.md`
+- Direct files (if needed): `<paper_db>/papers/{paper}/equations.md`, `source.tex`, `summary.md`, `tldr.md`, `figures/`
 
 MCP Tools (if configured):
 - `leann_search(index_name, query, top_k)` - Fast semantic search, returns snippets + file paths

@@ -999,6 +999,55 @@ class TestAddCommand:
         assert "computer-vision" in meta["tags"]
         assert "old-tag" in meta["tags"]
 
+    def test_add_no_figures_flag_skips_extraction(self, temp_db: Path, monkeypatch):
+        """Test --no-figures flag prevents figure extraction during add."""
+        from datetime import datetime
+
+        # Track whether extract_figures was passed as False
+        extract_figures_args = []
+
+        def mock_fetch(arxiv_id: str):
+            return {
+                "arxiv_id": arxiv_id,
+                "title": "Test Paper",
+                "authors": [],
+                "abstract": "Abstract",
+                "primary_category": "cs.CL",
+                "categories": ["cs.CL"],
+                "published": datetime(2023, 1, 1).isoformat(),
+                "updated": datetime(2023, 1, 1).isoformat(),
+                "doi": None,
+                "journal_ref": None,
+                "pdf_url": "https://arxiv.org/pdf/1706.03762",
+            }
+
+        monkeypatch.setattr(paper_mod, "fetch_arxiv_metadata", mock_fetch)
+
+        def fake_download_pdf(_arxiv_id: str, dest: Path):
+            dest.write_bytes(b"%PDF")
+            return True
+
+        def fake_download_source(_arxiv_id: str, pdir: Path, *, extract_figures=True):
+            extract_figures_args.append(extract_figures)
+            tex = r"\begin{document}\includegraphics{fig.png}\end{document}"
+            (pdir / "source.tex").write_text(tex)
+            return tex
+
+        monkeypatch.setattr(paper_mod, "download_pdf", fake_download_pdf)
+        monkeypatch.setattr(paper_mod, "download_source", fake_download_source)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["add", "1706.03762", "--no-figures", "--no-llm"])
+
+        assert result.exit_code == 0
+        # Verify extract_figures=False was passed to download_source
+        assert extract_figures_args == [False]
+        # Verify no figures directory was created
+        papers_dir = temp_db / "papers"
+        paper_dirs = list(papers_dir.iterdir())
+        assert len(paper_dirs) == 1
+        assert not (paper_dirs[0] / "figures").exists()
+
     def test_add_from_file_json(self, temp_db: Path, monkeypatch):
         """Test adding papers from a JSON file (export format)."""
         papers_json = temp_db / "papers.json"
@@ -3254,7 +3303,7 @@ class TestRegenerateCommand:
         assert result.exit_code == 0
         # Should extract figures and show warning about PDF extraction
         assert "Extracting figures from PDF" in result.output
-        assert "LaTeX tarball not available" in result.output
+        assert "source tarball not cached during add" in result.output
         assert (papers_dir / "p1" / "figures").exists()
 
     def test_regenerate_skips_figures_when_exist(self, temp_db: Path, monkeypatch):
@@ -3404,7 +3453,7 @@ class TestRegenerateCommand:
         assert result.exit_code == 0
         # Check for warning message
         assert "Extracting figures from PDF" in result.output
-        assert "LaTeX tarball not available" in result.output
+        assert "source tarball not cached" in result.output
         assert "papi add --update" in result.output
 
 
