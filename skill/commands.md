@@ -26,6 +26,7 @@
 | `papi regenerate <name> [--all]` | Regenerate summaries/equations |
 | `papi remove <name>` | Remove a paper |
 | `papi audit [--regenerate]` | Flag/fix issues in generated content |
+| `papi rebuild-index [--dry-run] [--validate]` | Rebuild index from paper directories |
 
 ## Export
 

@@ -25,7 +25,7 @@ def _scan_paper_directory(paper_dir: Path) -> Optional[dict]:
         return None
 
     try:
-        meta = json.loads(meta_path.read_text())
+        meta = json.loads(meta_path.read_text(encoding="utf-8", errors="replace"))
     except (json.JSONDecodeError, OSError) as e:
         echo_warning(f"Could not read {meta_path}: {e}")
         return None
@@ -34,53 +34,36 @@ def _scan_paper_directory(paper_dir: Path) -> Optional[dict]:
         echo_warning(f"Invalid meta.json format in {paper_dir.name}: expected dict")
         return None
 
-    # Build index entry from meta.json
-    entry: dict = {}
-
-    # Required/common fields
-    if "title" in meta:
-        entry["title"] = meta["title"]
-    if "authors" in meta:
-        entry["authors"] = meta["authors"]
-    if "arxiv_id" in meta:
-        entry["arxiv_id"] = meta["arxiv_id"]
-    if "doi" in meta:
-        entry["doi"] = meta["doi"]
-    if "tags" in meta:
-        entry["tags"] = meta["tags"]
-    if "added" in meta:
-        entry["added"] = meta["added"]
-    if "year" in meta:
-        entry["year"] = meta["year"]
-    if "venue" in meta:
-        entry["venue"] = meta["venue"]
-    if "tldr" in meta:
-        entry["tldr"] = meta["tldr"]
-    if "abstract" in meta:
-        entry["abstract"] = meta["abstract"]
-    if "url" in meta:
-        entry["url"] = meta["url"]
-    if "semantic_scholar_id" in meta:
-        entry["semantic_scholar_id"] = meta["semantic_scholar_id"]
-    if "citation_count" in meta:
-        entry["citation_count"] = meta["citation_count"]
-    if "categories" in meta:
-        entry["categories"] = meta["categories"]
-
-    return entry
+    # Build index entry from meta.json - copy known fields that exist
+    index_fields = (
+        "title",
+        "authors",
+        "arxiv_id",
+        "doi",
+        "tags",
+        "added",
+        "year",
+        "venue",
+        "tldr",
+        "abstract",
+        "url",
+        "semantic_scholar_id",
+        "citation_count",
+        "categories",
+    )
+    return {key: meta[key] for key in index_fields if key in meta}
 
 
 def _validate_paper_directory(paper_dir: Path) -> list[str]:
-    """Validate a paper directory and return list of issues found."""
+    """Validate a paper directory and return list of issues found.
+
+    Note: Only called for directories that passed _scan_paper_directory,
+    so meta.json is guaranteed to exist and be valid.
+    """
     issues: list[str] = []
 
-    # Check for meta.json
-    if not (paper_dir / "meta.json").exists():
-        issues.append("missing meta.json")
-
     # Check for PDF (expected but not strictly required)
-    pdf_path = paper_dir / "paper.pdf"
-    if not pdf_path.exists():
+    if not (paper_dir / "paper.pdf").exists():
         issues.append("missing paper.pdf")
 
     return issues
@@ -89,13 +72,32 @@ def _validate_paper_directory(paper_dir: Path) -> list[str]:
 def _backup_index(backup_path: Path) -> bool:
     """Create a backup of the current index.json.
 
-    Returns True if backup was created, False if index doesn't exist.
+    Returns True if backup was created, False if index doesn't exist or backup failed.
     """
     if not config.INDEX_FILE.exists():
         return False
 
-    shutil.copy2(config.INDEX_FILE, backup_path)
-    return True
+    try:
+        shutil.copy2(config.INDEX_FILE, backup_path)
+        return True
+    except (PermissionError, OSError) as e:
+        echo_error(f"Failed to create backup at {backup_path}: {e}")
+        return False
+
+
+def _safe_save_index(index: dict, backup_path: Optional[Path] = None) -> bool:
+    """Save index with error handling, providing recovery guidance on failure.
+
+    Returns True on success, False on failure (after printing error message).
+    """
+    try:
+        save_index(index)
+        return True
+    except (PermissionError, OSError) as e:
+        echo_error(f"Failed to save index: {e}")
+        if backup_path and backup_path.exists():
+            echo_error(f"Your previous index was backed up to: {backup_path}")
+        raise SystemExit(1)
 
 
 @click.command("rebuild-index")
@@ -136,12 +138,13 @@ def rebuild_index(dry_run: bool, backup: bool, validate: bool) -> None:
         echo_warning("No paper directories found.")
         if not dry_run:
             # Backup before overwriting with empty index
+            backup_path: Optional[Path] = None
             if backup and config.INDEX_FILE.exists():
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 backup_path = config.PAPER_DB / f"index.json.backup.{timestamp}"
                 if _backup_index(backup_path):
                     echo_progress(f"Backed up existing index to {backup_path}")
-            save_index({})
+            _safe_save_index({}, backup_path)
             echo_success("Created empty index.")
         return
 
@@ -179,6 +182,7 @@ def rebuild_index(dry_run: bool, backup: bool, validate: bool) -> None:
         return
 
     # Backup existing index
+    backup_path: Optional[Path] = None
     if backup and config.INDEX_FILE.exists():
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_path = config.PAPER_DB / f"index.json.backup.{timestamp}"
@@ -186,7 +190,7 @@ def rebuild_index(dry_run: bool, backup: bool, validate: bool) -> None:
             echo_progress(f"Backed up existing index to {backup_path}")
 
     # Save new index
-    save_index(new_index)
+    _safe_save_index(new_index, backup_path)
     echo_success(f"Rebuilt index with {len(new_index)} paper(s).")
 
     # Report validation issues
