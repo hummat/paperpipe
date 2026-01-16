@@ -305,7 +305,7 @@ def add(
     "--overwrite",
     "-o",
     default=None,
-    help="Overwrite fields: 'all' or comma-separated list (summary,equations,tags,name)",
+    help="Overwrite fields: 'all' or comma-separated list (summary,equations,tags,name,figures)",
 )
 @click.option("--name", "-n", "set_name", default=None, help="Set name directly (single paper only)")
 @click.option("--tags", "-t", "set_tags", default=None, help="Add tags (comma-separated)")
@@ -317,7 +317,7 @@ def regenerate(
     set_name: Optional[str],
     set_tags: Optional[str],
 ):
-    """Regenerate summary/equations for existing papers (by name or arXiv ID).
+    """Regenerate summary/equations/figures for existing papers (by name or arXiv ID).
 
     By default, only missing fields are generated. Use --overwrite to force regeneration:
 
@@ -325,6 +325,7 @@ def regenerate(
       --overwrite all           Regenerate everything
       --overwrite name          Regenerate name only
       --overwrite tags,tldr     Regenerate tags and TL;DR
+      --overwrite figures       Extract figures from PDF
 
     Use --name or --tags to set values directly (no LLM):
 

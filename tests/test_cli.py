@@ -3206,6 +3206,207 @@ class TestRegenerateCommand:
         assert result.exit_code != 0
         assert "invalid" in result.output.lower()
 
+    def test_regenerate_extracts_figures_when_missing(self, temp_db: Path, monkeypatch):
+        """Test that regenerate extracts figures from PDF when figures directory is missing."""
+        import sys
+
+        papers_dir = temp_db / "papers"
+        (papers_dir / "p1").mkdir(parents=True)
+        (papers_dir / "p1" / "meta.json").write_text(
+            json.dumps({"arxiv_id": "1", "title": "Paper 1", "authors": [], "abstract": ""})
+        )
+        (papers_dir / "p1" / "source.tex").write_text("\\begin{equation}x=1\\end{equation}")
+        (papers_dir / "p1" / "summary.md").write_text("summary")
+        (papers_dir / "p1" / "equations.md").write_text("equations")
+
+        # Create a PDF
+        pdf_path = papers_dir / "p1" / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\nfake pdf")
+
+        # Mock PyMuPDF module
+        class MockPage:
+            def get_images(self):
+                return [(1, 0, 0, 0, 0, 0, 0)]
+
+        class MockDoc:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def __len__(self):
+                return 1
+
+            def __getitem__(self, idx):
+                return MockPage()
+
+            def extract_image(self, xref):
+                return {"image": b"fake image data" + b"x" * 1024, "ext": "png"}
+
+            def close(self):
+                pass
+
+        mock_fitz = type("MockFitz", (), {"open": MockDoc})()
+        monkeypatch.setitem(sys.modules, "fitz", mock_fitz)
+
+        paperpipe.save_index({"p1": {"arxiv_id": "1", "title": "Paper 1", "tags": [], "added": "x"}})
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["regenerate", "p1", "--no-llm"])
+        assert result.exit_code == 0
+        # Should extract figures and show warning about PDF extraction
+        assert "Extracting figures from PDF" in result.output
+        assert "LaTeX tarball not available" in result.output
+        assert (papers_dir / "p1" / "figures").exists()
+
+    def test_regenerate_skips_figures_when_exist(self, temp_db: Path, monkeypatch):
+        """Test that regenerate skips figure extraction when figures directory exists."""
+        import sys
+
+        papers_dir = temp_db / "papers"
+        (papers_dir / "p1").mkdir(parents=True)
+        (papers_dir / "p1" / "meta.json").write_text(
+            json.dumps({"arxiv_id": "1", "title": "Paper 1", "authors": [], "abstract": ""})
+        )
+        (papers_dir / "p1" / "source.tex").write_text("\\begin{equation}x=1\\end{equation}")
+        (papers_dir / "p1" / "summary.md").write_text("summary")
+        (papers_dir / "p1" / "equations.md").write_text("equations")
+
+        # Create figures directory with existing figure
+        figures_dir = papers_dir / "p1" / "figures"
+        figures_dir.mkdir()
+        (figures_dir / "existing.png").write_bytes(b"existing figure")
+
+        # Create a PDF
+        pdf_path = papers_dir / "p1" / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\nfake pdf")
+
+        # Mock PyMuPDF - should NOT be called since figures exist
+        extract_called = []
+
+        class MockDoc:
+            def __init__(self, *args, **kwargs):
+                extract_called.append(True)
+
+        mock_fitz = type("MockFitz", (), {"open": MockDoc})()
+        monkeypatch.setitem(sys.modules, "fitz", mock_fitz)
+
+        paperpipe.save_index({"p1": {"arxiv_id": "1", "title": "Paper 1", "tags": [], "added": "x"}})
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["regenerate", "p1", "--no-llm"])
+        assert result.exit_code == 0
+        # Should NOT extract figures
+        assert "Extracting figures" not in result.output
+        # Original figure should still exist
+        assert (figures_dir / "existing.png").read_bytes() == b"existing figure"
+        # Mock should not have been called
+        assert len(extract_called) == 0
+
+    def test_regenerate_overwrite_figures_forces_extraction(self, temp_db: Path, monkeypatch):
+        """Test that --overwrite figures forces re-extraction even when figures exist."""
+        import sys
+
+        papers_dir = temp_db / "papers"
+        (papers_dir / "p1").mkdir(parents=True)
+        (papers_dir / "p1" / "meta.json").write_text(
+            json.dumps({"arxiv_id": "1", "title": "Paper 1", "authors": [], "abstract": ""})
+        )
+        (papers_dir / "p1" / "source.tex").write_text("\\begin{equation}x=1\\end{equation}")
+        (papers_dir / "p1" / "summary.md").write_text("summary")
+        (papers_dir / "p1" / "equations.md").write_text("equations")
+
+        # Create figures directory with existing figure
+        figures_dir = papers_dir / "p1" / "figures"
+        figures_dir.mkdir()
+        (figures_dir / "old.png").write_bytes(b"old figure")
+
+        # Create a PDF
+        pdf_path = papers_dir / "p1" / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\nfake pdf")
+
+        # Mock PyMuPDF module
+        class MockPage:
+            def get_images(self):
+                return [(1, 0, 0, 0, 0, 0, 0)]
+
+        class MockDoc:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def __len__(self):
+                return 1
+
+            def __getitem__(self, idx):
+                return MockPage()
+
+            def extract_image(self, xref):
+                return {"image": b"new image data" + b"x" * 1024, "ext": "png"}
+
+            def close(self):
+                pass
+
+        mock_fitz = type("MockFitz", (), {"open": MockDoc})()
+        monkeypatch.setitem(sys.modules, "fitz", mock_fitz)
+
+        paperpipe.save_index({"p1": {"arxiv_id": "1", "title": "Paper 1", "tags": [], "added": "x"}})
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["regenerate", "p1", "--no-llm", "-o", "figures"])
+        assert result.exit_code == 0
+        # Should extract figures with warning
+        assert "Extracting figures from PDF" in result.output
+        assert (figures_dir / "figure_01.png").exists()
+
+    def test_regenerate_figures_warning_message(self, temp_db: Path, monkeypatch):
+        """Test that warning mentions using 'papi add --update' for LaTeX extraction."""
+        import sys
+
+        papers_dir = temp_db / "papers"
+        (papers_dir / "p1").mkdir(parents=True)
+        (papers_dir / "p1" / "meta.json").write_text(
+            json.dumps({"arxiv_id": "1", "title": "Paper 1", "authors": [], "abstract": ""})
+        )
+        (papers_dir / "p1" / "source.tex").write_text("\\begin{equation}x=1\\end{equation}")
+        (papers_dir / "p1" / "summary.md").write_text("summary")
+        (papers_dir / "p1" / "equations.md").write_text("equations")
+
+        # Create a PDF
+        pdf_path = papers_dir / "p1" / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\nfake pdf")
+
+        # Mock PyMuPDF module
+        class MockPage:
+            def get_images(self):
+                return [(1, 0, 0, 0, 0, 0, 0)]
+
+        class MockDoc:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def __len__(self):
+                return 1
+
+            def __getitem__(self, idx):
+                return MockPage()
+
+            def extract_image(self, xref):
+                return {"image": b"fake" + b"x" * 1024, "ext": "png"}
+
+            def close(self):
+                pass
+
+        mock_fitz = type("MockFitz", (), {"open": MockDoc})()
+        monkeypatch.setitem(sys.modules, "fitz", mock_fitz)
+
+        paperpipe.save_index({"p1": {"arxiv_id": "1", "title": "Paper 1", "tags": [], "added": "x"}})
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["regenerate", "p1", "--no-llm"])
+        assert result.exit_code == 0
+        # Check for warning message
+        assert "Extracting figures from PDF" in result.output
+        assert "LaTeX tarball not available" in result.output
+        assert "papi add --update" in result.output
+
 
 class TestRemoveCommand:
     def test_remove_by_arxiv_url(self, temp_db: Path):

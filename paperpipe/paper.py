@@ -1155,6 +1155,8 @@ def _regenerate_one_paper(
     summary_path = paper_dir / "summary.md"
     equations_path = paper_dir / "equations.md"
     tldr_path = paper_dir / "tldr.md"
+    figures_dir = paper_dir / "figures"
+    pdf_path = paper_dir / "paper.pdf"
 
     # Determine what needs regeneration
     if overwrite_all:
@@ -1163,20 +1165,24 @@ def _regenerate_one_paper(
         do_tags = True
         do_name = True
         do_tldr = True
+        do_figures = True
     elif overwrite_fields:
         do_summary = "summary" in overwrite_fields
         do_equations = "equations" in overwrite_fields
         do_tags = "tags" in overwrite_fields
         do_name = "name" in overwrite_fields
         do_tldr = "tldr" in overwrite_fields
+        do_figures = "figures" in overwrite_fields
     else:
         do_summary = not summary_path.exists() or summary_path.stat().st_size == 0
         do_equations = not equations_path.exists() or equations_path.stat().st_size == 0
         do_tags = not meta.get("tags")
         do_name = _is_arxiv_id_name(name)
         do_tldr = not tldr_path.exists() or tldr_path.stat().st_size == 0
+        # Extract figures if directory missing or empty
+        do_figures = not figures_dir.exists() or not any(figures_dir.iterdir())
 
-    if not (do_summary or do_equations or do_tags or do_name or do_tldr):
+    if not (do_summary or do_equations or do_tags or do_name or do_tldr or do_figures):
         echo_progress(f"  {name}: nothing to regenerate")
         return True, None
 
@@ -1191,6 +1197,8 @@ def _regenerate_one_paper(
         actions.append("name")
     if do_tldr:
         actions.append("tldr")
+    if do_figures:
+        actions.append("figures")
     echo_progress(f"Regenerating {name}: {', '.join(actions)}")
 
     new_name: Optional[str] = None
@@ -1260,6 +1268,19 @@ def _regenerate_one_paper(
     if llm_tags:
         meta["tags"] = normalize_tags([*meta.get("tags", []), *llm_tags])
         updated_meta = True
+
+    # Extract figures if requested
+    if do_figures:
+        if pdf_path.exists():
+            # We don't have the original LaTeX tarball, only source.tex (text)
+            # So we can only extract from PDF
+            echo_warning(
+                "  Extracting figures from PDF (LaTeX tarball not available). "
+                "Use 'papi add --update' for LaTeX-based extraction."
+            )
+            _extract_figures_from_pdf(pdf_path, paper_dir)
+        else:
+            echo_warning("  Cannot extract figures: no PDF file found")
 
     if updated_meta:
         meta_path.write_text(json.dumps(meta, indent=2))
