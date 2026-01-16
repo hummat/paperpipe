@@ -1363,6 +1363,112 @@ class TestAddCommand:
         # Should handle rate limiting gracefully
         assert result.exit_code != 0
 
+    def test_add_semantic_scholar_no_arxiv_id_fails(self, temp_db: Path, monkeypatch):
+        """Test that S2 papers without arXiv IDs fail with non-zero exit code."""
+
+        # Mock Semantic Scholar API response WITHOUT arXiv ID
+        def mock_semantic_scholar_request(url, params=None, timeout=None):
+            class MockResponse:
+                def __init__(self):
+                    self.status_code = 200
+                    self._json = {
+                        "title": "Non-arXiv Paper",
+                        "authors": [{"name": "John Doe"}],
+                        "abstract": "This paper is not on arXiv.",
+                        "year": 2023,
+                        "venue": "Some Journal",
+                        "url": "https://www.semanticscholar.org/paper/no-arxiv-id",
+                        "externalIds": {"DOI": "10.1234/no-arxiv"},  # No ArXiv key
+                    }
+
+                def json(self):
+                    return self._json
+
+                def raise_for_status(self):
+                    pass
+
+            return MockResponse()
+
+        monkeypatch.setattr("requests.get", mock_semantic_scholar_request)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["add", "https://www.semanticscholar.org/paper/no-arxiv-id", "--no-llm"])
+
+        # Should fail with non-zero exit code
+        assert result.exit_code != 0
+        assert "does not have an arXiv ID" in result.output
+        assert "No papers to add" in result.output
+
+    def test_add_semantic_scholar_mixed_with_arxiv_reports_failures(self, temp_db: Path, monkeypatch):
+        """Test that mixing S2 papers (some with, some without arXiv IDs) reports failures correctly."""
+
+        call_count = [0]
+
+        def mock_semantic_scholar_request(url, params=None, timeout=None):
+            call_count[0] += 1
+
+            class MockResponse:
+                def __init__(self, has_arxiv: bool):
+                    self.status_code = 200
+                    external_ids = {"DOI": "10.1234/test"}
+                    if has_arxiv:
+                        external_ids["ArXiv"] = "2401.00001"
+                    self._json = {
+                        "title": "Test Paper",
+                        "authors": [{"name": "John Doe"}],
+                        "abstract": "Abstract",
+                        "year": 2024,
+                        "externalIds": external_ids,
+                    }
+
+                def json(self):
+                    return self._json
+
+                def raise_for_status(self):
+                    pass
+
+            # First call has arXiv ID, second doesn't
+            return MockResponse(has_arxiv=(call_count[0] == 1))
+
+        monkeypatch.setattr("requests.get", mock_semantic_scholar_request)
+
+        # Mock arXiv fetch for the one that has an arXiv ID
+        def mock_fetch(arxiv_id):
+            return {
+                "arxiv_id": arxiv_id,
+                "title": f"Title {arxiv_id}",
+                "authors": [],
+                "abstract": "Abstract",
+                "primary_category": "cs.AI",
+                "categories": ["cs.AI"],
+                "published": "2024-01-01",
+                "pdf_url": f"http://arxiv.org/pdf/{arxiv_id}",
+                "updated": "2024-01-01",
+            }
+
+        monkeypatch.setattr(paper_mod, "fetch_arxiv_metadata", mock_fetch)
+        monkeypatch.setattr(paper_mod, "download_pdf", lambda *args: True)
+        monkeypatch.setattr(paper_mod, "download_source", lambda *args, **kwargs: None)
+
+        runner = CliRunner()
+        # Add two S2 papers: first has arXiv ID, second doesn't
+        result = runner.invoke(
+            cli_mod.cli,
+            [
+                "add",
+                "https://www.semanticscholar.org/paper/has-arxiv",
+                "https://www.semanticscholar.org/paper/no-arxiv",
+                "--no-llm",
+            ],
+        )
+
+        # Should exit with failure due to the paper without arXiv ID
+        assert result.exit_code != 0
+        assert "does not have an arXiv ID" in result.output
+        # Should still report the successful addition
+        assert "added 1" in result.output
+        assert "1 failed" in result.output
+
 
 class TestAddMultiplePapers:
     """Tests for adding multiple papers at once."""

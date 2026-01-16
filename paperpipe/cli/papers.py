@@ -122,6 +122,8 @@ def add(
 
     # Collect tasks: list of (arxiv_id, name_override, tags_override)
     tasks: list[tuple[str, Optional[str], Optional[str]]] = []
+    # Track S2 papers without arXiv IDs (these are failures we can't process)
+    s2_no_arxiv_failures: list[str] = []
 
     # 1. From CLI args
     for identifier in arxiv_ids:
@@ -135,11 +137,11 @@ def add(
                 # If we found an arXiv ID, use that for paperpipe
                 tasks.append((metadata["arxiv_id"], name, tags))
             elif metadata:
-                # If we have metadata but no arXiv ID, we could potentially add support
-                # for creating metadata-only entries in the future
+                # If we have metadata but no arXiv ID, track as failure
                 echo_warning(
                     f"Paper {identifier} does not have an arXiv ID. Currently only arXiv papers are supported."
                 )
+                s2_no_arxiv_failures.append(identifier)
                 continue
             else:
                 # Failed to fetch metadata
@@ -224,6 +226,13 @@ def add(
                     tasks.append((line, None, tags))
 
     if not tasks:
+        if s2_no_arxiv_failures:
+            # All inputs were S2 papers without arXiv IDs - this is a failure
+            echo_error(
+                f"No papers to add: {len(s2_no_arxiv_failures)} Semantic Scholar paper(s) "
+                "had no arXiv ID and could not be processed."
+            )
+            raise SystemExit(1)
         click.echo("No papers to add.")
         return
 
@@ -234,7 +243,8 @@ def add(
     added = 0
     updated = 0
     skipped = 0
-    failures = 0
+    # Include S2 papers without arXiv IDs in the failure count
+    failures = len(s2_no_arxiv_failures)
 
     for i, (arxiv_id, p_name, p_tags) in enumerate(tasks, 1):
         if len(tasks) > 1:
@@ -269,8 +279,9 @@ def add(
         else:
             failures += 1
 
-    # Print summary for multiple papers
-    if len(tasks) > 1:
+    # Print summary for multiple papers (including S2 failures that weren't added to tasks)
+    total_inputs = len(tasks) + len(s2_no_arxiv_failures)
+    if total_inputs > 1:
         click.echo()
         if failures == 0:
             parts = []
