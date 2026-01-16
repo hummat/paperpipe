@@ -59,6 +59,9 @@ dev = [
     "pytest-cov>=7.0.0",
     "ruff>=0.1.0",
     "twine>=5.0.0",
+    # Optional deps needed for unit test coverage (not integration tests)
+    "bibtexparser>=1.4.0",
+    "pymupdf>=1.24.0",
 ]
 
 [project.scripts]

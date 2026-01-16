@@ -279,54 +279,67 @@ class TestExtractFiguresFromPdf:
         assert count == 0
         assert not (paper_dir / "figures").exists()
 
-    @pytest.mark.skipif(
-        not hasattr(paper_mod, "fitz") and paper_mod.__dict__.get("fitz") is None, reason="PyMuPDF not installed"
-    )
-    def test_extracts_images_from_pdf(self, tmp_path, monkeypatch):
-        """Test basic PDF image extraction with mocked PyMuPDF."""
-        if importlib.util.find_spec("fitz") is None:
-            pytest.skip("PyMuPDF not installed")
+    @pytest.mark.skipif(importlib.util.find_spec("fitz") is None, reason="PyMuPDF not installed")
+    def test_extracts_images_from_pdf(self, tmp_path):
+        """Test PDF image extraction with a real PDF containing an embedded image."""
+        import fitz  # PyMuPDF
 
-        # Create a minimal PDF with an image (mocked)
         paper_dir = tmp_path / "test_paper"
         paper_dir.mkdir()
         pdf_path = paper_dir / "paper.pdf"
 
-        # Mock PyMuPDF to return a fake image
-        class MockImage:
-            def __init__(self):
-                self.image = b"fake image data that is longer than 1KB" + b"x" * 1024
-                self.ext = "png"
+        # Create a minimal PDF with an embedded image using PyMuPDF
+        doc = fitz.open()
+        page = doc.new_page(width=200, height=200)
 
-        class MockPage:
-            def get_images(self):
-                return [(1, 0, 0, 0, 0, 0, 0)]  # (xref, ...)
+        # Create a simple PNG image (50x50 red square) as bytes
+        # Using a minimal valid PNG structure
+        import struct
+        import zlib
 
-        class MockDoc:
-            def __init__(self, *args, **kwargs):
-                pass
+        def create_png(width, height):
+            """Create a PNG with random noise (won't compress well, ensuring > 1KB)."""
+            import random
 
-            def __len__(self):
-                return 1
+            random.seed(42)  # Reproducible
 
-            def __getitem__(self, idx):
-                return MockPage()
+            def png_chunk(chunk_type, data):
+                chunk_len = struct.pack(">I", len(data))
+                chunk_crc = struct.pack(">I", zlib.crc32(chunk_type + data) & 0xFFFFFFFF)
+                return chunk_len + chunk_type + data + chunk_crc
 
-            def extract_image(self, xref):
-                return {"image": b"fake image data" + b"x" * 1024, "ext": "png"}
+            # PNG signature
+            signature = b"\x89PNG\r\n\x1a\n"
+            # IHDR chunk
+            ihdr_data = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+            ihdr = png_chunk(b"IHDR", ihdr_data)
+            # IDAT chunk (image data) - random RGB pixels don't compress well
+            raw_data = b""
+            for _ in range(height):
+                raw_data += b"\x00"  # filter byte
+                raw_data += bytes(random.randint(0, 255) for _ in range(width * 3))
+            compressed = zlib.compress(raw_data)
+            idat = png_chunk(b"IDAT", compressed)
+            # IEND chunk
+            iend = png_chunk(b"IEND", b"")
+            return signature + ihdr + idat + iend
 
-            def close(self):
-                pass
+        # Create a PNG with random noise (must be > 1KB to pass the size filter in extraction)
+        png_data = create_png(50, 50)  # 50x50 with random data > 1KB
 
-        monkeypatch.setattr(paper_mod, "fitz", type("fitz", (), {"open": MockDoc}))
+        # Insert the image into the PDF
+        rect = fitz.Rect(10, 10, 110, 110)
+        page.insert_image(rect, stream=png_data)
+        doc.save(str(pdf_path))
+        doc.close()
 
         count = paper_mod._extract_figures_from_pdf(pdf_path, paper_dir)
 
-        # With mock, should extract 1 image
-        assert count == 1
+        # Should extract at least 1 image (the red square we inserted)
+        assert count >= 1
         assert (paper_dir / "figures").exists()
 
-    def test_handles_pdf_open_failure(self, tmp_path, monkeypatch):
+    def test_handles_pdf_open_failure(self, tmp_path):
         """Test returns 0 when PDF cannot be opened."""
         if importlib.util.find_spec("fitz") is None:
             pytest.skip("PyMuPDF not installed")
@@ -372,7 +385,7 @@ class TestFigureExtractionIntegration:
             def raise_for_status(self):
                 pass
 
-        monkeypatch.setattr(requests, "get", lambda *args, **kwargs: MockResponse())
+        monkeypatch.setattr(requests, "get", lambda *_args, **_kwargs: MockResponse())  # pyright: ignore[reportUnusedVariable]
 
         paper_dir = tmp_path / "test_paper"
         paper_dir.mkdir()
@@ -411,7 +424,7 @@ class TestFigureExtractionIntegration:
             def raise_for_status(self):
                 pass
 
-        monkeypatch.setattr(requests, "get", lambda *args, **kwargs: MockResponse())
+        monkeypatch.setattr(requests, "get", lambda *_args, **_kwargs: MockResponse())  # pyright: ignore[reportUnusedVariable]
 
         paper_dir = tmp_path / "test_paper"
         paper_dir.mkdir()
