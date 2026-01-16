@@ -118,6 +118,7 @@ pip install -e ".[all]"
 | `papi index` | Build/update the retrieval index |
 | `papi tags` | List all tags |
 | `papi path` | Print database location |
+| `papi rebuild-index` | Rebuild index.json from on-disk paper directories (recovery) |
 
 Run `papi --help` or `papi <command> --help` for full options.
 
