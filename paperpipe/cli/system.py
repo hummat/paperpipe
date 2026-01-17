@@ -1,7 +1,8 @@
-"""System commands: install, uninstall, and path."""
+"""System commands: install, uninstall, path, and docs."""
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 import click
@@ -188,3 +189,25 @@ def uninstall(components: tuple[str, ...], targets: tuple[str, ...], force: bool
         _uninstall_prompts(targets=non_repo_targets, force=force)
     if want_skill:
         _uninstall_skill(targets=non_repo_targets, force=force)
+
+
+@click.command("docs")
+def docs() -> None:
+    """Print the agent integration snippet (AGENT_INTEGRATION.md content).
+
+    Use this to get the current agent integration snippet for your project's
+    CLAUDE.md, AGENTS.md, or similar agent instructions file.
+
+    \b
+    Examples:
+        papi docs                       # Print snippet to stdout
+        papi docs > ./AGENTS.md         # Write to file
+    """
+    module_dir = Path(__file__).resolve().parent.parent  # paperpipe/
+    root_dir = module_dir.parent
+    docs_path = root_dir / "AGENT_INTEGRATION.md"
+
+    if not docs_path.exists():
+        raise click.ClickException(f"AGENT_INTEGRATION.md not found at {docs_path}")
+
+    click.echo(docs_path.read_text())
