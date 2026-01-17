@@ -5,6 +5,7 @@
 | Command | Description |
 |---------|-------------|
 | `papi path` | Print database location |
+| `papi docs` | Print agent integration snippet |
 | `papi list [--tag TAG]` | List papers (optionally filtered) |
 | `papi tags` | List all tags with counts |
 | `papi search "query"` | Ranked search (BM25 if `search.db` exists) |

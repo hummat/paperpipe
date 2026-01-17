@@ -118,6 +118,7 @@ pip install -e ".[all]"
 | `papi index` | Build/update the retrieval index |
 | `papi tags` | List all tags |
 | `papi path` | Print database location |
+| `papi docs` | Print agent integration snippet (for CLAUDE.md/AGENTS.md) |
 | `papi rebuild-index` | Rebuild index.json from on-disk paper directories (recovery) |
 
 Run `papi --help` or `papi <command> --help` for full options.
@@ -241,7 +242,18 @@ After installation, your agent can:
 - Call MCP tools like `retrieve_chunks` for RAG retrieval
 - Verify code against paper equations
 
-For a ready-to-paste snippet for your repo's agent instructions, see [AGENT_INTEGRATION.md](AGENT_INTEGRATION.md).
+### Custom prompts
+
+| Prompt | Description |
+|--------|-------------|
+| `/papi` | Route questions to the cheapest papi command |
+| `/papi-init` | Add/update PaperPipe integration in your project's AGENTS.md/CLAUDE.md |
+| `/verify-with-paper` | Verify code against paper equations |
+| `/ground-with-paper` | Ground responses in paper excerpts |
+| `/compare-papers` | Compare multiple papers for a decision |
+| `/curate-paper-note` | Create a project note from paper excerpts |
+
+For a ready-to-paste snippet for your repo's agent instructions, run `papi docs` or see [AGENT_INTEGRATION.md](AGENT_INTEGRATION.md).
 
 ### What the agent sees
 
