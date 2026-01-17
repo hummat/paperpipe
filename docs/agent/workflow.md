@@ -10,21 +10,6 @@
 4. **Implement** — follow Code Workflow in `AGENTS.md` (or `CLAUDE.md`/`GEMINI.md`, which are symlinks)
 5. **Create PR** — use the PR template, reference issue (`Closes #N`), fill out all sections
 
-## Issue Labels
-
-Always add appropriate labels when creating issues. Common labels:
-
-| Label | Use for |
-|-------|---------|
-| `enhancement` | New features or improvements |
-| `bug` | Something isn't working |
-| `CLI` | Changes to CLI commands/flags |
-| `UX` | User experience improvements |
-| `documentation` | Docs-only changes |
-| `recovery` | Data recovery / repair features |
-
-Check existing issues for label patterns: `gh issue list --repo hummat/paperpipe`
-
 ## Trivial Changes
 
 Skip issue for typos, small fixes, docs-only changes. Branch + PR is still recommended.
