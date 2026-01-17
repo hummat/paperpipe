@@ -1,6 +1,8 @@
 # Agent Integration Snippet (PaperPipe)
 
-Copy/paste this into your repo’s agent instructions file (`AGENTS.md`, or `CLAUDE.md` / `GEMINI.md` / etc):
+Run `papi docs` to output this snippet, or copy/paste into your repo's agent instructions file (`AGENTS.md`, or `CLAUDE.md` / `GEMINI.md` / etc).
+
+**Tip:** Use `/papi-init` to automatically add/update this snippet in your project's agent instructions file.
 
 ```markdown
 ## Paper References (PaperPipe)

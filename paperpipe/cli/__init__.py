@@ -12,7 +12,7 @@ from .models import models
 from .papers import add, notes, regenerate, remove, show
 from .rebuild import rebuild_index
 from .search_cli import list_papers, search, tags
-from .system import install, path, uninstall
+from .system import docs, install, path, uninstall
 
 
 @click.group()
@@ -44,4 +44,5 @@ cli.add_command(tags)
 cli.add_command(path)
 cli.add_command(install)
 cli.add_command(uninstall)
+cli.add_command(docs)
 cli.add_command(rebuild_index)

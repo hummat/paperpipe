@@ -1,5 +1,7 @@
 # Feature Workflow
 
+**Read this file before starting any feature or non-trivial change.**
+
 ## New Features
 
 1. **Discuss/plan** — clarify requirements, identify affected files
@@ -7,6 +9,21 @@
 3. **Create branch** — `git checkout -b feat/<short-name>`
 4. **Implement** — follow Code Workflow in `AGENTS.md` (or `CLAUDE.md`/`GEMINI.md`, which are symlinks)
 5. **Create PR** — use the PR template, reference issue (`Closes #N`), fill out all sections
+
+## Issue Labels
+
+Always add appropriate labels when creating issues. Common labels:
+
+| Label | Use for |
+|-------|---------|
+| `enhancement` | New features or improvements |
+| `bug` | Something isn't working |
+| `CLI` | Changes to CLI commands/flags |
+| `UX` | User experience improvements |
+| `documentation` | Docs-only changes |
+| `recovery` | Data recovery / repair features |
+
+Check existing issues for label patterns: `gh issue list --repo hummat/paperpipe`
 
 ## Trivial Changes
 
