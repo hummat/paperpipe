@@ -335,6 +335,8 @@ def _install_mcp(*, targets: tuple[str, ...], name: str, embedding: Optional[str
                     successes.append(f"repo/gemini:{spec.name}")
                 elif gemini_status == "skipped":
                     successes.append(f"repo/gemini:{spec.name}")
+            # Note: Codex doesn't support repo-local config
+            echo_warning("Note: Codex CLI has no repo-local config; use `papi install mcp --codex` for global install")
             continue
 
         if target == "codex":
