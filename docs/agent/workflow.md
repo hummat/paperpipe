@@ -70,3 +70,32 @@ papi ...
 - [x] I have searched existing issues
 - [x] I have tried with the latest version
 ```
+
+## Creating PRs via CLI/API (for agents)
+
+Unlike issues, `gh pr create` supports `--template` to use `.github/PULL_REQUEST_TEMPLATE.md`. However, if you pass `--body`, it overrides the template. The GitHub API/MCP also doesn't support templates.
+
+When creating PRs programmatically, structure the body to match `.github/PULL_REQUEST_TEMPLATE.md`:
+
+```markdown
+## Summary
+[Brief description]
+
+Closes: #[issue number]
+
+## Changes
+- [Change 1]
+- [Change 2]
+
+## Type of Change
+- [x] Bug fix / New feature / etc.
+
+## Testing
+- [x] Ran `make check` (or equivalent)
+- [x] Added/updated tests
+- [x] Tested CLI manually
+
+## Checklist
+- [x] Code follows existing style
+- [x] Documentation updated if needed
+```
