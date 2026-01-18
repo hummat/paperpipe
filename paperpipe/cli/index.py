@@ -510,7 +510,7 @@ def index_cmd(
     if returncode == 0 and backend == "pqa":
         try:
             # Import here to avoid issues if MCP isn't installed
-            from paperpipe.mcp_server import _write_index_metadata
+            from paperpipe.paperqa_mcp_server import _write_index_metadata
 
             # Extract values used for indexing
             index_dir_for_meta = Path(index_dir_raw) if index_dir_raw else default_pqa_index_dir()

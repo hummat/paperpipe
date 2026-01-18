@@ -276,7 +276,7 @@ This is what makes verification possible — the agent can compare your code sym
 ### MCP servers
 
 paperpipe provides MCP servers for retrieval-only workflows:
-- **PaperQA2 retrieval**: raw chunks + citations (via `paperqa_mcp_server`)
+- **PaperQA2 retrieval**: raw chunks + citations (via `paperqa_mcp`)
 - **LEANN search**: fast semantic search over papers (via `leann_mcp`)
 
 MCP servers are configured automatically when you run `papi install mcp`. The install command creates the appropriate configuration files for your agent (Claude Code, Codex CLI, or Gemini CLI).
@@ -291,7 +291,7 @@ papi install mcp --claude
 papi install mcp --codex
 papi install mcp --gemini
 
-# Install repo-local MCP configs (project scope)
+# Install repo-local MCP configs (Claude + Gemini only; Codex has no repo-local support)
 papi install mcp --repo
 
 # Customize embedding model

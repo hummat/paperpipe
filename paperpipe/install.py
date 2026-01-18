@@ -181,10 +181,16 @@ def _install_mcp(*, targets: tuple[str, ...], name: str, embedding: Optional[str
             return False
         import importlib.util
 
-        return (
-            importlib.util.find_spec("mcp.server.fastmcp") is not None
-            and importlib.util.find_spec("paperqa") is not None
-        )
+        try:
+            return (
+                importlib.util.find_spec("mcp.server.fastmcp") is not None
+                and importlib.util.find_spec("paperqa") is not None
+            )
+        except (ImportError, ModuleNotFoundError):
+            return False
+
+    def _leann_mcp_is_available() -> bool:
+        return shutil.which("leann_mcp") is not None
 
     paperqa_name = (name or "").strip()
 
@@ -197,10 +203,21 @@ def _install_mcp(*, targets: tuple[str, ...], name: str, embedding: Optional[str
         servers.append(
             McpServerSpec(
                 name=paperqa_name,
-                command="paperqa_mcp_server",
+                command="paperqa_mcp",
                 args=(),
                 env={"PAPERQA_EMBEDDING": embedding_model},
-                description="PaperQA2 and LEANN retrieval search",
+                description="PaperQA2 retrieval search",
+            )
+        )
+
+    if _leann_mcp_is_available():
+        servers.append(
+            McpServerSpec(
+                name="leann",
+                command="leann_mcp",
+                args=(),
+                env={},
+                description="LEANN semantic code search",
             )
         )
 
@@ -590,7 +607,8 @@ def _uninstall_mcp(*, targets: tuple[str, ...], name: str, force: bool) -> None:
     if not paperqa_name:
         raise click.UsageError("--name must be non-empty")
 
-    server_keys = [paperqa_name]
+    # Uninstall both paperqa and leann servers
+    server_keys = [paperqa_name, "leann"]
 
     uninstall_targets = set(targets) if targets else {"claude", "codex", "gemini"}
     successes: list[str] = []
@@ -649,7 +667,9 @@ def _uninstall_mcp(*, targets: tuple[str, ...], name: str, force: bool) -> None:
 
             for key in server_keys:
                 proc = subprocess.run(["claude", "mcp", "remove", key], capture_output=True, text=True)
-                if proc.returncode != 0 and not force:
+                # "No MCP server found" is not a failure — nothing to remove
+                not_found = "no mcp server found" in (proc.stdout + proc.stderr).lower()
+                if proc.returncode != 0 and not not_found and not force:
                     echo_warning(f"claude: failed to remove {key!r} via `claude mcp remove`")
                     if proc.stdout.strip():
                         echo(proc.stdout.rstrip("\n"))
@@ -657,6 +677,8 @@ def _uninstall_mcp(*, targets: tuple[str, ...], name: str, force: bool) -> None:
                         echo(proc.stderr.rstrip("\n"), err=True)
                     failures.append(f"claude:{key}")
                     continue
+                if not_found:
+                    continue  # Silently skip — nothing to remove
                 echo_success(f"claude: removed {key!r}")
                 successes.append(f"claude:{key}")
             continue
@@ -685,7 +707,12 @@ def _uninstall_mcp(*, targets: tuple[str, ...], name: str, force: bool) -> None:
 
             for key in server_keys:
                 proc = subprocess.run(["codex", "mcp", "remove", key], capture_output=True, text=True)
-                if proc.returncode != 0 and not force:
+                # "No MCP server" / "not found" is not a failure — nothing to remove
+                not_found = (
+                    "no mcp server" in (proc.stdout + proc.stderr).lower()
+                    or "not found" in (proc.stdout + proc.stderr).lower()
+                )
+                if proc.returncode != 0 and not not_found and not force:
                     echo_warning(f"codex: failed to remove {key!r} via `codex mcp remove`")
                     if proc.stdout.strip():
                         echo(proc.stdout.rstrip("\n"))
@@ -693,6 +720,8 @@ def _uninstall_mcp(*, targets: tuple[str, ...], name: str, force: bool) -> None:
                         echo(proc.stderr.rstrip("\n"), err=True)
                     failures.append(f"codex:{key}")
                     continue
+                if not_found:
+                    continue  # Silently skip — nothing to remove
                 echo_success(f"codex: removed {key!r}")
                 successes.append(f"codex:{key}")
             continue
@@ -705,7 +734,12 @@ def _uninstall_mcp(*, targets: tuple[str, ...], name: str, force: bool) -> None:
                         capture_output=True,
                         text=True,
                     )
-                    if proc.returncode != 0 and not force:
+                    # "No MCP server" / "not found" is not a failure — nothing to remove
+                    not_found = (
+                        "no mcp server" in (proc.stdout + proc.stderr).lower()
+                        or "not found" in (proc.stdout + proc.stderr).lower()
+                    )
+                    if proc.returncode != 0 and not not_found and not force:
                         echo_warning(f"gemini: failed to remove {key!r} via `gemini mcp remove`")
                         if proc.stdout.strip():
                             echo(proc.stdout.rstrip("\n"))
@@ -713,6 +747,8 @@ def _uninstall_mcp(*, targets: tuple[str, ...], name: str, force: bool) -> None:
                             echo(proc.stderr.rstrip("\n"), err=True)
                         failures.append(f"gemini:{key}")
                         continue
+                    if not_found:
+                        continue  # Silently skip — nothing to remove
                     echo_success(f"gemini: removed {key!r}")
                     successes.append(f"gemini:{key}")
 
