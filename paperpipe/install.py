@@ -194,6 +194,10 @@ def _install_mcp(*, targets: tuple[str, ...], name: str, embedding: Optional[str
 
     paperqa_name = (name or "").strip()
 
+    # Reject names that collide with the fixed LEANN server name
+    if paperqa_name.lower() == "leann":
+        raise click.UsageError("--name 'leann' is reserved for the LEANN MCP server; choose a different name")
+
     embedding_model = (embedding or "").strip() if embedding else default_pqa_embedding_model()
 
     servers: list[McpServerSpec] = []
