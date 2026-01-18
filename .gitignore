@@ -10,6 +10,8 @@ __pycache__/
 .mypy_cache/
 .vscode/
 .leann/
+.gemini/
+.mcp.json
 env/
 venv/
 build/
