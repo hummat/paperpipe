@@ -181,12 +181,22 @@ def _install_mcp(*, targets: tuple[str, ...], name: str, embedding: Optional[str
             return False
         import importlib.util
 
-        return (
-            importlib.util.find_spec("mcp.server.fastmcp") is not None
-            and importlib.util.find_spec("paperqa") is not None
-        )
+        try:
+            return (
+                importlib.util.find_spec("mcp.server.fastmcp") is not None
+                and importlib.util.find_spec("paperqa") is not None
+            )
+        except (ImportError, ModuleNotFoundError):
+            return False
+
+    def _leann_mcp_is_available() -> bool:
+        return shutil.which("leann_mcp") is not None
 
     paperqa_name = (name or "").strip()
+
+    # Reject names that collide with the fixed LEANN server name
+    if paperqa_name.lower() == "leann":
+        raise click.UsageError("--name 'leann' is reserved for the LEANN MCP server; choose a different name")
 
     embedding_model = (embedding or "").strip() if embedding else default_pqa_embedding_model()
 
@@ -197,10 +207,21 @@ def _install_mcp(*, targets: tuple[str, ...], name: str, embedding: Optional[str
         servers.append(
             McpServerSpec(
                 name=paperqa_name,
-                command="paperqa_mcp_server",
+                command="paperqa_mcp",
                 args=(),
                 env={"PAPERQA_EMBEDDING": embedding_model},
-                description="PaperQA2 and LEANN retrieval search",
+                description="PaperQA2 retrieval search",
+            )
+        )
+
+    if _leann_mcp_is_available():
+        servers.append(
+            McpServerSpec(
+                name="leann",
+                command="leann_mcp",
+                args=(),
+                env={},
+                description="LEANN semantic code search",
             )
         )
 
@@ -256,6 +277,41 @@ def _install_mcp(*, targets: tuple[str, ...], name: str, embedding: Optional[str
 
         mcp_servers[server_key] = entry
         return "written" if _write_json_object(path, obj, where=where) else "error"
+
+    def _install_codex_global() -> None:
+        """Install MCP servers to Codex globally (Codex has no repo-local config)."""
+        if not shutil.which("codex"):
+            echo_warning("codex: `codex` not found on PATH; run this manually:")
+            for spec in servers:
+                env_flags = " ".join([f"--env {k}={v}" for k, v in spec.env.items()])
+                env_flags = f" {env_flags}" if env_flags else ""
+                echo(f"  codex mcp add {spec.name}{env_flags} -- {spec.command}")
+            return
+
+        for spec in servers:
+            if force:
+                subprocess.run(["codex", "mcp", "remove", spec.name], capture_output=True, text=True)
+
+            cmd = ["codex", "mcp", "add", spec.name]
+            for k, v in spec.env.items():
+                cmd.extend(["--env", f"{k}={v}"])
+            cmd.extend(["--", spec.command, *spec.args])
+
+            proc = subprocess.run(cmd, capture_output=True, text=True)
+            if proc.returncode != 0:
+                echo_warning(f"codex: failed to install {spec.name!r} via `codex mcp add`")
+                if proc.stdout.strip():
+                    echo(proc.stdout.rstrip("\n"))
+                if proc.stderr.strip():
+                    echo(proc.stderr.rstrip("\n"), err=True)
+                echo("Try re-running with --force, or run manually:")
+                env_flags = " ".join([f"--env {k}={v}" for k, v in spec.env.items()])
+                env_flags = f" {env_flags}" if env_flags else ""
+                echo(f"  codex mcp add {spec.name}{env_flags} -- {spec.command}")
+                continue
+
+            echo_success(f"codex: installed {spec.name!r}")
+            successes.append(f"codex:{spec.name}")
 
     for target in sorted(install_targets):
         if target == "claude":
@@ -314,42 +370,12 @@ def _install_mcp(*, targets: tuple[str, ...], name: str, embedding: Optional[str
                     successes.append(f"repo/gemini:{spec.name}")
                 elif gemini_status == "skipped":
                     successes.append(f"repo/gemini:{spec.name}")
+            # Codex has no repo-local config, so install globally
+            _install_codex_global()
             continue
 
         if target == "codex":
-            if not shutil.which("codex"):
-                echo_warning("codex: `codex` not found on PATH; run this manually:")
-                for spec in servers:
-                    env_flags = " ".join([f"--env {k}={v}" for k, v in spec.env.items()])
-                    env_flags = f" {env_flags}" if env_flags else ""
-                    echo(f"  codex mcp add {spec.name}{env_flags} -- {spec.command}")
-                continue
-
-            # Let Codex manage its own config. Prefer replacing only when requested.
-            for spec in servers:
-                if force:
-                    subprocess.run(["codex", "mcp", "remove", spec.name], capture_output=True, text=True)
-
-                cmd = ["codex", "mcp", "add", spec.name]
-                for k, v in spec.env.items():
-                    cmd.extend(["--env", f"{k}={v}"])
-                cmd.extend(["--", spec.command, *spec.args])
-
-                proc = subprocess.run(cmd, capture_output=True, text=True)
-                if proc.returncode != 0:
-                    echo_warning(f"codex: failed to install {spec.name!r} via `codex mcp add`")
-                    if proc.stdout.strip():
-                        echo(proc.stdout.rstrip("\n"))
-                    if proc.stderr.strip():
-                        echo(proc.stderr.rstrip("\n"), err=True)
-                    echo("Try re-running with --force, or run manually:")
-                    env_flags = " ".join([f"--env {k}={v}" for k, v in spec.env.items()])
-                    env_flags = f" {env_flags}" if env_flags else ""
-                    echo(f"  codex mcp add {spec.name}{env_flags} -- {spec.command}")
-                    continue
-
-                echo_success(f"codex: installed {spec.name!r}")
-                successes.append(f"codex:{spec.name}")
+            _install_codex_global()
             continue
 
         if target == "gemini":
@@ -590,7 +616,8 @@ def _uninstall_mcp(*, targets: tuple[str, ...], name: str, force: bool) -> None:
     if not paperqa_name:
         raise click.UsageError("--name must be non-empty")
 
-    server_keys = [paperqa_name]
+    # Uninstall both paperqa and leann servers
+    server_keys = [paperqa_name, "leann"]
 
     uninstall_targets = set(targets) if targets else {"claude", "codex", "gemini"}
     successes: list[str] = []
@@ -649,7 +676,9 @@ def _uninstall_mcp(*, targets: tuple[str, ...], name: str, force: bool) -> None:
 
             for key in server_keys:
                 proc = subprocess.run(["claude", "mcp", "remove", key], capture_output=True, text=True)
-                if proc.returncode != 0 and not force:
+                # "No MCP server found" is not a failure — nothing to remove
+                not_found = "no mcp server found" in (proc.stdout + proc.stderr).lower()
+                if proc.returncode != 0 and not not_found and not force:
                     echo_warning(f"claude: failed to remove {key!r} via `claude mcp remove`")
                     if proc.stdout.strip():
                         echo(proc.stdout.rstrip("\n"))
@@ -657,6 +686,8 @@ def _uninstall_mcp(*, targets: tuple[str, ...], name: str, force: bool) -> None:
                         echo(proc.stderr.rstrip("\n"), err=True)
                     failures.append(f"claude:{key}")
                     continue
+                if not_found:
+                    continue  # Silently skip — nothing to remove
                 echo_success(f"claude: removed {key!r}")
                 successes.append(f"claude:{key}")
             continue
@@ -685,7 +716,12 @@ def _uninstall_mcp(*, targets: tuple[str, ...], name: str, force: bool) -> None:
 
             for key in server_keys:
                 proc = subprocess.run(["codex", "mcp", "remove", key], capture_output=True, text=True)
-                if proc.returncode != 0 and not force:
+                # "No MCP server" / "not found" is not a failure — nothing to remove
+                not_found = (
+                    "no mcp server" in (proc.stdout + proc.stderr).lower()
+                    or "not found" in (proc.stdout + proc.stderr).lower()
+                )
+                if proc.returncode != 0 and not not_found and not force:
                     echo_warning(f"codex: failed to remove {key!r} via `codex mcp remove`")
                     if proc.stdout.strip():
                         echo(proc.stdout.rstrip("\n"))
@@ -693,6 +729,8 @@ def _uninstall_mcp(*, targets: tuple[str, ...], name: str, force: bool) -> None:
                         echo(proc.stderr.rstrip("\n"), err=True)
                     failures.append(f"codex:{key}")
                     continue
+                if not_found:
+                    continue  # Silently skip — nothing to remove
                 echo_success(f"codex: removed {key!r}")
                 successes.append(f"codex:{key}")
             continue
@@ -705,7 +743,12 @@ def _uninstall_mcp(*, targets: tuple[str, ...], name: str, force: bool) -> None:
                         capture_output=True,
                         text=True,
                     )
-                    if proc.returncode != 0 and not force:
+                    # "No MCP server" / "not found" is not a failure — nothing to remove
+                    not_found = (
+                        "no mcp server" in (proc.stdout + proc.stderr).lower()
+                        or "not found" in (proc.stdout + proc.stderr).lower()
+                    )
+                    if proc.returncode != 0 and not not_found and not force:
                         echo_warning(f"gemini: failed to remove {key!r} via `gemini mcp remove`")
                         if proc.stdout.strip():
                             echo(proc.stdout.rstrip("\n"))
@@ -713,6 +756,8 @@ def _uninstall_mcp(*, targets: tuple[str, ...], name: str, force: bool) -> None:
                             echo(proc.stderr.rstrip("\n"), err=True)
                         failures.append(f"gemini:{key}")
                         continue
+                    if not_found:
+                        continue  # Silently skip — nothing to remove
                     echo_success(f"gemini: removed {key!r}")
                     successes.append(f"gemini:{key}")
 

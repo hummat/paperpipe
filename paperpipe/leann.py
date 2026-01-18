@@ -100,7 +100,7 @@ def _leann_build_index(*, index_name: str, docs_dir: Path, force: bool, extra_ar
 
     # Write metadata on success
     try:
-        from paperpipe.mcp_server import _write_leann_metadata
+        from paperpipe.paperqa_mcp_server import _write_leann_metadata
 
         _write_leann_metadata(
             index_name=index_name,

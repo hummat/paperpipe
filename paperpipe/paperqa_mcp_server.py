@@ -33,7 +33,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import subprocess
 import sys
 import zlib
 from pathlib import Path
@@ -424,120 +423,6 @@ def _register_tools() -> None:
             "index_files_total": len(mapping or {}),
             "index_files_failed": sum(1 for v in (mapping or {}).values() if v == "ERROR"),
         }
-
-    @mcp.tool()
-    async def leann_search(
-        index_name: str,
-        query: str,
-        top_k: int = 5,
-        complexity: int = 32,
-        show_metadata: bool = False,
-    ) -> dict[str, Any]:
-        """
-        Semantic search over papers using LEANN.
-
-        Faster and simpler than PaperQA2 retrieve_chunks.
-
-        Args:
-            index_name: Name of the LEANN index to search.
-            query: Search query (natural language or technical terms).
-            top_k: Number of results (1-20).
-            complexity: Search complexity level (16-128, default 32).
-            show_metadata: Include file paths and metadata.
-
-        Returns:
-            Search results from LEANN.
-        """
-        import shutil
-
-        if not shutil.which("leann"):
-            return {"ok": False, "error": "LEANN not installed. Run: pip install 'paperpipe[leann]'"}
-
-        if not index_name or not query:
-            return {"ok": False, "error": "Both index_name and query are required"}
-
-        cmd = [
-            "leann",
-            "search",
-            index_name,
-            query,
-            f"--top-k={max(1, min(int(top_k), 20))}",
-            f"--complexity={max(16, min(int(complexity), 128))}",
-            "--non-interactive",
-        ]
-        if show_metadata:
-            cmd.append("--show-metadata")
-
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            return {
-                "ok": result.returncode == 0,
-                "output": result.stdout if result.returncode == 0 else result.stderr,
-                "index_name": index_name,
-            }
-        except subprocess.TimeoutExpired:
-            return {"ok": False, "error": "LEANN search timed out (30s)"}
-        except Exception as e:
-            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
-
-    @mcp.tool()
-    async def leann_list() -> dict[str, Any]:
-        """
-        List available LEANN indexes with metadata.
-
-        Returns list of dicts with index information including embedding model.
-        """
-        import shutil
-
-        if not shutil.which("leann"):
-            return {"ok": False, "error": "LEANN not installed. Run: pip install 'paperpipe[leann]'"}
-
-        if (pp := _paperpipe_module()) is None:
-            return {"ok": False, "error": "Could not load paperpipe config"}
-
-        index_root = pp.PAPER_DB / ".leann" / "indexes"
-        if not index_root.exists():
-            return {"ok": True, "indexes": []}
-
-        indexes: list[dict[str, Any]] = []
-        try:
-            for child in sorted(index_root.iterdir()):
-                if not child.is_dir():
-                    continue
-                if not (child / "documents.leann.meta.json").exists():
-                    continue
-
-                # Try to load embedding info from paperpipe metadata
-                meta_path = child / "paperpipe_leann_meta.json"
-                embedding_mode = None
-                embedding_model = None
-                has_metadata = False
-
-                if meta_path.exists():
-                    try:
-                        data = json.loads(meta_path.read_text())
-                        embedding_mode = data.get("embedding_mode")
-                        embedding_model = data.get("embedding_model")
-                        has_metadata = True
-                    except json.JSONDecodeError as e:
-                        logger.warning("Invalid JSON in %s: %s", meta_path, e)
-                        has_metadata = False
-                    except (OSError, IOError) as e:
-                        logger.warning("Could not read %s: %s", meta_path, e)
-                        has_metadata = False
-
-                indexes.append(
-                    {
-                        "name": child.name,
-                        "embedding_mode": embedding_mode,
-                        "embedding_model": embedding_model,
-                        "has_metadata": has_metadata,
-                    }
-                )
-
-            return {"ok": True, "indexes": indexes}
-        except Exception as e:
-            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
 def main() -> None:
