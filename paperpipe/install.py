@@ -278,6 +278,41 @@ def _install_mcp(*, targets: tuple[str, ...], name: str, embedding: Optional[str
         mcp_servers[server_key] = entry
         return "written" if _write_json_object(path, obj, where=where) else "error"
 
+    def _install_codex_global() -> None:
+        """Install MCP servers to Codex globally (Codex has no repo-local config)."""
+        if not shutil.which("codex"):
+            echo_warning("codex: `codex` not found on PATH; run this manually:")
+            for spec in servers:
+                env_flags = " ".join([f"--env {k}={v}" for k, v in spec.env.items()])
+                env_flags = f" {env_flags}" if env_flags else ""
+                echo(f"  codex mcp add {spec.name}{env_flags} -- {spec.command}")
+            return
+
+        for spec in servers:
+            if force:
+                subprocess.run(["codex", "mcp", "remove", spec.name], capture_output=True, text=True)
+
+            cmd = ["codex", "mcp", "add", spec.name]
+            for k, v in spec.env.items():
+                cmd.extend(["--env", f"{k}={v}"])
+            cmd.extend(["--", spec.command, *spec.args])
+
+            proc = subprocess.run(cmd, capture_output=True, text=True)
+            if proc.returncode != 0:
+                echo_warning(f"codex: failed to install {spec.name!r} via `codex mcp add`")
+                if proc.stdout.strip():
+                    echo(proc.stdout.rstrip("\n"))
+                if proc.stderr.strip():
+                    echo(proc.stderr.rstrip("\n"), err=True)
+                echo("Try re-running with --force, or run manually:")
+                env_flags = " ".join([f"--env {k}={v}" for k, v in spec.env.items()])
+                env_flags = f" {env_flags}" if env_flags else ""
+                echo(f"  codex mcp add {spec.name}{env_flags} -- {spec.command}")
+                continue
+
+            echo_success(f"codex: installed {spec.name!r}")
+            successes.append(f"codex:{spec.name}")
+
     for target in sorted(install_targets):
         if target == "claude":
             if not shutil.which("claude"):
@@ -335,44 +370,12 @@ def _install_mcp(*, targets: tuple[str, ...], name: str, embedding: Optional[str
                     successes.append(f"repo/gemini:{spec.name}")
                 elif gemini_status == "skipped":
                     successes.append(f"repo/gemini:{spec.name}")
-            # Note: Codex doesn't support repo-local config
-            echo_warning("Note: Codex CLI has no repo-local config; use `papi install mcp --codex` for global install")
+            # Codex has no repo-local config, so install globally
+            _install_codex_global()
             continue
 
         if target == "codex":
-            if not shutil.which("codex"):
-                echo_warning("codex: `codex` not found on PATH; run this manually:")
-                for spec in servers:
-                    env_flags = " ".join([f"--env {k}={v}" for k, v in spec.env.items()])
-                    env_flags = f" {env_flags}" if env_flags else ""
-                    echo(f"  codex mcp add {spec.name}{env_flags} -- {spec.command}")
-                continue
-
-            # Let Codex manage its own config. Prefer replacing only when requested.
-            for spec in servers:
-                if force:
-                    subprocess.run(["codex", "mcp", "remove", spec.name], capture_output=True, text=True)
-
-                cmd = ["codex", "mcp", "add", spec.name]
-                for k, v in spec.env.items():
-                    cmd.extend(["--env", f"{k}={v}"])
-                cmd.extend(["--", spec.command, *spec.args])
-
-                proc = subprocess.run(cmd, capture_output=True, text=True)
-                if proc.returncode != 0:
-                    echo_warning(f"codex: failed to install {spec.name!r} via `codex mcp add`")
-                    if proc.stdout.strip():
-                        echo(proc.stdout.rstrip("\n"))
-                    if proc.stderr.strip():
-                        echo(proc.stderr.rstrip("\n"), err=True)
-                    echo("Try re-running with --force, or run manually:")
-                    env_flags = " ".join([f"--env {k}={v}" for k, v in spec.env.items()])
-                    env_flags = f" {env_flags}" if env_flags else ""
-                    echo(f"  codex mcp add {spec.name}{env_flags} -- {spec.command}")
-                    continue
-
-                echo_success(f"codex: installed {spec.name!r}")
-                successes.append(f"codex:{spec.name}")
+            _install_codex_global()
             continue
 
         if target == "gemini":

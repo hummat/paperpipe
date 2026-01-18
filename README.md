@@ -291,7 +291,7 @@ papi install mcp --claude
 papi install mcp --codex
 papi install mcp --gemini
 
-# Install repo-local MCP configs (Claude + Gemini only; Codex has no repo-local support)
+# Install repo-local MCP configs (Claude + Gemini) and Codex globally
 papi install mcp --repo
 
 # Customize embedding model
