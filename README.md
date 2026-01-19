@@ -726,7 +726,9 @@ make release
 - [PaperQA2](https://github.com/Future-House/paper-qa) by Future House — RAG backend.
   *Skarlinski et al., "Language Agents Achieve Superhuman Synthesis of Scientific Knowledge", 2024.*
   [arXiv:2409.13740](https://arxiv.org/abs/2409.13740)
-- [LEANN](https://github.com/yichuan-w/LEANN) — local RAG backend
+- [LEANN](https://github.com/yichuan-w/LEANN) — (local) RAG backend.
+  *Wang et al., "LEANN: A Low-Storage Vector Index", 2025.*
+  [arXiv:2506.08276](https://arxiv.org/abs/2506.08276)
 
 ## License
 
