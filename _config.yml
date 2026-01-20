@@ -1,5 +1,8 @@
 theme: jekyll-theme-cayman
-author: Matthias Humt
+lang: en
+author:
+  name: Matthias Humt
+  url: https://github.com/hummat
 social:
   name: Matthias Humt
   links:
@@ -15,3 +18,6 @@ defaults:
       path: ""
     values:
       image: https://repository-images.githubusercontent.com/1120503046/8ba4e2ed-30ef-4d0d-996f-68a48962cb9b
+plugins:
+  - jekyll-sitemap
+  - jekyll-feed
