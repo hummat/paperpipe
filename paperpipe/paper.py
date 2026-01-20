@@ -1089,7 +1089,7 @@ def _add_local_pdf(
         if tldr:
             tldr_content = generate_simple_tldr(meta)
     else:
-        summary, equations, llm_tags, llm_tldr = generate_llm_content(paper_dir, meta, None)
+        summary, equations, llm_tags, llm_tldr = generate_llm_content(paper_dir, meta, None, do_tldr=tldr)
         if tldr:
             tldr_content = llm_tldr
 
