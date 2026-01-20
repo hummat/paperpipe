@@ -12,7 +12,7 @@ Read relevant `docs/agent/` files before proceeding:
 - `testing_patterns.md` — read before writing tests
 - `releases.md` — read before releasing
 
-**Feature requests:** Always read and follow `docs/agent/workflow.md` first. Create a labeled GitHub issue before implementing.
+**REQUIRED: Read `docs/agent/workflow.md` before implementing, updating, fixing, or changing anything.**
 
 ---
 

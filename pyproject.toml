@@ -31,10 +31,9 @@ dependencies = [
 [project.optional-dependencies]
 llm = ["litellm>=1.0.0"]
 leann = ["leann-core>=0.3.5", "leann-backend-hnsw>=0.3.5"]
-paperqa = ["paper-qa>=5.0.0; python_version >= '3.11'"]
-paperqa-media = [
-    "paper-qa[pypdf-media]>=5.0.0; python_version >= '3.11'",
-    "pymupdf_layout",
+paperqa = [
+    "paper-qa[docling,image,ldp,local,memory,nemotron,office,openreview,pymupdf,pypdf-enhanced,pypdf-media,qdrant,zotero]>=5.0.0; python_version >= '3.11'",
+    "pymupdf4llm",
 ]
 mcp = [
     "mcp>=1.0.0; python_version >= '3.11'",
@@ -42,7 +41,7 @@ mcp = [
 ]
 bibtex = ["bibtexparser>=1.4.0"]
 figures = ["pymupdf>=1.24.0"]
-all = ["paperpipe[llm,leann,paperqa,paperqa-media,mcp,bibtex,figures]"]
+all = ["paperpipe[llm,leann,paperqa,mcp,bibtex,figures]"]
 dev = [
     "build>=1.0.0",
     "pyright>=1.1.385",

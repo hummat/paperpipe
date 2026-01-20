@@ -1061,7 +1061,6 @@ def _add_local_pdf(
     shutil.copy2(pdf, dest_pdf)
 
     user_tags = [t.strip() for t in (tags or "").split(",") if t.strip()]
-    all_tags = normalize_tags(user_tags)
 
     meta: dict[str, Any] = {
         "arxiv_id": None,
@@ -1069,7 +1068,7 @@ def _add_local_pdf(
         "authors": _parse_authors(authors),
         "abstract": abstract_text,
         "categories": [],
-        "tags": all_tags,
+        "tags": [],  # populated below after LLM generation
         "published": None,
         "year": year,
         "venue": (venue or "").strip() or None,
@@ -1080,10 +1079,22 @@ def _add_local_pdf(
         "has_pdf": dest_pdf.exists(),
     }
 
-    # Best-effort artifacts (no PDF parsing in MVP)
-    summary = generate_simple_summary(meta, None)
-    equations = "No LaTeX source available."
-    tldr_content = generate_simple_tldr(meta) if tldr else None
+    # Generate summary, equations, tags, and tldr
+    echo_progress("  Generating summary...")
+    tldr_content = None
+    if no_llm:
+        summary = generate_simple_summary(meta, None)
+        equations = "No LaTeX source available."
+        llm_tags: list[str] = []
+        if tldr:
+            tldr_content = generate_simple_tldr(meta)
+    else:
+        summary, equations, llm_tags, llm_tldr = generate_llm_content(paper_dir, meta, None, do_tldr=tldr)
+        if tldr:
+            tldr_content = llm_tldr
+
+    all_tags = normalize_tags([*user_tags, *llm_tags])
+    meta["tags"] = all_tags
 
     (paper_dir / "summary.md").write_text(summary)
     (paper_dir / "equations.md").write_text(equations)
