@@ -6,12 +6,9 @@ author:
 social:
   name: Matthias Humt
   links:
-    - https://twitter.com/matthiashumt
+    - https://bsky.app/profile/hummat.bsky.social
     - https://www.linkedin.com/in/matthiashumt
     - https://github.com/hummat
-twitter:
-  username: matthiashumt
-  card: summary_large_image
 logo: https://avatars.githubusercontent.com/u/22399283?v=4
 defaults:
   - scope:
