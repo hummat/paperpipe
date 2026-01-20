@@ -42,7 +42,7 @@ uv tool install paperpipe --with "paperpipe[mcp]"      # MCP server integrations
 uv tool install paperpipe --with "paperpipe[all]"      # everything
 ```
 
-<details>
+<details markdown="1">
 <summary>Alternative: pip install</summary>
 
 ```bash
@@ -56,7 +56,7 @@ pip install 'paperpipe[all]'
 ```
 </details>
 
-<details>
+<details markdown="1">
 <summary>From source</summary>
 
 ```bash
@@ -193,7 +193,7 @@ https://sqlite.org/fts5.html
 https://en.wikipedia.org/wiki/Okapi_BM25
 ```
 
-<details>
+<details markdown="1">
 <summary>Glossary (RAG, embeddings, MCP, LiteLLM)</summary>
 
 - **RAG** = retrieval‑augmented generation: retrieve relevant paper passages first, then generate an answer grounded in
@@ -207,7 +207,7 @@ https://en.wikipedia.org/wiki/Okapi_BM25
 
 </details>
 
-<details>
+<details markdown="1">
 <summary>Config: default search mode</summary>
 
 Set a default for `papi search` (CLI flags still win):
@@ -269,7 +269,7 @@ where:
 
 This is what makes verification possible — the agent can compare your code symbol-by-symbol.
 
-<details>
+<details markdown="1">
 <summary>MCP server setup (manual)</summary>
 
 ### MCP servers
@@ -344,7 +344,7 @@ papi ask "..." --backend leann
 
 The first query builds an index (cached under `.pqa_index/` or `.leann/`). Use `papi index` to pre-build.
 
-<details>
+<details markdown="1">
 <summary>PaperQA2 configuration</summary>
 
 ### Common options
@@ -371,7 +371,7 @@ Any additional arguments are passed through to `pqa` (e.g., `--agent.search_coun
 
 ### Model combinations
 
-<details>
+<details markdown="1">
 <summary><strong>Model combination examples</strong></summary>
 
 **Indexing:**
@@ -414,7 +414,7 @@ papi ask "how is neus different from nerf?" --backend pqa --pqa-llm claude-sonne
 
 </details>
 
-<details>
+<details markdown="1">
 <summary><strong>Embedding provider examples (indexing)</strong></summary>
 
 #### OpenAI
@@ -462,7 +462,7 @@ papi index --backend pqa --pqa-embedding openai/voyage-3.5
 
 </details>
 
-<details>
+<details markdown="1">
 <summary>LEANN configuration</summary>
 
 ### Common options
@@ -481,7 +481,7 @@ Notes:
 
 ### Model combinations
 
-<details>
+<details markdown="1">
 <summary><strong>Model combination examples</strong></summary>
 
 **Indexing:**
@@ -524,7 +524,7 @@ papi ask "how is neus different from nerf?" --backend leann --leann-provider ope
 
 </details>
 
-<details>
+<details markdown="1">
 <summary><strong>Embedding provider examples</strong></summary>
 
 **Note:** For `--leann-embedding-mode openai`, LEANN defaults the API key to `OPENAI_API_KEY` unless you pass `--leann-embedding-api-key`.
@@ -709,7 +709,7 @@ pip install -e ".[dev]"
 make check                            # format + lint + typecheck + test
 ```
 
-<details>
+<details markdown="1">
 <summary>Release (maintainers)</summary>
 
 This repo publishes to PyPI when a GitHub Release is published (see `.github/workflows/publish.yml`).
