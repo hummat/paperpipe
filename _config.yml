@@ -1,3 +1,17 @@
-remote_theme: pages-themes/cayman@v0.2.0
-title: paperpipe
-description: Academic paper management for coding agents
+theme: jekyll-theme-cayman
+author: Matthias Humt
+social:
+  name: Matthias Humt
+  links:
+    - https://twitter.com/matthiashumt
+    - https://www.linkedin.com/in/matthiashumt
+    - https://github.com/hummat
+twitter:
+  username: matthiashumt
+  card: summary_large_image
+logo: https://avatars.githubusercontent.com/u/22399283?v=4
+defaults:
+  - scope:
+      path: ""
+    values:
+      image: https://repository-images.githubusercontent.com/1120503046/8ba4e2ed-30ef-4d0d-996f-68a48962cb9b
