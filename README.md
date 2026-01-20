@@ -48,8 +48,7 @@ uv tool install paperpipe --with "paperpipe[all]"      # everything
 ```bash
 pip install paperpipe
 pip install 'paperpipe[llm]'
-pip install 'paperpipe[paperqa]'
-pip install 'paperpipe[paperqa-media]'  # PaperQA2 + multimodal PDF parsing (installs Pillow)
+pip install 'paperpipe[paperqa]'  # PaperQA2 + multimodal PDF parsing
 pip install 'paperpipe[leann]'
 pip install 'paperpipe[figures]'        # figure extraction from LaTeX/PDF
 pip install 'paperpipe[mcp]'
