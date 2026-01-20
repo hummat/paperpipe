@@ -34,9 +34,14 @@ from ..paper import _add_local_pdf, _add_single_paper, _regenerate_one_paper
 from ..search import _maybe_delete_from_search_index, _maybe_update_search_index
 
 
+def _is_url(value: str) -> bool:
+    """Check if value looks like an HTTP(S) URL."""
+    return value.startswith("http://") or value.startswith("https://")
+
+
 @click.command()
 @click.argument("arxiv_ids", nargs=-1, required=False)
-@click.option("--pdf", type=click.Path(exists=True, dir_okay=False, path_type=Path), help="Ingest a local PDF.")
+@click.option("--pdf", type=str, help="Ingest a local PDF file or download from a URL.")
 @click.option("--title", help="Title for local PDF ingest (required with --pdf).")
 @click.option(
     "--authors",
@@ -67,7 +72,7 @@ from ..search import _maybe_delete_from_search_index, _maybe_update_search_index
 )
 def add(
     arxiv_ids: tuple[str, ...],
-    pdf: Optional[Path],
+    pdf: Optional[str],
     title: Optional[str],
     authors: Optional[str],
     abstract: Optional[str],
@@ -85,31 +90,57 @@ def add(
     from_file: Optional[Path],
 ):
     """Add one or more papers to the database."""
+    from ..paper import download_pdf_from_url
+
     if pdf:
         if arxiv_ids or from_file:
             raise click.UsageError("Use either arXiv IDs/URLs/--from-file OR `--pdf`, not both.")
-        if not title or not title.strip():
-            raise click.UsageError("Missing required option: --title (required with --pdf).")
+        if no_llm and (not title or not title.strip()):
+            raise click.UsageError("Missing required option: --title (required with --pdf --no-llm).")
         if duplicate or update:
             raise click.UsageError("--duplicate/--update are only supported for arXiv ingestion.")
-        success, paper_name = _add_local_pdf(
-            pdf=pdf,
-            title=title,
-            name=name,
-            tags=tags,
-            authors=authors,
-            abstract=abstract,
-            year=year,
-            venue=venue,
-            doi=doi,
-            url=url,
-            no_llm=no_llm,
-            tldr=tldr,
-        )
-        if not success:
-            raise SystemExit(1)
-        if paper_name:
-            _maybe_update_search_index(name=paper_name)
+
+        # Handle URL vs local file
+        temp_pdf_path: Optional[Path] = None
+        if _is_url(pdf):
+            echo_progress(f"Downloading PDF from {pdf}...")
+            temp_pdf_path, error = download_pdf_from_url(pdf)
+            if error or not temp_pdf_path:
+                echo_error(error or "Failed to download PDF")
+                raise SystemExit(1)
+            pdf_path = temp_pdf_path
+        else:
+            pdf_path = Path(pdf)
+            if not pdf_path.exists():
+                echo_error(f"PDF file not found: {pdf}")
+                raise SystemExit(1)
+            if not pdf_path.is_file():
+                echo_error(f"Not a file: {pdf}")
+                raise SystemExit(1)
+
+        try:
+            success, paper_name = _add_local_pdf(
+                pdf=pdf_path,
+                title=title,
+                name=name,
+                tags=tags,
+                authors=authors,
+                abstract=abstract,
+                year=year,
+                venue=venue,
+                doi=doi,
+                url=url,
+                no_llm=no_llm,
+                tldr=tldr,
+            )
+            if not success:
+                raise SystemExit(1)
+            if paper_name:
+                _maybe_update_search_index(name=paper_name)
+        finally:
+            # Clean up temp file if we downloaded from URL
+            if temp_pdf_path and temp_pdf_path.exists():
+                temp_pdf_path.unlink()
         return
 
     if not arxiv_ids and not from_file:

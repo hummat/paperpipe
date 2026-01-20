@@ -166,6 +166,39 @@ def download_source(arxiv_id: str, paper_dir: Path, *, extract_figures: bool = F
     return None
 
 
+def download_pdf_from_url(url: str, *, timeout: int = 60) -> tuple[Optional[Path], Optional[str]]:
+    """Download a PDF from a URL to a temporary file.
+
+    Returns (temp_path, error_message). Caller is responsible for cleanup.
+    """
+    import requests
+
+    try:
+        response = requests.get(url, timeout=timeout, stream=True)
+        response.raise_for_status()
+    except requests.Timeout:
+        return None, f"Timed out downloading PDF from {url}"
+    except requests.HTTPError as e:
+        status = getattr(e.response, "status_code", None)
+        return None, f"HTTP {status} downloading PDF from {url}"
+    except requests.RequestException as e:
+        return None, f"Failed to download PDF from {url}: {e}"
+
+    # Write to temp file (caller cleans up)
+    temp_path: Optional[Path] = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            temp_path = Path(f.name)
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        return temp_path, None
+    except requests.RequestException as e:
+        # Clean up partial download on streaming failure
+        if temp_path and temp_path.exists():
+            temp_path.unlink()
+        return None, f"Download failed (connection dropped): {e}"
+
+
 def _clear_figures_directory(paper_dir: Path) -> None:
     """Remove existing figures directory to ensure clean extraction.
 
@@ -685,6 +718,50 @@ def _run_llm(prompt: str, *, purpose: str) -> Optional[str]:
         return None
 
 
+def extract_title_from_pdf(pdf_path: Path) -> Optional[str]:
+    """Extract title from a PDF using LLM.
+
+    Extracts text from the first page and asks the LLM to identify the title.
+    Returns None if PyMuPDF is unavailable, PDF cannot be read, or LLM fails.
+    """
+    if not _litellm_available():
+        return None
+
+    # Try to extract text from first page using PyMuPDF
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        echo_warning("PyMuPDF not installed; cannot extract title from PDF. Use --title to specify manually.")
+        return None
+
+    try:
+        doc = fitz.open(pdf_path)
+        if len(doc) == 0:
+            doc.close()
+            return None
+        # Get text from first page (where title usually is)
+        first_page_text = str(doc[0].get_text())[:3000]  # Limit to avoid huge prompts
+        doc.close()
+    except Exception as e:
+        echo_warning(f"Cannot read PDF for title extraction: {e}")
+        return None
+
+    if not first_page_text.strip():
+        return None
+
+    prompt = f"""Extract the title of this academic paper from the first page text below.
+Return ONLY the title, nothing else. No quotes, no explanation.
+
+First page text:
+{first_page_text}"""
+
+    result = _run_llm(prompt, purpose="title extraction")
+    if result:
+        # Clean up: remove quotes, newlines, limit length
+        result = result.strip().strip("\"'").split("\n")[0][:200]
+    return result if result else None
+
+
 def generate_with_litellm(
     meta: dict,
     tex_content: Optional[str],
@@ -996,7 +1073,7 @@ def _add_single_paper(
 def _add_local_pdf(
     *,
     pdf: Path,
-    title: str,
+    title: Optional[str],
     name: Optional[str],
     tags: Optional[str],
     authors: Optional[str],
@@ -1018,8 +1095,16 @@ def _add_local_pdf(
 
     title = (title or "").strip()
     if not title:
-        echo_error("Missing title for local PDF ingestion.")
-        return False, None
+        if no_llm:
+            echo_error("Missing --title (required with --no-llm).")
+            return False, None
+        # Try to extract title from PDF using LLM
+        echo_progress("Extracting title from PDF...")
+        title = extract_title_from_pdf(pdf)
+        if not title:
+            echo_error("Could not extract title from PDF. Use --title to specify manually.")
+            return False, None
+        echo_progress(f"  Extracted title: {title}")
 
     abstract_text = (abstract or "").strip()
     if not abstract_text:

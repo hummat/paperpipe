@@ -52,7 +52,8 @@ papi ask "question" --backend leann   # LEANN RAG
 ```bash
 papi add 2303.13476                   # arXiv ID
 papi add https://arxiv.org/abs/...    # URL
-papi add --pdf /path/to.pdf --title "Title"  # local PDF
+papi add --pdf /path/to.pdf           # local PDF
+papi add --pdf "https://..."          # PDF from URL
 papi add --from-file papers.bib       # bulk import
 ```
 

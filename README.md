@@ -100,7 +100,7 @@ pip install -e ".[all]"
 | Command | Purpose |
 |---------|---------|
 | `papi add <arxiv-id-or-url>` | Add a paper (downloads PDF + LaTeX, generates summary/equations/TL;DR) |
-| `papi add --pdf file.pdf --title "..."` | Add a local PDF |
+| `papi add --pdf file.pdf` | Add a local PDF or URL |
 | `papi add --from-file list.json` | Import papers from a JSON list or text file |
 | `papi list` | List papers (filter with `--tag`) |
 | `papi search "query"` | Search across titles, tags, summaries, equations (`--rg` for grep-style, default uses ranked BM25 if indexed) |
@@ -665,7 +665,8 @@ papi list --tag attention
 ## Non-arXiv papers
 
 ```bash
-papi add --pdf ./paper.pdf --title "Some Conference Paper" --tags local
+papi add --pdf ./paper.pdf
+papi add --pdf "https://example.com/paper.pdf" --tags siggraph
 ```
 
 ## Configuration file
