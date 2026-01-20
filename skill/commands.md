@@ -20,7 +20,7 @@
 | Command | Description |
 |---------|-------------|
 | `papi add <arxiv-id-or-url>` | Add paper (idempotent) |
-| `papi add --pdf PATH --title TEXT` | Add local PDF |
+| `papi add --pdf PATH --title TEXT` | Add local PDF (LLM summary/tags/tldr) |
 | `papi add --from-file <file>` | Import from JSON/BibTeX/text |
 | `papi add <id> --update` | Refresh existing paper |
 | `papi add <id> --figures` | Extract figures from LaTeX/PDF |
