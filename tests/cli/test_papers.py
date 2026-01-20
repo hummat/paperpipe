@@ -263,7 +263,8 @@ class TestAddCommand:
         assert name in index
         assert index[name]["arxiv_id"] is None
 
-    def test_add_local_pdf_requires_title(self, temp_db: Path):
+    def test_add_local_pdf_requires_title_with_no_llm(self, temp_db: Path):
+        """--title is required when --no-llm is specified."""
         pdf_path = temp_db / "local.pdf"
         pdf_path.write_bytes(b"%PDF-1.4\n%local\n")
 
@@ -271,6 +272,49 @@ class TestAddCommand:
         result = runner.invoke(cli_mod.cli, ["add", "--pdf", str(pdf_path), "--no-llm"])
         assert result.exit_code != 0
         assert "--title" in result.output
+        assert "--no-llm" in result.output
+
+    def test_add_local_pdf_extracts_title_with_llm(self, temp_db: Path, monkeypatch):
+        """In LLM mode, title can be extracted from PDF automatically."""
+        pdf_path = temp_db / "local.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n%local\n")
+
+        # Mock the title extraction function
+        monkeypatch.setattr(paper_mod, "extract_title_from_pdf", lambda _: "Extracted Paper Title")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli_mod.cli,
+            [
+                "add",
+                "--pdf",
+                str(pdf_path),
+                # No --title provided
+                "--no-llm",  # But we still skip LLM for summary/equations
+            ],
+        )
+        # Should fail because --no-llm requires --title
+        assert result.exit_code != 0
+
+        # Now test without --no-llm (LLM mode)
+        # We need to mock generate_llm_content too since it will be called
+        monkeypatch.setattr(
+            paper_mod,
+            "generate_llm_content",
+            lambda *args, **kwargs: ("Summary", "Equations", ["tag"], "TL;DR"),
+        )
+
+        result = runner.invoke(
+            cli_mod.cli,
+            [
+                "add",
+                "--pdf",
+                str(pdf_path),
+                # No --title - will be extracted
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "Extracted Paper Title" in result.output or "extracted-paper-title" in result.output
 
     def test_add_local_pdf_rejects_non_pdf(self, temp_db: Path):
         bad_path = temp_db / "not-a-pdf.txt"
@@ -1565,3 +1609,183 @@ class TestRegenerateMultiplePapers:
         assert "Regenerating p1:" in result.output
         assert "not found" in result.output.lower()
         assert "1 failed" in result.output
+
+
+class TestAddPdfUrl:
+    """Tests for adding papers from PDF URLs."""
+
+    def test_add_pdf_url_downloads_and_ingests(self, temp_db: Path, monkeypatch):
+        """Test that --pdf with a URL downloads the PDF and ingests it."""
+
+        # Mock requests.get for the download
+        def mock_requests_get(url, timeout=None, stream=None):
+            class MockResponse:
+                def __init__(self):
+                    self.status_code = 200
+                    self._content = b"%PDF-1.4\n%test pdf content\n"
+
+                def raise_for_status(self):
+                    pass
+
+                def iter_content(self, chunk_size=8192):
+                    yield self._content
+
+            return MockResponse()
+
+        monkeypatch.setattr("requests.get", mock_requests_get)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli_mod.cli,
+            [
+                "add",
+                "--pdf",
+                "https://example.com/paper.pdf",
+                "--title",
+                "Test Paper from URL",
+                "--no-llm",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "Downloading PDF from https://example.com/paper.pdf" in result.output
+
+        # Verify the paper was added
+        name = "test-paper-from-url"
+        paper_dir = temp_db / "papers" / name
+        assert paper_dir.exists()
+        assert (paper_dir / "paper.pdf").read_bytes().startswith(b"%PDF")
+
+    def test_add_pdf_url_handles_download_failure(self, temp_db: Path, monkeypatch):
+        """Test that URL download failures are handled gracefully."""
+
+        def mock_requests_get(url, timeout=None, stream=None):
+            raise requests.exceptions.ConnectionError("Connection refused")
+
+        monkeypatch.setattr("requests.get", mock_requests_get)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli_mod.cli,
+            [
+                "add",
+                "--pdf",
+                "https://example.com/paper.pdf",
+                "--title",
+                "Test Paper",
+                "--no-llm",
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "Failed to download PDF" in result.output
+
+    def test_add_pdf_url_handles_http_error(self, temp_db: Path, monkeypatch):
+        """Test that HTTP errors (404, 500) are handled gracefully."""
+
+        def mock_requests_get(url, timeout=None, stream=None):
+            class MockResponse:
+                def __init__(self):
+                    self.status_code = 404
+
+                def raise_for_status(self):
+                    # Create HTTPError with a response attribute
+                    err = requests.exceptions.HTTPError("404 Not Found")
+                    err.response = self
+                    raise err
+
+            return MockResponse()
+
+        monkeypatch.setattr("requests.get", mock_requests_get)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli_mod.cli,
+            [
+                "add",
+                "--pdf",
+                "https://example.com/nonexistent.pdf",
+                "--title",
+                "Test Paper",
+                "--no-llm",
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "HTTP 404" in result.output
+
+    def test_add_pdf_url_handles_timeout(self, temp_db: Path, monkeypatch):
+        """Test that timeouts are handled gracefully."""
+
+        def mock_requests_get(url, timeout=None, stream=None):
+            raise requests.exceptions.Timeout("Request timed out")
+
+        monkeypatch.setattr("requests.get", mock_requests_get)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli_mod.cli,
+            [
+                "add",
+                "--pdf",
+                "https://example.com/slow.pdf",
+                "--title",
+                "Test Paper",
+                "--no-llm",
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "Timed out" in result.output
+
+    def test_add_pdf_local_file_still_works(self, temp_db: Path):
+        """Test that local file paths still work after URL support was added."""
+        pdf_path = temp_db / "local.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n%local test\n")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli_mod.cli,
+            [
+                "add",
+                "--pdf",
+                str(pdf_path),
+                "--title",
+                "Local Paper",
+                "--no-llm",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        paper_dir = temp_db / "papers" / "local-paper"
+        assert paper_dir.exists()
+        assert (paper_dir / "paper.pdf").read_bytes() == pdf_path.read_bytes()
+
+    def test_add_pdf_nonexistent_local_file_errors(self, temp_db: Path):
+        """Test that nonexistent local files give a clear error."""
+        runner = CliRunner()
+        result = runner.invoke(
+            cli_mod.cli,
+            [
+                "add",
+                "--pdf",
+                "/nonexistent/path/to/paper.pdf",
+                "--title",
+                "Test Paper",
+                "--no-llm",
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "not found" in result.output.lower()
+
+    def test_is_url_helper(self):
+        """Test the _is_url helper function."""
+        from paperpipe.cli.papers import _is_url
+
+        assert _is_url("https://example.com/paper.pdf") is True
+        assert _is_url("http://example.com/paper.pdf") is True
+        assert _is_url("HTTP://EXAMPLE.COM/paper.pdf") is False  # Must be lowercase
+        assert _is_url("/local/path/to/paper.pdf") is False
+        assert _is_url("./relative/path.pdf") is False
+        assert _is_url("paper.pdf") is False
