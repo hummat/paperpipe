@@ -82,10 +82,22 @@ Before making changes, read the architecture docs:
 
 ### Commit Messages
 
-- Use present tense: "Add feature" not "Added feature"
-- Keep the first line under 72 characters
-- Reference issues: "Fix crash on export (#42)"
-- Optionally prefix with type: `feat:`, `fix:`, `docs:`, `refactor:`
+Use [Conventional Commits](https://www.conventionalcommits.org/) format:
+
+```
+type(scope): description
+
+feat: Add semantic search for papers
+fix(mcp): Handle empty query gracefully
+docs: Update installation guide
+refactor(index): Simplify embedding pipeline
+```
+
+**Types:** `feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `chore`, `ci`
+**Scope:** Optional component name in parentheses
+**Breaking changes:** Add `!` after type, e.g., `feat!: Remove legacy API`
+
+See `docs/agent/releases.md` for full guidelines.
 
 ## What to Contribute
 
