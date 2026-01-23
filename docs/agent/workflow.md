@@ -99,3 +99,19 @@ Closes: #[issue number]
 - [x] Code follows existing style
 - [x] Documentation updated if needed
 ```
+
+## Labels
+
+Defined in `.github/labels.yml`, synced automatically via `sync-labels.yml` workflow.
+
+| Label | Use for |
+|-------|---------|
+| `bug` | Bug reports (auto-applied by template) |
+| `enhancement` | Feature requests (auto-applied by template) |
+| `documentation` | Docs-only changes |
+| `question` | Questions needing clarification |
+| `good first issue` | Newcomer-friendly tasks |
+| `help wanted` | Needs external contribution |
+| `wontfix` | Won't be addressed |
+| `duplicate` | Already exists |
+| `invalid` | Not valid/applicable |
