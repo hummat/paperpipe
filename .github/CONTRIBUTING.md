@@ -46,13 +46,12 @@ uv run pytest -m "integration or not integration"
 - Python >= 3.10
 - 120-character line limit (see `[tool.ruff]` in pyproject.toml)
 - Type hints for function signatures
-- Run `ruff format .` and `ruff check .` before committing
-- Run `pyright` for type checking
+- Run `make check` before committing (format + lint + type + test)
 
 ### Workflow
 
 1. Read files before editing — understand existing code
-2. After changes: `uv run ruff format .` → `uv run ruff check .` → `uv run pyright` → `uv run pytest`
+2. After changes: `make check`
 3. Check if docs need updating (README.md, AGENT_INTEGRATION.md)
 
 ## Architecture
@@ -68,8 +67,7 @@ Before making changes, read the architecture docs:
 
 - `paperpipe/` — Main package (Click CLI)
 - `tests/` — Test suite
-- `skill/` — Agent skill definitions
-- `prompts/` — Agent prompt templates
+- `skills/` — Agent skill definitions (papi, papi-verify, papi-compare, etc.)
 
 ## Pull Request Process
 

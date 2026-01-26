@@ -9,37 +9,61 @@ Run `papi docs` to output this snippet, or copy/paste into your repo's agent ins
 
 This repo implements methods from scientific papers. Papers are managed via `papi` (PaperPipe).
 
-- Paper DB root: run `papi path` (default `~/.paperpipe/`; override via `PAPER_DB_PATH`).
-- Add a paper: `papi add <arxiv_id_or_url>` or `papi add <s2_id_or_url>`.
-- Inspect a paper (prints to stdout):
-  - Equations (verification): `papi show <paper> -l eq`
-  - Definitions (LaTeX): `papi show <paper> -l tex`
-  - Overview: `papi show <paper> -l summary`
-  - Quick TL;DR: `papi show <paper> -l tldr`
-- Direct files (if needed): `<paper_db>/papers/{paper}/equations.md`, `source.tex`, `summary.md`, `tldr.md`, `figures/`
+**Tool priority: Use `papi` CLI first. MCP RAG tools only when CLI is insufficient.**
 
-MCP Tools (if configured):
-- `leann_search(index_name, query, top_k)` - Fast semantic search, returns snippets + file paths
-- `retrieve_chunks(query, index_name, k)` - Detailed retrieval with formal citations (DOI, page numbers)
-  - `embedding_model` is optional (auto-inferred from index metadata)
-  - If specified, must match index's embedding model (check via `list_pqa_indexes()`)
-- **Embedding priority** (prefer in order): Voyage AI → Google/Gemini → OpenAI → Local (Ollama)
-  - Check available indexes: `leann_list()` or `list_pqa_indexes()`
-- **When to use:** `leann_search` for exploration, `retrieve_chunks` for verification/citations
+### Commands
 
-Rules:
-- For "does this match the paper?", use `papi show <paper> -l eq` / `-l tex` and compare symbols step-by-step.
-- For "which paper mentions X?":
-  - Exact string hits (fast): `papi search --rg "X"` (case-insensitive literal by default)
-  - Regex patterns: `papi search --rg --regex "pattern"` (for complex patterns like `BRDF\|material`)
-  - Ranked search (BM25): `papi index --backend search --search-rebuild` then `papi search "X"`
-  - Hybrid (ranked + exact boost): `papi search --hybrid "X"`
-  - MCP semantic search: `leann_search()` or `retrieve_chunks()`
-- If the agent can't read `~/.paperpipe/`, export context into the repo: `papi export <papers...> --level equations --to ./paper-context/`.
-- Use `papi ask "..."` only when you explicitly want RAG synthesis (PaperQA2 default if installed; optional `--backend leann`).
-  - For cheaper/deterministic queries: `papi ask "..." --pqa-agent-type fake`
-  - For machine-readable evidence: `papi ask "..." --format evidence-blocks`
-  - For debugging PaperQA2 output: `papi ask "..." --pqa-raw`
+- `papi path` — DB location (default `~/.paperpipe/`; override via `PAPER_DB_PATH`)
+- `papi list` — available papers; `papi list | grep -i "keyword"` to check if paper exists
+- `papi add <arxiv_id_or_url>` — add a paper
+- `papi show <paper> -l eq|tex|summary|tldr` — inspect paper content
+- `papi search --rg "X"` — exact text; `--regex "pattern"` for OR/wildcards
+- Direct files: `<paper_db>/papers/{paper}/equations.md`, `source.tex`, `summary.md`, `tldr.md`, `figures/`
+
+### Decision Tree
+
+| Question | Tool |
+|----------|------|
+| "What does paper X say about Y?" | `papi show X -l summary`, then `papi search --rg "Y"` |
+| "Does my code match the paper?" | `/papi-verify` skill (uses `papi show -l eq`) |
+| "Which paper mentions X?" | `papi search --rg "X"` first, then `leann_search()` if no hits |
+| "Compare approaches across papers" | `/papi-compare` skill or `papi ask` |
+| "Need citable quote with page number" | `retrieve_chunks()` (PQA MCP) |
+| "Cross-paper synthesis" | `papi ask "..."` |
+
+### When NOT to Use MCP RAG
+
+- Paper name known → `papi show <paper> -l summary`
+- Exact term search → `papi search --rg "term"`
+- Checking equations → `papi show <paper> -l eq`
+- Only use RAG when above methods fail or semantic matching required
+
+### Search Escalation (cheapest first)
+
+1. `papi search --rg "X"` — exact text, fast, no LLM
+2. `papi search "X"` — ranked BM25 (requires `papi index --backend search` first)
+3. `papi search --hybrid "X"` — ranked + exact boost
+4. `leann_search()` — semantic search, returns file paths for follow-up
+5. `retrieve_chunks()` — formal citations (DOI, page numbers)
+6. `papi ask "..."` — full RAG synthesis
+
+### MCP Tool Selection (when papi CLI insufficient)
+
+| Tool | Speed | Output | Best For |
+|------|-------|--------|----------|
+| `leann_search(index, query, top_k)` | Fast | Snippets + file paths | Exploration, finding which paper to dig into |
+| `retrieve_chunks(query, index, k)` | Slower | Chunks + formal citations | Verification, citing specific claims |
+| `papi ask "..."` | Slowest | Synthesized answer | Cross-paper questions, "what does literature say" |
+
+- Check indexes: `leann_list()` or `list_pqa_indexes()`
+- Embedding priority: Voyage AI → Google/Gemini → OpenAI → Ollama
+
+### Export (if agent can't read ~/.paperpipe/)
+
+```
+papi export <papers...> --level equations --to ./paper-context/
+papi export <papers...> --figures --to ./paper-context/  # include figures
+```
 ```
 
 <details>

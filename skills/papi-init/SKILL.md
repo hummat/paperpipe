@@ -1,8 +1,14 @@
-description = "Add/update PaperPipe agent integration snippet in local AGENTS.md/CLAUDE.md"
-prompt = """
+---
+name: papi-init
+description: Setup paperpipe agent integration. Use when user wants to add papi to a project's CLAUDE.md/AGENTS.md or initialize paper support.
+---
+
+# Initialize PaperPipe Integration
+
 Task: Initialize or update PaperPipe integration in this project's agent instructions.
 
-Steps:
+## Steps
+
 1. Run `papi docs` to get the current agent integration snippet
 2. Find the agent instructions file in the repo root (check in order: AGENTS.md, CLAUDE.md, GEMINI.md)
    - If none exist, create AGENTS.md
@@ -11,9 +17,11 @@ Steps:
 5. If no such section exists: append the snippet at the end of the file
 6. Show the user what changed (diff or summary)
 
-Notes:
+## Notes
+
 - The snippet from `papi docs` starts with introductory text and a markdown code block containing `## Paper References (PaperPipe)`
 - Extract only the content inside the code block (lines between the triple backticks)
 - Do NOT include the `<details>` glossary section from `papi docs` output
 - Preserve all existing content in the agent instructions file
-"""
+
+For general CLI commands, see `/papi`.

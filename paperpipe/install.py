@@ -16,17 +16,23 @@ from .config import default_pqa_embedding_model
 from .output import echo, echo_error, echo_success, echo_warning
 
 
-def _install_skill(*, targets: tuple[str, ...], force: bool) -> None:
-    # Find the skill directory relative to this module
+def _install_skill(*, targets: tuple[str, ...], force: bool, copy: bool = False) -> None:
+    # Find the skills directory relative to this module
     module_dir = Path(__file__).resolve().parent
     root_dir = module_dir.parent
-    skill_source = module_dir / "skill"
-    if not skill_source.exists():
-        skill_source = root_dir / "skill"
+    skills_source = module_dir / "skills"
+    if not skills_source.exists():
+        skills_source = root_dir / "skills"
 
-    if not skill_source.exists():
-        echo_error(f"Skill directory not found at {skill_source}")
+    if not skills_source.exists():
+        echo_error(f"Skills directory not found at {skills_source}")
         echo_error("This may happen if paperpipe was installed without the skill files.")
+        raise SystemExit(1)
+
+    # Find all skill subdirectories (papi, papi-ask, papi-verify, etc.)
+    skill_dirs = sorted([d for d in skills_source.iterdir() if d.is_dir() and (d / "SKILL.md").exists()])
+    if not skill_dirs:
+        echo_error(f"No skills found in {skills_source}")
         raise SystemExit(1)
 
     # Default to all if no specific target given
@@ -39,35 +45,51 @@ def _install_skill(*, targets: tuple[str, ...], force: bool) -> None:
     }
 
     installed = []
+    gemini_warned = False
     for target in sorted(install_targets):
         if target not in target_dirs:
             raise click.UsageError(f"Unknown install target: {target}")
         skills_dir = target_dirs[target]
-        dest = skills_dir / "papi"
 
-        # Check if already installed
-        if dest.exists() or dest.is_symlink():
-            if not force:
-                if dest.is_symlink() and dest.resolve() == skill_source.resolve():
-                    echo(f"{target}: already installed at {dest}")
+        for skill_source_dir in skill_dirs:
+            skill_name = skill_source_dir.name
+            dest = skills_dir / skill_name
+
+            # Check if already installed
+            if dest.exists() or dest.is_symlink():
+                if not force:
+                    if dest.is_symlink() and dest.resolve() == skill_source_dir.resolve():
+                        echo(f"{target}: already installed: {skill_name}")
+                        continue
+                    echo_warning(f"{target}: {dest} already exists (use --force to overwrite)")
                     continue
-                echo_warning(f"{target}: {dest} already exists (use --force to overwrite)")
-                continue
-            # Remove existing
-            if dest.is_symlink() or dest.is_file():
-                dest.unlink()
-            elif dest.is_dir():
-                shutil.rmtree(dest)
+                # Remove existing
+                if dest.is_symlink() or dest.is_file():
+                    dest.unlink()
+                elif dest.is_dir():
+                    shutil.rmtree(dest)
 
-        # Create parent directory if needed
-        skills_dir.mkdir(parents=True, exist_ok=True)
+            # Create parent directory if needed
+            skills_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create symlink
-        dest.symlink_to(skill_source)
-        installed.append((target, dest))
-        echo_success(f"{target}: installed at {dest} -> {skill_source}")
+            # Create symlink or copy
+            try:
+                if copy:
+                    shutil.copytree(skill_source_dir, dest)
+                else:
+                    dest.symlink_to(skill_source_dir)
+            except OSError as e:
+                echo_error(f"{target}: failed to install {skill_name}: {e}")
+                if not copy:
+                    echo_error("If your filesystem does not support symlinks, re-run with --copy.")
+                raise SystemExit(1)
 
-        if target == "gemini":
+            installed.append((target, dest))
+
+        mode = "copied" if copy else "linked"
+        echo_success(f"{target}: {mode} {len(skill_dirs)} skill(s) to {skills_dir}")
+
+        if target == "gemini" and not gemini_warned:
             settings_path = Path.home() / ".gemini" / "settings.json"
             enabled = False
             if settings_path.exists():
@@ -80,90 +102,28 @@ def _install_skill(*, targets: tuple[str, ...], force: bool) -> None:
             if not enabled:
                 echo_warning("gemini: skills are experimental; enable them in ~/.gemini/settings.json:")
                 echo('  {"experimental": {"skills": true}}')
+                gemini_warned = True
 
     if installed:
         echo()
-        echo("Restart your CLI to activate the skill.")
+        echo("Restart your CLI to activate the skills.")
 
 
 def _install_prompts(*, targets: tuple[str, ...], force: bool, copy: bool) -> None:
-    module_dir = Path(__file__).resolve().parent
-    root_dir = module_dir.parent
-
-    prompt_root = module_dir / "prompts"
-    if not prompt_root.exists():
-        prompt_root = root_dir / "prompts"
-    if not prompt_root.exists():
-        echo_error(f"Prompts directory not found at {prompt_root}")
-        echo_error("This may happen if paperpipe was installed without the prompt files.")
-        raise SystemExit(1)
-
-    install_targets = set(targets) if targets else {"claude", "codex", "gemini"}
-
-    target_dirs = {
-        "claude": Path.home() / ".claude" / "commands",
-        "codex": Path.home() / ".codex" / "prompts",
-        "gemini": Path.home() / ".gemini" / "commands",
-    }
-
-    source_dirs = {
-        "claude": prompt_root / "claude",
-        "codex": prompt_root / "codex",
-        "gemini": prompt_root / "gemini",
-    }
-
-    installed: list[tuple[str, Path]] = []
-    for target in sorted(install_targets):
-        if target not in target_dirs:
-            raise click.UsageError(f"Unknown install target: {target}")
-        prompt_source = source_dirs.get(target, prompt_root)
-        if not prompt_source.exists():
-            echo_error(f"{target}: prompts directory not found at {prompt_source}")
-            raise SystemExit(1)
-
-        suffix = ".toml" if target == "gemini" else ".md"
-        prompt_files = sorted([p for p in prompt_source.glob(f"*{suffix}") if p.is_file()])
-        if not prompt_files:
-            echo_error(f"{target}: no prompts found in {prompt_source}")
-            raise SystemExit(1)
-
-        dest_dir = target_dirs[target]
-        dest_dir.mkdir(parents=True, exist_ok=True)
-
-        for src in prompt_files:
-            dest = dest_dir / src.name
-
-            if dest.exists() or dest.is_symlink():
-                if not force:
-                    if dest.is_symlink() and dest.resolve() == src.resolve():
-                        echo(f"{target}: already installed: {dest.name}")
-                        continue
-                    echo_warning(f"{target}: {dest} already exists (use --force to overwrite)")
-                    continue
-                if dest.is_symlink() or dest.is_file():
-                    dest.unlink()
-                elif dest.is_dir():
-                    shutil.rmtree(dest)
-
-            try:
-                if copy:
-                    shutil.copy2(src, dest)
-                else:
-                    dest.symlink_to(src)
-            except OSError as e:
-                echo_error(f"{target}: failed to install {src.name}: {e}")
-                if not copy:
-                    echo_error("If your filesystem does not support symlinks, re-run with --copy.")
-                raise SystemExit(1)
-
-            installed.append((target, dest))
-
-        mode = "copied" if copy else "linked"
-        echo_success(f"{target}: {mode} {len(prompt_files)} prompt(s) into {dest_dir}")
-
-    if installed:
-        echo()
-        echo("Restart your CLI to pick up new prompts/commands.")
+    """Deprecated: prompts have been converted to skills."""
+    echo_warning("DEPRECATED: Prompts have been converted to skills.")
+    echo_warning("Use `papi install skill` instead.")
+    echo()
+    echo("The following skills replace the old prompts:")
+    echo("  /papi-verify  — verify code against paper")
+    echo("  /papi-compare — compare papers for decision")
+    echo("  /papi-ground  — ground responses with citations")
+    echo("  /papi-curate  — create project notes")
+    echo("  /papi-init    — setup agent integration")
+    echo("  /papi-ask     — RAG queries")
+    echo()
+    echo("Run: papi install skill")
+    raise SystemExit(1)
 
 
 def _install_mcp(*, targets: tuple[str, ...], name: str, embedding: Optional[str], force: bool) -> None:
@@ -462,14 +422,23 @@ def _parse_components(args: tuple[str, ...]) -> list[str]:
 def _uninstall_skill(*, targets: tuple[str, ...], force: bool) -> None:
     module_dir = Path(__file__).resolve().parent
     root_dir = module_dir.parent
-    skill_source = module_dir / "skill"
-    if not skill_source.exists():
-        skill_source = root_dir / "skill"
+    skills_source = module_dir / "skills"
+    if not skills_source.exists():
+        skills_source = root_dir / "skills"
 
-    if not skill_source.exists() and not force:
-        echo_error(f"Skill directory not found at {skill_source}")
+    # Find all skill subdirectories (papi, papi-ask, papi-verify, etc.)
+    skill_names: list[str] = []
+    if skills_source.exists():
+        skill_names = sorted([d.name for d in skills_source.iterdir() if d.is_dir() and (d / "SKILL.md").exists()])
+
+    if not skill_names and not force:
+        echo_error(f"Skills directory not found at {skills_source}")
         echo_error("Re-run with --force to remove install locations without validating the source.")
         raise SystemExit(1)
+
+    # If forcing without source, look for papi* skills in target dirs
+    if not skill_names:
+        skill_names = ["papi", "papi-ask", "papi-compare", "papi-curate", "papi-ground", "papi-init", "papi-verify"]
 
     uninstall_targets = set(targets) if targets else {"claude", "codex", "gemini"}
 
@@ -485,130 +454,61 @@ def _uninstall_skill(*, targets: tuple[str, ...], force: bool) -> None:
         if target not in target_dirs:
             raise click.UsageError(f"Unknown uninstall target: {target}")
         skills_dir = target_dirs[target]
-        dest = skills_dir / "papi"
 
-        if not dest.exists() and not dest.is_symlink():
-            echo(f"{target}: not installed")
-            continue
+        target_removed = 0
+        for skill_name in skill_names:
+            dest = skills_dir / skill_name
+            skill_source = skills_source / skill_name if skills_source.exists() else None
 
-        if dest.is_symlink() and skill_source.exists() and dest.resolve() == skill_source.resolve():
-            dest.unlink()
-            echo_success(f"{target}: removed {dest}")
-            removed += 1
-            continue
+            if not dest.exists() and not dest.is_symlink():
+                continue
 
-        if force:
-            if dest.is_symlink() or dest.is_file():
+            if (
+                dest.is_symlink()
+                and skill_source
+                and skill_source.exists()
+                and dest.resolve() == skill_source.resolve()
+            ):
                 dest.unlink()
-            elif dest.is_dir():
-                shutil.rmtree(dest)
-            else:
-                dest.unlink(missing_ok=True)
-            echo_success(f"{target}: removed {dest}")
-            removed += 1
-            continue
+                target_removed += 1
+                continue
 
-        echo_warning(f"{target}: {dest} exists but does not point to this install (use --force to remove)")
-        skipped += 1
+            if force:
+                if dest.is_symlink() or dest.is_file():
+                    dest.unlink()
+                elif dest.is_dir():
+                    shutil.rmtree(dest)
+                else:
+                    dest.unlink(missing_ok=True)
+                target_removed += 1
+                continue
+
+            echo_warning(f"{target}: {dest} exists but does not point to this install (use --force to remove)")
+            skipped += 1
+
+        if target_removed:
+            echo_success(f"{target}: removed {target_removed} skill(s) from {skills_dir}")
+            removed += target_removed
+        else:
+            echo(f"{target}: no papi skills installed")
 
     if removed:
         echo()
-        echo("Restart your CLI to unload the skill.")
+        echo("Restart your CLI to unload the skills.")
     if skipped:
         raise SystemExit(1)
 
 
 def _uninstall_prompts(*, targets: tuple[str, ...], force: bool) -> None:
-    module_dir = Path(__file__).resolve().parent
-    root_dir = module_dir.parent
-    prompt_root = module_dir / "prompts"
-    if not prompt_root.exists():
-        prompt_root = root_dir / "prompts"
-    if not prompt_root.exists():
-        echo_error(f"Prompts directory not found at {prompt_root}")
-        echo_error("This may happen if paperpipe was installed without the prompt files.")
-        raise SystemExit(1)
-
-    uninstall_targets = set(targets) if targets else {"claude", "codex", "gemini"}
-
-    target_dirs = {
-        "claude": Path.home() / ".claude" / "commands",
-        "codex": Path.home() / ".codex" / "prompts",
-        "gemini": Path.home() / ".gemini" / "commands",
-    }
-
-    source_dirs = {
-        "claude": prompt_root / "claude",
-        "codex": prompt_root / "codex",
-        "gemini": prompt_root / "gemini",
-    }
-
-    removed = 0
-    skipped = 0
-    for target in sorted(uninstall_targets):
-        if target not in target_dirs:
-            raise click.UsageError(f"Unknown uninstall target: {target}")
-
-        dest_dir = target_dirs[target]
-        if not dest_dir.exists():
-            echo(f"{target}: no prompt directory at {dest_dir}")
-            continue
-
-        suffix = ".toml" if target == "gemini" else ".md"
-        prompt_source = source_dirs.get(target, prompt_root)
-        if not prompt_source.exists():
-            echo_error(f"{target}: prompts directory not found at {prompt_source}")
-            raise SystemExit(1)
-
-        source_files = sorted([p for p in prompt_source.glob(f"*{suffix}") if p.is_file()])
-        for src in source_files:
-            dest = dest_dir / src.name
-            if not dest.exists() and not dest.is_symlink():
-                continue
-
-            if dest.is_symlink():
-                if dest.resolve() == src.resolve() or force:
-                    dest.unlink()
-                    removed += 1
-                else:
-                    echo_warning(f"{target}: {dest} points elsewhere (use --force to remove)")
-                    skipped += 1
-                continue
-
-            # Copied file case: remove only if identical unless forced.
-            if dest.is_file():
-                if force:
-                    dest.unlink()
-                    removed += 1
-                    continue
-                try:
-                    if dest.read_bytes() == src.read_bytes():
-                        dest.unlink()
-                        removed += 1
-                    else:
-                        echo_warning(f"{target}: {dest} differs from packaged prompt (use --force to remove)")
-                        skipped += 1
-                except OSError as e:
-                    echo_warning(f"{target}: failed to read {dest}: {e}")
-                    skipped += 1
-                continue
-
-            if dest.is_dir():
-                if force:
-                    shutil.rmtree(dest)
-                    removed += 1
-                else:
-                    echo_warning(f"{target}: {dest} is a directory (use --force to remove)")
-                    skipped += 1
-
-        if source_files:
-            echo_success(f"{target}: removed prompts from {dest_dir}")
-
-    if removed:
-        echo()
-        echo("Restart your CLI to unload prompts/commands.")
-    if skipped:
-        raise SystemExit(1)
+    """Deprecated: prompts have been converted to skills."""
+    echo_warning("DEPRECATED: Prompts have been converted to skills.")
+    echo_warning("Use `papi uninstall skill` to remove papi skills.")
+    echo()
+    echo("If you have old prompts installed, manually remove them from:")
+    echo("  ~/.claude/commands/")
+    echo("  ~/.codex/prompts/")
+    echo("  ~/.gemini/commands/")
+    raise SystemExit(1)
 
 
 def _uninstall_mcp(*, targets: tuple[str, ...], name: str, force: bool) -> None:

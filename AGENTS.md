@@ -1,7 +1,8 @@
-# Repository Guidelines
+# Repository Guidelines (for developing paperpipe)
 
-This file is the single source of truth for agent instructions in this repo.
-`CLAUDE.md` and `GEMINI.md` are symlinks to this file.
+This file is for agents working ON the paperpipe codebase. `CLAUDE.md` and `GEMINI.md` are symlinks to this file.
+
+For agents USING paperpipe in other repos, see `AGENT_INTEGRATION.md` (or run `papi docs`).
 
 ## Conventions
 
@@ -20,6 +21,7 @@ Read relevant `docs/agent/` files before proceeding:
 
 - **Type:** Python CLI application
 - **CLI entry point:** `papi` (defined in `pyproject.toml` via `[project.scripts]`)
+- **GitHub:** `hummat/paperpipe`
 - **Goal:** Maintain a local paper database (PDF + LaTeX + summaries/equations) for coding agents and PaperQA2.
 
 ## Architecture & Runtime Data
@@ -79,9 +81,9 @@ uv run pytest -m "integration or not integration"  # all tests
 ## Code Workflow
 
 1. **Before editing**: read files first; understand existing code
-2. **After code changes**: `uv run ruff format .` → `uv run ruff check .` → `uv run pyright` → `uv run pytest -m "not integration"` (order matters: format may change code that later tools re-check)
+2. **After code changes**: `make check` (or: `ruff format .` → `ruff check .` → `pyright` → `pytest`)
 3. **Doc check**: explicitly verify if docs/prompts need updating (even if "no doc impact")
-4. **CLI changes**: update `README.md`, `AGENT_INTEGRATION.md`, `skill/SKILL.md`, `skill/commands.md`
+4. **CLI changes**: update `README.md`, `AGENT_INTEGRATION.md`, `skills/papi/SKILL.md`, `skills/papi/commands.md`
 5. **Doc style**: don't document default behavior (it's default); keep agent-facing docs KISS and concise
 
 If `uv run` fails (sandbox/offline): fall back to `.venv/bin/*` or set `UV_CACHE_DIR=$PWD/.uv-cache` and `UV_LINK_MODE=copy`.
