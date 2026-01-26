@@ -10,7 +10,7 @@ import traceback
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, TypedDict
+from typing import Any, Optional, TypedDict
 
 import click
 
@@ -31,6 +31,10 @@ from .output import debug, echo_error, echo_progress, echo_warning
 # -----------------------------------------------------------------------------
 
 MANIFEST_VERSION = 1
+LEANN_DEFAULT_GRAPH_DEGREE = 32
+LEANN_DEFAULT_BUILD_COMPLEXITY = 64
+LEANN_DEFAULT_NUM_THREADS = 1
+LEANN_DEFAULT_RECOMPUTE = True
 
 
 class FileEntry(TypedDict):
@@ -188,6 +192,7 @@ def _leann_incremental_update(
     *,
     index_name: str,
     docs_dir: Path,
+    backend_name: Optional[str] = None,
     embedding_mode: str,
     embedding_model: str,
     embedding_host: Optional[str] = None,
@@ -195,6 +200,10 @@ def _leann_incremental_update(
     embedding_api_key: Optional[str] = None,
     doc_chunk_size: Optional[int] = None,
     doc_chunk_overlap: Optional[int] = None,
+    graph_degree: Optional[int] = None,
+    build_complexity: Optional[int] = None,
+    num_threads: Optional[int] = None,
+    is_recompute: Optional[bool] = None,
 ) -> tuple[int, int, int]:
     """
     Incrementally update LEANN index with new/changed files using Python API.
@@ -212,6 +221,11 @@ def _leann_incremental_update(
         raise IncrementalUpdateError("No manifest found; run full build first")
     if manifest.get("is_compact", True):
         raise IncrementalUpdateError("Index is compact; incremental updates not supported")
+
+    meta_backend_name = _load_leann_backend_name(index_name)
+    meta_backend_kwargs = _load_leann_backend_kwargs(index_name)
+    if backend_name and meta_backend_name and backend_name != meta_backend_name:
+        raise IncrementalUpdateError(f"Backend mismatch: index={meta_backend_name}, requested={backend_name}")
 
     # Validate embedding settings match
     if embedding_mode and manifest["embedding_mode"] and manifest["embedding_mode"] != embedding_mode:
@@ -235,10 +249,11 @@ def _leann_incremental_update(
         return 0, delta.unchanged_count, 0
 
     index_dir = config.PAPER_DB / ".leann" / "indexes" / index_name
-    index_path = index_dir / "documents.index"
+    index_path = index_dir / "documents.leann"
 
-    if not index_path.exists():
-        raise IncrementalUpdateError(f"Index file not found: {index_path}")
+    index_file = index_dir / f"{index_path.stem}.index"
+    if not index_file.exists():
+        raise IncrementalUpdateError(f"Index file not found: {index_file}")
 
     # Build kwargs for LeannBuilder
     builder_kwargs: dict = {
@@ -247,17 +262,60 @@ def _leann_incremental_update(
     # Use manifest settings as defaults, override with explicit params
     effective_mode = embedding_mode or manifest.get("embedding_mode") or ""
     effective_model = embedding_model or manifest.get("embedding_model") or ""
+    effective_backend = (backend_name or "").strip() or (meta_backend_name or "").strip() or "hnsw"
+    effective_graph_degree = (
+        graph_degree
+        if graph_degree is not None
+        else meta_backend_kwargs.get("graph_degree", LEANN_DEFAULT_GRAPH_DEGREE)
+    )
+    effective_complexity = (
+        build_complexity
+        if build_complexity is not None
+        else meta_backend_kwargs.get("complexity", LEANN_DEFAULT_BUILD_COMPLEXITY)
+    )
+    effective_num_threads = (
+        num_threads if num_threads is not None else meta_backend_kwargs.get("num_threads", LEANN_DEFAULT_NUM_THREADS)
+    )
+    effective_recompute = (
+        is_recompute if is_recompute is not None else meta_backend_kwargs.get("is_recompute", LEANN_DEFAULT_RECOMPUTE)
+    )
 
     if effective_mode:
         builder_kwargs["embedding_mode"] = effective_mode
     if effective_model:
         builder_kwargs["embedding_model"] = effective_model
-    if embedding_host:
-        builder_kwargs["embedding_host"] = embedding_host
-    if embedding_api_base:
-        builder_kwargs["embedding_api_base"] = embedding_api_base
-    if embedding_api_key:
-        builder_kwargs["embedding_api_key"] = embedding_api_key
+    if effective_backend:
+        builder_kwargs["backend_name"] = effective_backend
+    if effective_graph_degree is not None:
+        builder_kwargs["graph_degree"] = int(effective_graph_degree)
+    if effective_complexity is not None:
+        builder_kwargs["complexity"] = int(effective_complexity)
+    if effective_num_threads is not None:
+        builder_kwargs["num_threads"] = int(effective_num_threads)
+    if effective_recompute is not None:
+        builder_kwargs["is_recompute"] = bool(effective_recompute)
+    embedding_options: dict[str, str] = {}
+    try:
+        from leann.settings import resolve_ollama_host, resolve_openai_api_key, resolve_openai_base_url
+
+        if effective_mode.lower() == "ollama":
+            embedding_options["host"] = resolve_ollama_host(embedding_host)
+        elif "openai" in effective_mode.lower():
+            embedding_options["base_url"] = resolve_openai_base_url(embedding_api_base)
+            resolved_key = resolve_openai_api_key(embedding_api_key)
+            if resolved_key:
+                embedding_options["api_key"] = resolved_key
+    except Exception:
+        if effective_mode.lower() == "ollama":
+            if embedding_host:
+                embedding_options["host"] = embedding_host
+        elif "openai" in effective_mode.lower():
+            if embedding_api_base:
+                embedding_options["base_url"] = embedding_api_base
+            if embedding_api_key:
+                embedding_options["api_key"] = embedding_api_key
+    if embedding_options:
+        builder_kwargs["embedding_options"] = embedding_options
     if doc_chunk_size:
         builder_kwargs["doc_chunk_size"] = doc_chunk_size
     if doc_chunk_overlap:
@@ -269,17 +327,17 @@ def _leann_incremental_update(
         raise IncrementalUpdateError(f"Failed to create LeannBuilder: {e}") from e
 
     # Check for document adding capability - LEANN API may vary by version
-    # Try add_document, add_file, or add_text depending on availability
     add_method = None
     for method_name in ("add_document", "add_file"):
         if hasattr(builder, method_name):
             add_method = getattr(builder, method_name)
             break
 
-    if add_method is None:
+    use_add_text = add_method is None and hasattr(builder, "add_text")
+    if add_method is None and not use_add_text:
         raise IncrementalUpdateError(
             "LEANN Python API does not support incremental document updates. "
-            "LeannBuilder lacks add_document/add_file methods."
+            "LeannBuilder lacks add_document/add_file/add_text methods."
         )
 
     if not hasattr(builder, "update_index"):
@@ -289,23 +347,70 @@ def _leann_incremental_update(
     errors = 0
     now_iso = datetime.now(timezone.utc).isoformat()
 
-    for pdf in files_to_add:
+    if use_add_text:
         try:
-            add_method(str(pdf))
-            manifest["files"][str(pdf.resolve())] = {
-                "mtime": pdf.stat().st_mtime,
-                "indexed_at": now_iso,
-                "status": "ok",
-            }
-            added += 1
+            from leann.cli import LeannCLI
+            from llama_index.core.node_parser import SentenceSplitter
         except Exception as e:
-            debug("Failed to index %s: %s", pdf, e)
-            manifest["files"][str(pdf.resolve())] = {
-                "mtime": pdf.stat().st_mtime,
-                "indexed_at": now_iso,
-                "status": "error",
-            }
-            errors += 1
+            raise IncrementalUpdateError(f"LEANN chunking helpers unavailable: {e}") from e
+
+        leann_cli = LeannCLI()
+        effective_doc_chunk_size = doc_chunk_size or leann_cli.node_parser.chunk_size
+        effective_doc_chunk_overlap = doc_chunk_overlap or leann_cli.node_parser.chunk_overlap
+        if effective_doc_chunk_overlap >= effective_doc_chunk_size:
+            effective_doc_chunk_overlap = max(0, effective_doc_chunk_size - 1)
+        leann_cli.node_parser = SentenceSplitter(
+            chunk_size=effective_doc_chunk_size,
+            chunk_overlap=effective_doc_chunk_overlap,
+            separator=" ",
+            paragraph_separator="\n\n",
+        )
+
+        args: dict[str, Any] = {
+            "use_ast_chunking": False,
+            "ast_chunk_size": 768,
+            "ast_chunk_overlap": 96,
+            "ast_fallback_traditional": True,
+        }
+
+        for pdf in files_to_add:
+            try:
+                chunks = leann_cli.load_documents(
+                    [str(pdf)],
+                    custom_file_types=".pdf",
+                    include_hidden=True,
+                    args=args,
+                )
+                if not chunks:
+                    raise ValueError("No chunks extracted")
+                for i, chunk in enumerate(chunks):
+                    metadata = dict(chunk.get("metadata") or {})
+                    if "id" not in metadata:
+                        metadata["id"] = f"{pdf.resolve()}::{i}"
+                    builder.add_text(chunk.get("text", ""), metadata=metadata)
+                manifest["files"][str(pdf.resolve())] = {
+                    "mtime": pdf.stat().st_mtime,
+                    "indexed_at": now_iso,
+                    "status": "ok",
+                }
+                added += 1
+            except Exception as e:
+                debug("Failed to index %s: %s", pdf, e)
+                errors += 1
+    else:
+        assert add_method is not None
+        for pdf in files_to_add:
+            try:
+                add_method(str(pdf))
+                manifest["files"][str(pdf.resolve())] = {
+                    "mtime": pdf.stat().st_mtime,
+                    "indexed_at": now_iso,
+                    "status": "ok",
+                }
+                added += 1
+            except Exception as e:
+                debug("Failed to index %s: %s", pdf, e)
+                errors += 1
 
     if added > 0:
         try:
@@ -341,6 +446,30 @@ def _leann_index_meta_path(index_name: str) -> Path:
     return config.PAPER_DB / ".leann" / "indexes" / index_name / "documents.leann.meta.json"
 
 
+def _load_leann_backend_name(index_name: str) -> Optional[str]:
+    meta_path = _leann_index_meta_path(index_name)
+    if not meta_path.exists():
+        return None
+    try:
+        meta = json.loads(meta_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    backend_name = meta.get("backend_name")
+    return backend_name if isinstance(backend_name, str) and backend_name.strip() else None
+
+
+def _load_leann_backend_kwargs(index_name: str) -> dict:
+    meta_path = _leann_index_meta_path(index_name)
+    if not meta_path.exists():
+        return {}
+    try:
+        meta = json.loads(meta_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    backend_kwargs = meta.get("backend_kwargs")
+    return backend_kwargs if isinstance(backend_kwargs, dict) else {}
+
+
 def _leann_build_index(
     *, index_name: str, docs_dir: Path, force: bool, no_compact: bool, extra_args: list[str]
 ) -> None:
@@ -364,16 +493,28 @@ def _leann_build_index(
         # Extract embedding settings from extra_args
         embedding_mode = _extract_arg_value(extra_args, "--embedding-mode") or default_leann_embedding_mode()
         embedding_model = _extract_arg_value(extra_args, "--embedding-model") or default_leann_embedding_model()
+        backend_name = _extract_arg_value(extra_args, "--backend-name")
         embedding_host = _extract_arg_value(extra_args, "--embedding-host")
         embedding_api_base = _extract_arg_value(extra_args, "--embedding-api-base")
         embedding_api_key = _extract_arg_value(extra_args, "--embedding-api-key")
         doc_chunk_size_str = _extract_arg_value(extra_args, "--doc-chunk-size")
         doc_chunk_overlap_str = _extract_arg_value(extra_args, "--doc-chunk-overlap")
+        graph_degree_str = _extract_arg_value(extra_args, "--graph-degree")
+        build_complexity_str = _extract_arg_value(extra_args, "--complexity")
+        num_threads_str = _extract_arg_value(extra_args, "--num-threads")
+        is_recompute: Optional[bool]
+        if "--no-recompute" in extra_args:
+            is_recompute = False
+        elif "--recompute" in extra_args:
+            is_recompute = True
+        else:
+            is_recompute = None
 
         try:
             added, unchanged, errors = _leann_incremental_update(
                 index_name=index_name,
                 docs_dir=docs_dir,
+                backend_name=backend_name,
                 embedding_mode=embedding_mode or "",
                 embedding_model=embedding_model or "",
                 embedding_host=embedding_host,
@@ -381,6 +522,10 @@ def _leann_build_index(
                 embedding_api_key=embedding_api_key,
                 doc_chunk_size=int(doc_chunk_size_str) if doc_chunk_size_str else None,
                 doc_chunk_overlap=int(doc_chunk_overlap_str) if doc_chunk_overlap_str else None,
+                graph_degree=int(graph_degree_str) if graph_degree_str else None,
+                build_complexity=int(build_complexity_str) if build_complexity_str else None,
+                num_threads=int(num_threads_str) if num_threads_str else None,
+                is_recompute=is_recompute,
             )
             if added > 0 or errors > 0:
                 echo_progress(f"Incremental update: {added} added, {unchanged} unchanged, {errors} errors")

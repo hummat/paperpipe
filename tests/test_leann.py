@@ -5,6 +5,7 @@ import subprocess
 import types
 from importlib import import_module
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from click.testing import CliRunner
@@ -13,11 +14,27 @@ from conftest import MockPopen
 import paperpipe
 import paperpipe.config as config
 import paperpipe.paperqa as paperqa
+from paperpipe.leann import FileEntry, LeannManifest
 
 # Import the CLI module explicitly (avoid resolving to the package's cli function).
 cli_mod = import_module("paperpipe.cli")
 # Import the index submodule for patching _leann_build_index
 cli_index_mod = import_module("paperpipe.cli.index")
+
+
+def _make_manifest(*, files: dict[str, FileEntry] | None = None, is_compact: bool = False) -> LeannManifest:
+    return cast(
+        LeannManifest,
+        {
+            "version": paperpipe.leann.MANIFEST_VERSION,
+            "is_compact": is_compact,
+            "embedding_mode": "ollama",
+            "embedding_model": "nomic-embed-text",
+            "created_at": "2026-01-26T10:00:00Z",
+            "updated_at": "2026-01-26T10:00:00Z",
+            "files": files or {},
+        },
+    )
 
 
 class TestLeannCli:
@@ -380,15 +397,7 @@ class TestLeannManifest:
     def test_save_and_load_manifest_roundtrip(self, temp_db: Path) -> None:
         from paperpipe.leann import MANIFEST_VERSION, _load_leann_manifest, _save_leann_manifest
 
-        manifest = {
-            "version": MANIFEST_VERSION,
-            "is_compact": False,
-            "embedding_mode": "ollama",
-            "embedding_model": "nomic-embed-text",
-            "created_at": "2026-01-26T10:00:00Z",
-            "updated_at": "2026-01-26T10:00:00Z",
-            "files": {},
-        }
+        manifest = _make_manifest()
 
         assert _save_leann_manifest("test-index", manifest)
         loaded = _load_leann_manifest("test-index")
@@ -466,7 +475,7 @@ class TestLeannIndexDelta:
     def test_compute_delta_unchanged_files(self, temp_db: Path) -> None:
         import time
 
-        from paperpipe.leann import MANIFEST_VERSION, _compute_index_delta
+        from paperpipe.leann import _compute_index_delta
 
         docs_dir = temp_db / "docs"
         docs_dir.mkdir(parents=True)
@@ -476,21 +485,15 @@ class TestLeannIndexDelta:
         # Small delay to ensure mtime is stable
         time.sleep(0.01)
 
-        manifest = {
-            "version": MANIFEST_VERSION,
-            "is_compact": False,
-            "embedding_mode": "ollama",
-            "embedding_model": "nomic-embed-text",
-            "created_at": "2026-01-26T10:00:00Z",
-            "updated_at": "2026-01-26T10:00:00Z",
-            "files": {
+        manifest = _make_manifest(
+            files={
                 str(pdf.resolve()): {
                     "mtime": pdf.stat().st_mtime,
                     "indexed_at": "2026-01-26T10:00:00Z",
                     "status": "ok",
                 }
-            },
-        }
+            }
+        )
 
         delta = _compute_index_delta(docs_dir, manifest)
 
@@ -499,28 +502,22 @@ class TestLeannIndexDelta:
         assert delta.unchanged_count == 1
 
     def test_compute_delta_changed_mtime(self, temp_db: Path) -> None:
-        from paperpipe.leann import MANIFEST_VERSION, _compute_index_delta
+        from paperpipe.leann import _compute_index_delta
 
         docs_dir = temp_db / "docs"
         docs_dir.mkdir(parents=True)
         pdf = docs_dir / "paper.pdf"
         pdf.touch()
 
-        manifest = {
-            "version": MANIFEST_VERSION,
-            "is_compact": False,
-            "embedding_mode": "ollama",
-            "embedding_model": "nomic-embed-text",
-            "created_at": "2026-01-26T10:00:00Z",
-            "updated_at": "2026-01-26T10:00:00Z",
-            "files": {
+        manifest = _make_manifest(
+            files={
                 str(pdf.resolve()): {
                     "mtime": pdf.stat().st_mtime - 100,  # Old mtime
                     "indexed_at": "2026-01-26T10:00:00Z",
                     "status": "ok",
                 }
-            },
-        }
+            }
+        )
 
         delta = _compute_index_delta(docs_dir, manifest)
 
@@ -529,26 +526,20 @@ class TestLeannIndexDelta:
         assert delta.unchanged_count == 0
 
     def test_compute_delta_removed_files(self, temp_db: Path) -> None:
-        from paperpipe.leann import MANIFEST_VERSION, _compute_index_delta
+        from paperpipe.leann import _compute_index_delta
 
         docs_dir = temp_db / "docs"
         docs_dir.mkdir(parents=True)
 
-        manifest = {
-            "version": MANIFEST_VERSION,
-            "is_compact": False,
-            "embedding_mode": "ollama",
-            "embedding_model": "nomic-embed-text",
-            "created_at": "2026-01-26T10:00:00Z",
-            "updated_at": "2026-01-26T10:00:00Z",
-            "files": {
+        manifest = _make_manifest(
+            files={
                 "/nonexistent/removed.pdf": {
                     "mtime": 12345.0,
                     "indexed_at": "2026-01-26T10:00:00Z",
                     "status": "ok",
                 }
-            },
-        }
+            }
+        )
 
         delta = _compute_index_delta(docs_dir, manifest)
 
@@ -556,28 +547,22 @@ class TestLeannIndexDelta:
         assert delta.removed_files[0] == "/nonexistent/removed.pdf"
 
     def test_compute_delta_skips_error_status(self, temp_db: Path) -> None:
-        from paperpipe.leann import MANIFEST_VERSION, _compute_index_delta
+        from paperpipe.leann import _compute_index_delta
 
         docs_dir = temp_db / "docs"
         docs_dir.mkdir(parents=True)
         pdf = docs_dir / "failed.pdf"
         pdf.touch()
 
-        manifest = {
-            "version": MANIFEST_VERSION,
-            "is_compact": False,
-            "embedding_mode": "ollama",
-            "embedding_model": "nomic-embed-text",
-            "created_at": "2026-01-26T10:00:00Z",
-            "updated_at": "2026-01-26T10:00:00Z",
-            "files": {
+        manifest = _make_manifest(
+            files={
                 str(pdf.resolve()): {
                     "mtime": 0,  # Different mtime, but status is error
                     "indexed_at": "2026-01-26T10:00:00Z",
                     "status": "error",
                 }
-            },
-        }
+            }
+        )
 
         delta = _compute_index_delta(docs_dir, manifest)
 
@@ -604,25 +589,12 @@ class TestLeannIncrementalUpdate:
             )
 
     def test_incremental_update_error_compact_index(self, temp_db: Path) -> None:
-        from paperpipe.leann import (
-            MANIFEST_VERSION,
-            IncrementalUpdateError,
-            _leann_incremental_update,
-            _save_leann_manifest,
-        )
+        from paperpipe.leann import IncrementalUpdateError, _leann_incremental_update, _save_leann_manifest
 
         docs_dir = temp_db / "docs"
         docs_dir.mkdir(parents=True)
 
-        manifest = {
-            "version": MANIFEST_VERSION,
-            "is_compact": True,  # Compact index doesn't support incremental
-            "embedding_mode": "ollama",
-            "embedding_model": "nomic-embed-text",
-            "created_at": "2026-01-26T10:00:00Z",
-            "updated_at": "2026-01-26T10:00:00Z",
-            "files": {},
-        }
+        manifest = _make_manifest(is_compact=True)
         _save_leann_manifest("test-index", manifest)
 
         with pytest.raises(IncrementalUpdateError, match="compact"):
@@ -634,25 +606,12 @@ class TestLeannIncrementalUpdate:
             )
 
     def test_incremental_update_error_embedding_mismatch(self, temp_db: Path) -> None:
-        from paperpipe.leann import (
-            MANIFEST_VERSION,
-            IncrementalUpdateError,
-            _leann_incremental_update,
-            _save_leann_manifest,
-        )
+        from paperpipe.leann import IncrementalUpdateError, _leann_incremental_update, _save_leann_manifest
 
         docs_dir = temp_db / "docs"
         docs_dir.mkdir(parents=True)
 
-        manifest = {
-            "version": MANIFEST_VERSION,
-            "is_compact": False,
-            "embedding_mode": "ollama",
-            "embedding_model": "nomic-embed-text",
-            "created_at": "2026-01-26T10:00:00Z",
-            "updated_at": "2026-01-26T10:00:00Z",
-            "files": {},
-        }
+        manifest = _make_manifest()
         _save_leann_manifest("test-index", manifest)
 
         with pytest.raises(IncrementalUpdateError, match="mismatch"):
@@ -664,32 +623,22 @@ class TestLeannIncrementalUpdate:
             )
 
     def test_incremental_update_no_changes_returns_zero(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from paperpipe.leann import (
-            MANIFEST_VERSION,
-            _leann_incremental_update,
-            _save_leann_manifest,
-        )
+        from paperpipe.leann import _leann_incremental_update, _save_leann_manifest
 
         docs_dir = temp_db / "docs"
         docs_dir.mkdir(parents=True)
         pdf = docs_dir / "paper.pdf"
         pdf.touch()
 
-        manifest = {
-            "version": MANIFEST_VERSION,
-            "is_compact": False,
-            "embedding_mode": "ollama",
-            "embedding_model": "nomic-embed-text",
-            "created_at": "2026-01-26T10:00:00Z",
-            "updated_at": "2026-01-26T10:00:00Z",
-            "files": {
+        manifest = _make_manifest(
+            files={
                 str(pdf.resolve()): {
                     "mtime": pdf.stat().st_mtime,
                     "indexed_at": "2026-01-26T10:00:00Z",
                     "status": "ok",
                 }
-            },
-        }
+            }
+        )
         _save_leann_manifest("test-index", manifest)
 
         # Mock LEANN API import to avoid requiring LEANN
@@ -705,7 +654,7 @@ class TestLeannIncrementalUpdate:
 
         mock_leann = types.ModuleType("leann")
         mock_leann_api = types.ModuleType("leann.api")
-        mock_leann_api.LeannBuilder = MockLeannBuilder
+        cast(Any, mock_leann_api).LeannBuilder = MockLeannBuilder
         monkeypatch.setitem(__import__("sys").modules, "leann", mock_leann)
         monkeypatch.setitem(__import__("sys").modules, "leann.api", mock_leann_api)
 
