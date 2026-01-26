@@ -428,6 +428,30 @@ class TestLeannManifest:
 
         assert _load_leann_manifest("test-index") is None
 
+    def test_load_backend_meta_helpers(self, temp_db: Path) -> None:
+        import json
+
+        from paperpipe.leann import _leann_index_meta_path, _load_leann_backend_kwargs, _load_leann_backend_name
+
+        meta_path = _leann_index_meta_path("test-index")
+        meta_path.parent.mkdir(parents=True, exist_ok=True)
+        meta_path.write_text(
+            json.dumps({"backend_name": "hnsw", "backend_kwargs": {"graph_degree": 32, "complexity": 64}})
+        )
+
+        assert _load_leann_backend_name("test-index") == "hnsw"
+        assert _load_leann_backend_kwargs("test-index") == {"graph_degree": 32, "complexity": 64}
+
+    def test_load_backend_meta_helpers_invalid(self, temp_db: Path) -> None:
+        from paperpipe.leann import _leann_index_meta_path, _load_leann_backend_kwargs, _load_leann_backend_name
+
+        meta_path = _leann_index_meta_path("test-index")
+        meta_path.parent.mkdir(parents=True, exist_ok=True)
+        meta_path.write_text("not valid json {{{")
+
+        assert _load_leann_backend_name("test-index") is None
+        assert _load_leann_backend_kwargs("test-index") == {}
+
     def test_create_initial_manifest(self, temp_db: Path) -> None:
         from paperpipe.leann import _create_initial_manifest, _load_leann_manifest
 
