@@ -20,6 +20,7 @@ Read relevant `docs/agent/` files before proceeding:
 
 - **Type:** Python CLI application
 - **CLI entry point:** `papi` (defined in `pyproject.toml` via `[project.scripts]`)
+- **GitHub:** `hummat/paperpipe`
 - **Goal:** Maintain a local paper database (PDF + LaTeX + summaries/equations) for coding agents and PaperQA2.
 
 ## Architecture & Runtime Data
