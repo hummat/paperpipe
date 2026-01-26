@@ -100,6 +100,24 @@ Closes: #[issue number]
 - [x] Documentation updated if needed
 ```
 
+## Title Conventions
+
+Use conventional commit format for issue and PR titles (used by git-cliff for changelog):
+
+```
+type(scope): short description
+```
+
+**Types:** `feat`, `fix`, `refactor`, `docs`, `test`, `ci`, `chore`
+
+**Scopes:** `cli`, `leann`, `pqa`, `search`, `agent`, `mcp`, or omit for broad changes
+
+**Examples:**
+- `feat(leann): incremental indexing for new papers`
+- `fix(cli): handle missing PDF gracefully`
+- `docs(agent): add MCP server setup guide`
+- `refactor: split cli.py into submodules`
+
 ## Labels
 
 Defined in `.github/labels.yml`, synced automatically via `sync-labels.yml` workflow.
