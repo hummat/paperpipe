@@ -1,12 +1,12 @@
 ---
 name: papi
-description: CLI reference for paperpipe (papi). Use for listing, searching, showing, adding papers. General paper queries not needing verification, comparison, or synthesis.
+description: CLI reference for paperpipe (papi). Use BEFORE MCP RAG tools. For listing, searching, showing, adding papers.
 allowed-tools: Read, Bash, Glob, Grep
 ---
 
 # Paper Reference Assistant (CLI)
 
-Use for general paper queries: listing, searching, showing content, adding papers.
+**Tool priority: Use `papi` CLI first. MCP RAG tools only when CLI is insufficient.**
 
 For specialized workflows, use dedicated skills:
 - `/papi-ask` — RAG queries requiring synthesis
@@ -20,30 +20,28 @@ For specialized workflows, use dedicated skills:
 ```bash
 papi path   # DB location (default ~/.paperpipe/; override via PAPER_DB_PATH)
 papi list   # available papers
+papi list | grep -i "keyword"  # check if paper exists before searching
 ```
 
-## Decision Rules (Cheapest First)
+## When NOT to Use MCP RAG
 
-1. `papi show <paper> -l eq|tex|summary` — prints to stdout
-2. MCP tools for "top passages about X":
-   - `leann_search(index_name, query, top_k)` — fast, returns snippets
-   - `retrieve_chunks(query, index_name, k)` — slower, formal citations
-   - Check indexes: `leann_list()` or `list_pqa_indexes()`
-   - Embedding priority: Voyage AI → Google/Gemini → OpenAI → Ollama
-3. `papi ask` — only when user explicitly requests RAG synthesis
+- Paper name known → `papi show <paper> -l summary`
+- Exact term search → `papi search --rg "term"`
+- Checking equations → `papi show <paper> -l eq`
+- Only use RAG when above methods fail or semantic matching required
 
-## Code Verification
+## Decision Tree
 
-1. `papi show {name} -l eq` — compare symbols with implementation
-2. `papi show {name} -l tex` — exact definitions if ambiguous
-3. `papi notes {name}` — implementation gotchas
+| Question | Tool |
+|----------|------|
+| "What does paper X say about Y?" | `papi show X -l summary`, then `papi search --rg "Y"` |
+| "Does my code match the paper?" | `/papi-verify` skill |
+| "Which paper mentions X?" | `papi search --rg "X"` first, then `leann_search()` if no hits |
+| "Compare approaches across papers" | `/papi-compare` skill or `papi ask` |
+| "Need citable quote with page number" | `retrieve_chunks()` (PQA MCP) |
+| "Cross-paper synthesis" | `papi ask "..."` |
 
-## Implementation Guidance
-
-1. `papi show {name} -l summary` — high-level approach
-2. `papi show {name} -l eq` — formulas to implement
-
-## Cross-Paper Search
+## Search Commands
 
 ```bash
 papi search --rg "query"              # exact text (fast, no LLM)
@@ -52,7 +50,28 @@ papi search "query"                   # ranked BM25
 papi search --hybrid "query"          # ranked + exact boost
 papi ask "question"                   # PaperQA2 RAG
 papi ask "question" --backend leann   # LEANN RAG
+papi notes {name}                     # open/print implementation notes
 ```
+
+## Search Escalation (cheapest first)
+
+1. `papi search --rg "X"` — exact text, fast, no LLM
+2. `papi search "X"` — ranked BM25 (requires `papi index --backend search` first)
+3. `papi search --hybrid "X"` — ranked + exact boost
+4. `leann_search()` — semantic search, returns file paths for follow-up
+5. `retrieve_chunks()` — formal citations (DOI, page numbers)
+6. `papi ask "..."` — full RAG synthesis
+
+## MCP Tool Selection (when papi CLI insufficient)
+
+| Tool | Speed | Output | Best For |
+|------|-------|--------|----------|
+| `leann_search(index, query, top_k)` | Fast | Snippets + file paths | Exploration, finding which paper to dig into |
+| `retrieve_chunks(query, index, k)` | Slower | Chunks + formal citations | Verification, citing specific claims |
+| `papi ask "..."` | Slowest | Synthesized answer | Cross-paper questions, "what does literature say" |
+
+- Check indexes: `leann_list()` or `list_pqa_indexes()`
+- Embedding priority: Voyage AI → Google/Gemini → OpenAI → Ollama
 
 ## Adding Papers
 
