@@ -10,8 +10,8 @@ Usage:
 
 Notes:
   - VERSION is optional; if provided, it must match pyproject.toml.
-  - Requires: git, python, gh; and gh auth login.
-  - Runs: make check, make build, creates/pushes tag, then gh release create.
+  - Requires: git, python.
+  - Runs: make check, make build, creates/pushes tag. CI handles GitHub release.
 EOF
   exit 0
 fi
@@ -50,12 +50,6 @@ PY
 
 require_cmd git
 require_cmd python
-require_cmd gh
-
-if ! gh auth status >/dev/null 2>&1; then
-  echo "gh is not authenticated. Run: gh auth login" >&2
-  exit 2
-fi
 
 require_clean_git
 
@@ -86,7 +80,4 @@ echo "Pushing commit + tag..."
 git push
 git push origin "$TAG"
 
-echo "Creating GitHub release (published) via gh..."
-gh release create "$TAG" --generate-notes --verify-tag
-
-echo "Done. This should trigger the Publish workflow."
+echo "Done. Tag push will trigger release.yml -> publish.yml workflows."
