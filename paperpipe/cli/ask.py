@@ -274,7 +274,7 @@ def ask(
                 echo_progress(f"LEANN index {index_name!r} not found; building it now...")
                 staging_dir = (config.PAPER_DB / ".pqa_papers").expanduser()
                 paperqa._refresh_pqa_pdf_staging_dir(staging_dir=staging_dir)
-                _leann_build_index(index_name=index_name, docs_dir=staging_dir, force=False, extra_args=[])
+                _leann_build_index(index_name=index_name, docs_dir=staging_dir, force=False, no_compact=True, extra_args=[])
         _ask_leann(
             query=query,
             index_name=leann_index,

@@ -145,6 +145,13 @@ from ..search import (
     is_flag=True,
     help="Disable embedding recomputation during LEANN build.",
 )
+@click.option(
+    "--leann-no-compact/--leann-compact",
+    "leann_no_compact",
+    default=True,
+    show_default=True,
+    help="Build non-compact index (enables incremental updates). Use --leann-compact for smaller storage.",
+)
 @click.option("--search-rebuild", is_flag=True, help="Rebuild the SQLite FTS search index from scratch.")
 @click.option(
     "--search-include-tex",
@@ -178,6 +185,7 @@ def index_cmd(
     leann_doc_chunk_size: Optional[int],
     leann_doc_chunk_overlap: Optional[int],
     leann_no_recompute: bool,
+    leann_no_compact: bool,
     search_rebuild: bool,
     search_include_tex: bool,
 ) -> None:
@@ -230,7 +238,13 @@ def index_cmd(
             leann_extra_args.append("--no-recompute")
 
         leann_extra_args.extend(list(ctx.args))
-        _leann_build_index(index_name=leann_index, docs_dir=staging_dir, force=leann_force, extra_args=leann_extra_args)
+        _leann_build_index(
+            index_name=leann_index,
+            docs_dir=staging_dir,
+            force=leann_force,
+            no_compact=leann_no_compact,
+            extra_args=leann_extra_args,
+        )
         echo_success(f"Built LEANN index {leann_index!r} under {config.PAPER_DB / '.leann' / 'indexes' / leann_index}")
         return
 
