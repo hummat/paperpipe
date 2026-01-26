@@ -1108,6 +1108,43 @@ class TestAddCommand:
         assert len(captured_model) == 1
         assert captured_model[0] == "gpt-4o-mini"
 
+    def test_add_arxiv_llm_flag_overrides_model(self, temp_db: Path, monkeypatch):
+        """Test that --llm flag passes model to generate_llm_content for arXiv papers."""
+
+        def mock_fetch(arxiv_id):
+            return {
+                "arxiv_id": arxiv_id,
+                "title": "Test ArXiv Paper",
+                "authors": ["Author One"],
+                "abstract": "Test abstract.",
+                "primary_category": "cs.AI",
+                "categories": ["cs.AI"],
+                "published": "2024-01-01",
+                "pdf_url": f"http://arxiv.org/pdf/{arxiv_id}",
+                "updated": "2024-01-01",
+            }
+
+        captured_model = []
+
+        def mock_generate_llm_content(*args, **kwargs):
+            captured_model.append(kwargs.get("model"))
+            return ("Summary", "Equations", ["tag"], "TL;DR")
+
+        monkeypatch.setattr(paper_mod, "fetch_arxiv_metadata", mock_fetch)
+        monkeypatch.setattr(paper_mod, "download_pdf", lambda *args: True)
+        monkeypatch.setattr(paper_mod, "download_source", lambda *args, **kwargs: None)
+        monkeypatch.setattr(paper_mod, "generate_llm_content", mock_generate_llm_content)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli_mod.cli,
+            ["add", "2401.12345", "--llm", "claude-3-opus"],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert len(captured_model) == 1
+        assert captured_model[0] == "claude-3-opus"
+
 
 class TestAddMultiplePapers:
     """Tests for adding multiple papers at once."""

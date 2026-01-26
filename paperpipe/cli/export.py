@@ -107,9 +107,9 @@ def audit(
     auto_interactive = sys.stdin.isatty() and sys.stdout.isatty()
     effective_interactive = interactive if interactive is not None else auto_interactive
 
-    if do_regenerate or yes:
+    if do_regenerate:
         selected_names = [name for name, _ in flagged]
-    elif effective_interactive:
+    elif effective_interactive and not yes:
         click.echo()
         if not click.confirm("Regenerate any flagged papers now?", default=False):
             return

@@ -48,6 +48,9 @@ dev = [
     "pytest-cov>=7.0.0",
     "ruff>=0.1.0",
     "twine>=5.0.0",
+    # Optional deps for test coverage (mirrors [dependency-groups].dev)
+    "bibtexparser>=1.4.0",
+    "pymupdf>=1.24.0",
 ]
 
 [dependency-groups]

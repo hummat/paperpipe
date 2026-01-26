@@ -101,8 +101,44 @@ class TestAuditCommand:
         assert "# Bad Paper" in (bad_dir / "summary.md").read_text()
         assert "Eikonal" not in (bad_dir / "summary.md").read_text()
 
-    def test_audit_yes_flag_skips_interactive_prompt(self, temp_db: Path):
-        """Test that --yes/-y flag skips confirmation prompts and regenerates all flagged papers."""
+    def test_audit_yes_flag_skips_prompts_without_regenerating(self, temp_db: Path):
+        """Test that --yes/-y flag skips prompts but does NOT regenerate without --regenerate."""
+        papers_dir = temp_db / "papers"
+
+        bad_dir = papers_dir / "bad-paper"
+        bad_dir.mkdir(parents=True)
+        (bad_dir / "meta.json").write_text(
+            json.dumps(
+                {
+                    "arxiv_id": "id-bad",
+                    "title": "Bad Paper",
+                    "authors": [],
+                    "abstract": "Abstract.",
+                    "tags": [],
+                    "added": "x",
+                }
+            )
+        )
+        (bad_dir / "source.tex").write_text(r"\begin{equation}x=1\end{equation}")
+        original_summary = "**Eikonal Regularization:** This is important.\n"
+        (bad_dir / "summary.md").write_text(original_summary)
+        (bad_dir / "equations.md").write_text(
+            'Based on the provided LaTeX content for the paper **"Some Other Paper"**\n'
+        )
+
+        paperpipe.save_index({"bad-paper": {"arxiv_id": "id-bad", "title": "Bad Paper", "tags": [], "added": "x"}})
+
+        runner = CliRunner()
+        # --yes alone should NOT regenerate, just skip prompts and exit
+        result = runner.invoke(cli_mod.cli, ["audit", "-y"])
+        assert result.exit_code == 0
+        assert "FLAGGED" in result.output
+        assert "Regenerating" not in result.output
+        # Summary should be unchanged
+        assert (bad_dir / "summary.md").read_text() == original_summary
+
+    def test_audit_yes_with_regenerate_skips_prompts_and_regenerates(self, temp_db: Path):
+        """Test that --yes --regenerate skips prompts and regenerates flagged papers."""
         papers_dir = temp_db / "papers"
 
         bad_dir = papers_dir / "bad-paper"
@@ -128,8 +164,8 @@ class TestAuditCommand:
         paperpipe.save_index({"bad-paper": {"arxiv_id": "id-bad", "title": "Bad Paper", "tags": [], "added": "x"}})
 
         runner = CliRunner()
-        # Use -y instead of --regenerate - should skip prompts and regenerate
-        result = runner.invoke(cli_mod.cli, ["audit", "-y", "--no-llm", "-o", "summary,equations"])
+        # --yes --regenerate should regenerate without prompts
+        result = runner.invoke(cli_mod.cli, ["audit", "-y", "--regenerate", "--no-llm", "-o", "summary,equations"])
         assert result.exit_code == 0
         assert "Regenerating bad-paper:" in result.output
         assert "# Bad Paper" in (bad_dir / "summary.md").read_text()
