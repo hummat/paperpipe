@@ -99,6 +99,7 @@ only-include = [
 ]
 
 [tool.pytest.ini_options]
+pythonpath = ["tests"]
 addopts = "--cov=paperpipe --cov-report=term-missing --cov-fail-under=75 -m 'not integration' -W ignore::DeprecationWarning:bibtexparser -W ignore::DeprecationWarning:pyparsing --cov-config=pyproject.toml"
 markers = [
     "integration: marks tests as integration tests (may require network/external services)",
