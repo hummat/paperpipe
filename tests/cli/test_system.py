@@ -18,16 +18,23 @@ from .conftest import REPO_ROOT, cli_mod
 
 
 class TestInstallSkillCommand:
-    def test_install_skill_creates_symlink_for_codex(self, temp_db: Path, tmp_path: Path, monkeypatch):
+    def test_install_skill_creates_symlinks_for_codex(self, temp_db: Path, tmp_path: Path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path))
 
         runner = pytest.importorskip("click.testing").CliRunner()
         result = runner.invoke(cli_mod.cli, ["install", "skill", "--codex"])
         assert result.exit_code == 0, result.output
 
+        # Check main papi skill
         dest = tmp_path / ".codex" / "skills" / "papi"
         assert dest.is_symlink()
-        assert dest.resolve() == (REPO_ROOT / "skill").resolve()
+        assert dest.resolve() == (REPO_ROOT / "skills" / "papi").resolve()
+
+        # Check specialized skills exist
+        for skill_name in ["papi-ask", "papi-verify", "papi-compare", "papi-ground", "papi-curate", "papi-init"]:
+            skill_dest = tmp_path / ".codex" / "skills" / skill_name
+            assert skill_dest.is_symlink(), f"{skill_name} should be installed"
+            assert skill_dest.resolve() == (REPO_ROOT / "skills" / skill_name).resolve()
 
     def test_install_skill_existing_dest_requires_force(self, temp_db: Path, tmp_path: Path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path))
@@ -51,7 +58,7 @@ class TestInstallSkillCommand:
 
         assert dest.is_symlink()
 
-    def test_install_skill_creates_symlink_for_gemini(self, temp_db: Path, tmp_path: Path, monkeypatch):
+    def test_install_skill_creates_symlinks_for_gemini(self, temp_db: Path, tmp_path: Path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path))
 
         runner = pytest.importorskip("click.testing").CliRunner()
@@ -60,83 +67,32 @@ class TestInstallSkillCommand:
 
         dest = tmp_path / ".gemini" / "skills" / "papi"
         assert dest.is_symlink()
-        assert dest.resolve() == (REPO_ROOT / "skill").resolve()
+        assert dest.resolve() == (REPO_ROOT / "skills" / "papi").resolve()
+
+    def test_install_skill_copy_mode_copies_directories(self, temp_db: Path, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        runner = pytest.importorskip("click.testing").CliRunner()
+        result = runner.invoke(cli_mod.cli, ["install", "skill", "--codex", "--copy"])
+        assert result.exit_code == 0, result.output
+
+        dest = tmp_path / ".codex" / "skills" / "papi"
+        assert dest.exists()
+        assert not dest.is_symlink()
+        assert (dest / "SKILL.md").exists()
 
 
 class TestInstallPromptsCommand:
-    def test_install_prompts_creates_symlinks_for_codex(self, temp_db: Path, tmp_path: Path, monkeypatch):
+    """Prompts are deprecated - these tests verify deprecation behavior."""
+
+    def test_install_prompts_shows_deprecation_warning(self, temp_db: Path, tmp_path: Path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path))
 
         runner = pytest.importorskip("click.testing").CliRunner()
         result = runner.invoke(cli_mod.cli, ["install", "prompts", "--codex"])
-        assert result.exit_code == 0, result.output
-
-        prompt_dir = tmp_path / ".codex" / "prompts"
-        assert prompt_dir.exists()
-
-        expected = [
-            "compare-papers.md",
-            "curate-paper-note.md",
-            "ground-with-paper.md",
-            "papi.md",
-            "verify-with-paper.md",
-        ]
-        for filename in expected:
-            dest = prompt_dir / filename
-            assert dest.is_symlink()
-            assert dest.resolve() == (REPO_ROOT / "prompts" / "codex" / filename).resolve()
-
-    def test_install_prompts_existing_dest_requires_force(self, temp_db: Path, tmp_path: Path, monkeypatch):
-        monkeypatch.setenv("HOME", str(tmp_path))
-        dest = tmp_path / ".codex" / "prompts" / "ground-with-paper.md"
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text("not a symlink")
-
-        runner = pytest.importorskip("click.testing").CliRunner()
-        result = runner.invoke(cli_mod.cli, ["install", "prompts", "--codex"])
-        assert result.exit_code == 0
-        assert "use --force" in result.output.lower()
-
-    def test_install_prompts_copy_mode_copies_files(self, temp_db: Path, tmp_path: Path, monkeypatch):
-        monkeypatch.setenv("HOME", str(tmp_path))
-
-        runner = pytest.importorskip("click.testing").CliRunner()
-        result = runner.invoke(cli_mod.cli, ["install", "prompts", "--codex", "--copy"])
-        assert result.exit_code == 0, result.output
-
-        dest = tmp_path / ".codex" / "prompts" / "curate-paper-note.md"
-        assert dest.exists()
-        assert not dest.is_symlink()
-
-    def test_install_prompts_creates_symlinks_for_gemini(self, temp_db: Path, tmp_path: Path, monkeypatch):
-        monkeypatch.setenv("HOME", str(tmp_path))
-
-        runner = pytest.importorskip("click.testing").CliRunner()
-        result = runner.invoke(cli_mod.cli, ["install", "prompts", "--gemini"])
-        assert result.exit_code == 0, result.output
-
-        prompt_dir = tmp_path / ".gemini" / "commands"
-        assert prompt_dir.exists()
-
-        expected = [
-            "compare-papers.toml",
-            "curate-paper-note.toml",
-            "ground-with-paper.toml",
-            "papi-run.toml",
-            "papi.toml",
-            "papi-list.toml",
-            "papi-path.toml",
-            "papi-search.toml",
-            "papi-show-eq.toml",
-            "papi-show-summary.toml",
-            "papi-show-tex.toml",
-            "papi-tags.toml",
-            "verify-with-paper.toml",
-        ]
-        for filename in expected:
-            dest = prompt_dir / filename
-            assert dest.is_symlink()
-            assert dest.resolve() == (REPO_ROOT / "prompts" / "gemini" / filename).resolve()
+        assert result.exit_code == 1
+        assert "deprecated" in result.output.lower()
+        assert "papi install skill" in result.output.lower()
 
 
 class TestInstallMcpCommand:
@@ -358,41 +314,23 @@ class TestUninstallSkillCommand:
 
 
 class TestUninstallPromptsCommand:
-    def test_uninstall_prompts_removes_symlinks_for_codex(self, temp_db: Path, tmp_path: Path, monkeypatch):
+    """Prompts are deprecated - these tests verify deprecation behavior."""
+
+    def test_uninstall_prompts_shows_deprecation_warning(self, temp_db: Path, tmp_path: Path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path))
 
         runner = pytest.importorskip("click.testing").CliRunner()
-        result = runner.invoke(cli_mod.cli, ["install", "prompts", "--codex"])
-        assert result.exit_code == 0, result.output
-
-        dest = tmp_path / ".codex" / "prompts" / "papi.md"
-        assert dest.is_symlink()
-
-        result2 = runner.invoke(cli_mod.cli, ["uninstall", "prompts", "--codex"])
-        assert result2.exit_code == 0, result2.output
-        assert not dest.exists()
-
-    def test_uninstall_prompts_removes_copied_files_for_codex(self, temp_db: Path, tmp_path: Path, monkeypatch):
-        monkeypatch.setenv("HOME", str(tmp_path))
-
-        runner = pytest.importorskip("click.testing").CliRunner()
-        result = runner.invoke(cli_mod.cli, ["install", "prompts", "--codex", "--copy"])
-        assert result.exit_code == 0, result.output
-
-        dest = tmp_path / ".codex" / "prompts" / "curate-paper-note.md"
-        assert dest.exists()
-        assert not dest.is_symlink()
-
-        result2 = runner.invoke(cli_mod.cli, ["uninstall", "prompts", "--codex"])
-        assert result2.exit_code == 0, result2.output
-        assert not dest.exists()
+        result = runner.invoke(cli_mod.cli, ["uninstall", "prompts", "--codex"])
+        assert result.exit_code == 1
+        assert "deprecated" in result.output.lower()
 
     def test_uninstall_parses_commas_for_components(self, temp_db: Path, tmp_path: Path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.setattr(shutil, "which", lambda _cmd: None)
 
         runner = pytest.importorskip("click.testing").CliRunner()
-        result = runner.invoke(cli_mod.cli, ["uninstall", "mcp,prompts", "--codex", "--force"])
+        # mcp,skill (not prompts) - prompts is deprecated
+        result = runner.invoke(cli_mod.cli, ["uninstall", "mcp,skill", "--codex", "--force"])
         assert result.exit_code == 0, result.output
 
 

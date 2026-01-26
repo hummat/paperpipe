@@ -68,8 +68,7 @@ Before making changes, read the architecture docs:
 
 - `paperpipe/` — Main package (Click CLI)
 - `tests/` — Test suite
-- `skill/` — Agent skill definitions
-- `prompts/` — Agent prompt templates
+- `skills/` — Agent skill definitions (papi, papi-verify, papi-compare, etc.)
 
 ## Pull Request Process
 

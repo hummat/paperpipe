@@ -1,12 +1,19 @@
 ---
 name: papi
-description: Help with paper references using paperpipe (papi). Use when user asks about papers, wants to verify code against a paper, needs paper context for implementation, or asks about equations/methods from literature.
+description: CLI reference for paperpipe (papi). Use for listing, searching, showing, adding papers. General paper queries not needing verification, comparison, or synthesis.
 allowed-tools: Read, Bash, Glob, Grep
 ---
 
-# Paper Reference Assistant
+# Paper Reference Assistant (CLI)
 
-Use when user mentions papers, arXiv IDs, equations, or "does this match the paper?"
+Use for general paper queries: listing, searching, showing content, adding papers.
+
+For specialized workflows, use dedicated skills:
+- `/papi-ask` — RAG queries requiring synthesis
+- `/papi-verify` — verify code against paper
+- `/papi-compare` — compare papers for decision
+- `/papi-ground` — ground responses with citations
+- `/papi-curate` — create project notes
 
 ## Setup
 

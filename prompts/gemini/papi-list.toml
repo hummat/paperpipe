@@ -1,6 +1,0 @@
-description = "Run `papi list` and include the output in the chat."
-prompt = """
-List all papers (with tags) from PaperPipe:
-
-!{papi list}
-"""

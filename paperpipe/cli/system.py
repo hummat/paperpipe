@@ -56,7 +56,7 @@ def path():
     help="Install repo-local MCP configs (.mcp.json + .gemini/settings.json) in the current directory (MCP only)",
 )
 @click.option("--force", is_flag=True, help="Overwrite existing installation")
-@click.option("--copy", is_flag=True, help="Copy prompts instead of symlinking (prompts only).")
+@click.option("--copy", is_flag=True, help="Copy skills instead of symlinking.")
 @click.option("--name", default="paperqa", show_default=True, help="MCP server name (MCP only)")
 @click.option("--embedding", default=None, show_default=False, help="Embedding model id (MCP only)")
 def install(
@@ -67,26 +67,27 @@ def install(
     name: str,
     embedding: Optional[str],
 ) -> None:
-    """Install papi integrations (skill, prompts, and/or MCP config).
+    """Install papi integrations (skill and/or MCP config).
 
-    By default, installs everything: skill + prompts + mcp.
+    By default, installs: skill + mcp.
 
     Components can be selected by name and combined:
-      - `papi install mcp prompts`
-      - `papi install mcp,prompts`
+      - `papi install skill mcp`
+      - `papi install skill,mcp`
 
     \b
     Examples:
-        papi install                    # Install skill + prompts + mcp
-        papi install skill              # Install skill only
-        papi install prompts --copy     # Install prompts only, copy files
+        papi install                    # Install skill + mcp
+        papi install skill              # Install skill only (7 skills)
         papi install mcp --repo         # Install repo-local MCP configs
         papi install --codex            # Install everything for Codex only
         papi install mcp --embedding text-embedding-3-small
+
+    Note: `prompts` component is deprecated. Prompts have been converted to skills.
     """
     requested = _parse_components(components)
     if not requested:
-        requested = ["skill", "prompts", "mcp"]
+        requested = ["skill", "mcp"]
 
     allowed = {"skill", "prompts", "mcp"}
     unknown = sorted({c for c in requested if c not in allowed})
@@ -99,13 +100,13 @@ def install(
 
     if targets and "repo" in targets and not want_mcp:
         raise click.UsageError("--repo is only valid when installing mcp")
-    if copy and not want_prompts:
-        raise click.UsageError("--copy is only valid when installing prompts")
+    if copy and not want_skill:
+        raise click.UsageError("--copy is only valid when installing skill")
     if (name != "paperqa" or embedding is not None) and not want_mcp:
         raise click.UsageError("--name/--embedding are only valid when installing mcp")
 
     if want_skill:
-        _install_skill(targets=tuple([t for t in targets if t != "repo"]), force=force)
+        _install_skill(targets=tuple([t for t in targets if t != "repo"]), force=force, copy=copy)
     if want_prompts:
         _install_prompts(targets=tuple([t for t in targets if t != "repo"]), force=force, copy=copy)
     if want_mcp:
@@ -145,26 +146,27 @@ def install(
 @click.option("--force", is_flag=True, help="Remove even if the install does not match exactly")
 @click.option("--name", default="paperqa", show_default=True, help="MCP server name (MCP only)")
 def uninstall(components: tuple[str, ...], targets: tuple[str, ...], force: bool, name: str) -> None:
-    """Uninstall papi integrations (skill, prompts, and/or MCP config).
+    """Uninstall papi integrations (skill and/or MCP config).
 
-    By default, uninstalls everything: mcp + prompts + skill.
+    By default, uninstalls: mcp + skill.
 
     Components can be selected by name and combined:
-      - `papi uninstall mcp prompts`
-      - `papi uninstall mcp,prompts`
+      - `papi uninstall skill mcp`
+      - `papi uninstall skill,mcp`
 
     \b
     Examples:
-        papi uninstall                  # Uninstall skill + prompts + mcp
-        papi uninstall skill            # Uninstall skill only
-        papi uninstall prompts          # Uninstall prompts only
+        papi uninstall                  # Uninstall skill + mcp
+        papi uninstall skill            # Uninstall skill only (all 7 skills)
         papi uninstall mcp --repo       # Uninstall repo-local MCP configs
         papi uninstall --codex          # Uninstall everything for Codex only
         papi uninstall mcp --force      # Ignore remove failures / mismatches
+
+    Note: `prompts` component is deprecated. Prompts have been converted to skills.
     """
     requested = _parse_components(components)
     if not requested:
-        requested = ["skill", "prompts", "mcp"]
+        requested = ["skill", "mcp"]
 
     allowed = {"skill", "prompts", "mcp"}
     unknown = sorted({c for c in requested if c not in allowed})

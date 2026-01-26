@@ -81,7 +81,7 @@ uv run pytest -m "integration or not integration"  # all tests
 1. **Before editing**: read files first; understand existing code
 2. **After code changes**: `uv run ruff format .` → `uv run ruff check .` → `uv run pyright` → `uv run pytest -m "not integration"` (order matters: format may change code that later tools re-check)
 3. **Doc check**: explicitly verify if docs/prompts need updating (even if "no doc impact")
-4. **CLI changes**: update `README.md`, `AGENT_INTEGRATION.md`, `skill/SKILL.md`, `skill/commands.md`
+4. **CLI changes**: update `README.md`, `AGENT_INTEGRATION.md`, `skills/papi/SKILL.md`, `skills/papi/commands.md`
 5. **Doc style**: don't document default behavior (it's default); keep agent-facing docs KISS and concise
 
 If `uv run` fails (sandbox/offline): fall back to `.venv/bin/*` or set `UV_CACHE_DIR=$PWD/.uv-cache` and `UV_LINK_MODE=copy`.
