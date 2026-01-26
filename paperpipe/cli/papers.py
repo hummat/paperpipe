@@ -55,6 +55,7 @@ def _is_url(value: str) -> bool:
 @click.option("--name", "-n", help="Short name for the paper (only valid with single paper)")
 @click.option("--tags", "-t", help="Additional comma-separated tags (applied to all papers)")
 @click.option("--no-llm", is_flag=True, help="Skip LLM-based generation")
+@click.option("--llm", "llm_model", help="LiteLLM model ID for generation (overrides config/env).")
 @click.option("--tldr/--no-tldr", default=True, show_default=True, help="Generate a one-paragraph TL;DR.")
 @click.option("--figures", is_flag=True, help="Extract figures from LaTeX source or PDF")
 @click.option(
@@ -83,6 +84,7 @@ def add(
     name: Optional[str],
     tags: Optional[str],
     no_llm: bool,
+    llm_model: Optional[str],
     tldr: bool,
     figures: bool,
     duplicate: bool,
@@ -131,6 +133,7 @@ def add(
                 doi=doi,
                 url=url,
                 no_llm=no_llm,
+                llm_model=llm_model,
                 tldr=tldr,
             )
             if not success:
@@ -300,6 +303,7 @@ def add(
             p_name,
             p_tags,
             no_llm,
+            llm_model,
             tldr,
             duplicate,
             update,
@@ -363,6 +367,7 @@ def add(
 )
 @click.option("--name", "-n", "set_name", default=None, help="Set name directly (single paper only)")
 @click.option("--tags", "-t", "set_tags", default=None, help="Add tags (comma-separated)")
+@click.option("--llm", "llm_model", default=None, help="LiteLLM model ID for generation (overrides config/env).")
 def regenerate(
     papers: tuple[str, ...],
     regenerate_all: bool,
@@ -370,6 +375,7 @@ def regenerate(
     overwrite: Optional[str],
     set_name: Optional[str],
     set_tags: Optional[str],
+    llm_model: Optional[str],
 ):
     """Regenerate summary/equations/figures for existing papers (by name or arXiv ID).
 
@@ -435,6 +441,7 @@ def regenerate(
                 no_llm=no_llm,
                 overwrite_fields=overwrite_fields,
                 overwrite_all=overwrite_all,
+                llm_model=llm_model,
             )
             if not success:
                 failures += 1
@@ -526,6 +533,7 @@ def regenerate(
             no_llm=no_llm,
             overwrite_fields=overwrite_fields,
             overwrite_all=overwrite_all,
+            llm_model=llm_model,
         )
         if success:
             successes += 1
@@ -720,9 +728,13 @@ def notes(papers: tuple[str, ...], print_: bool, edit: Optional[bool]):
 
 @click.command()
 @click.argument("papers", nargs=-1, required=True)
-@click.confirmation_option(prompt="Are you sure you want to remove these paper(s)?")
-def remove(papers: tuple[str, ...]):
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt.")
+def remove(papers: tuple[str, ...], yes: bool):
     """Remove one or more papers from the database (by name or arXiv ID/URL)."""
+    if not yes:
+        if not click.confirm("Are you sure you want to remove these paper(s)?"):
+            raise SystemExit(1)
+
     index = load_index()
 
     successes = 0

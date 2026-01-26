@@ -36,6 +36,7 @@ from ..search import _audit_paper_dir, _parse_selection_spec
     default="summary,equations,tags",
     help="Overwrite fields when regenerating (all or list: summary,equations,tags,name).",
 )
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompts.")
 def audit(
     papers: tuple[str, ...],
     audit_all: bool,
@@ -45,6 +46,7 @@ def audit(
     do_regenerate: bool,
     no_llm: bool,
     overwrite: str,
+    yes: bool,
 ):
     """Audit generated summaries/equations for obvious issues and optionally regenerate flagged papers."""
     index = load_index()
@@ -105,7 +107,7 @@ def audit(
     auto_interactive = sys.stdin.isatty() and sys.stdout.isatty()
     effective_interactive = interactive if interactive is not None else auto_interactive
 
-    if do_regenerate:
+    if do_regenerate or yes:
         selected_names = [name for name, _ in flagged]
     elif effective_interactive:
         click.echo()

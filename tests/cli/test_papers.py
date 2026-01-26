@@ -1077,6 +1077,37 @@ class TestAddCommand:
         assert "added 1" in result.output
         assert "1 failed" in result.output
 
+    def test_add_llm_flag_overrides_model(self, temp_db: Path, monkeypatch):
+        """Test that --llm flag passes model to generate_llm_content."""
+        pdf_path = temp_db / "local.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n%local\n")
+
+        captured_model = []
+
+        def mock_generate_llm_content(*args, **kwargs):
+            captured_model.append(kwargs.get("model"))
+            return ("Summary", "Equations", ["tag"], "TL;DR")
+
+        monkeypatch.setattr(paper_mod, "generate_llm_content", mock_generate_llm_content)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli_mod.cli,
+            [
+                "add",
+                "--pdf",
+                str(pdf_path),
+                "--title",
+                "Test Paper",
+                "--llm",
+                "gpt-4o-mini",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert len(captured_model) == 1
+        assert captured_model[0] == "gpt-4o-mini"
+
 
 class TestAddMultiplePapers:
     """Tests for adding multiple papers at once."""
@@ -1134,6 +1165,38 @@ class TestRemoveCommand:
         # Neither paper should be removed
         assert (papers_dir / "p1").exists()
         assert (papers_dir / "p2").exists()
+
+    def test_remove_yes_flag_skips_confirmation(self, temp_db: Path):
+        """Test that -y short flag skips confirmation prompt."""
+        papers_dir = temp_db / "papers"
+        (papers_dir / "p1").mkdir(parents=True)
+        (papers_dir / "p1" / "meta.json").write_text(
+            json.dumps({"arxiv_id": TEST_ARXIV_ID, "title": "Paper 1", "authors": [], "abstract": ""})
+        )
+        paperpipe.save_index({"p1": {"arxiv_id": TEST_ARXIV_ID, "title": "Paper 1", "tags": [], "added": "x"}})
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["remove", "p1", "-y"])
+        assert result.exit_code == 0
+        assert "Removed: p1" in result.output
+        assert not (papers_dir / "p1").exists()
+
+    def test_remove_without_yes_prompts(self, temp_db: Path):
+        """Test that missing -y/--yes causes abort without input."""
+        papers_dir = temp_db / "papers"
+        (papers_dir / "p1").mkdir(parents=True)
+        (papers_dir / "p1" / "meta.json").write_text(
+            json.dumps({"arxiv_id": TEST_ARXIV_ID, "title": "Paper 1", "authors": [], "abstract": ""})
+        )
+        paperpipe.save_index({"p1": {"arxiv_id": TEST_ARXIV_ID, "title": "Paper 1", "tags": [], "added": "x"}})
+
+        runner = CliRunner()
+        # Provide 'n' as input to decline confirmation
+        result = runner.invoke(cli_mod.cli, ["remove", "p1"], input="n\n")
+        assert result.exit_code == 1
+        assert "Are you sure you want to remove these paper(s)?" in result.output
+        # Paper should NOT be removed
+        assert (papers_dir / "p1").exists()
 
 
 class TestRemoveMultiplePapers:
@@ -1561,6 +1624,34 @@ class TestRegenerateCommand:
         assert "Extracting figures from PDF" in result.output
         assert "source tarball not cached" in result.output
         assert "papi add --update" in result.output
+
+    def test_regenerate_llm_flag_overrides_model(self, temp_db: Path, monkeypatch):
+        """Test that --llm flag passes model to generate_llm_content."""
+        papers_dir = temp_db / "papers"
+        (papers_dir / "p1").mkdir(parents=True)
+        (papers_dir / "p1" / "meta.json").write_text(
+            json.dumps({"arxiv_id": "1", "title": "Paper 1", "authors": [], "abstract": ""})
+        )
+        (papers_dir / "p1" / "source.tex").write_text(r"\begin{equation}x=1\end{equation}")
+        paperpipe.save_index({"p1": {"arxiv_id": "1", "title": "Paper 1", "tags": [], "added": "x"}})
+
+        captured_model = []
+
+        def mock_generate_llm_content(*args, **kwargs):
+            captured_model.append(kwargs.get("model"))
+            return ("Summary", "Equations", ["tag"], "TL;DR")
+
+        monkeypatch.setattr(paper_mod, "generate_llm_content", mock_generate_llm_content)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli_mod.cli,
+            ["regenerate", "p1", "--llm", "gpt-4o-mini", "-o", "summary"],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert len(captured_model) == 1
+        assert captured_model[0] == "gpt-4o-mini"
 
 
 class TestRegenerateMultiplePapers:

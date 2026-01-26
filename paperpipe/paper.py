@@ -494,7 +494,7 @@ def _extract_name_from_title(title: str) -> Optional[str]:
     return None
 
 
-def _generate_name_with_llm(meta: dict) -> Optional[str]:
+def _generate_name_with_llm(meta: dict, model: Optional[str] = None) -> Optional[str]:
     """Ask LLM for a short memorable name."""
     prompt = f"""Given this paper title and abstract, suggest a single short name (1-2 words, lowercase, hyphenated if multi-word) that researchers commonly use to refer to this paper.
 
@@ -509,7 +509,7 @@ Return ONLY the name, nothing else. No quotes, no explanation.
 Title: {meta["title"]}
 Abstract: {meta["abstract"][:500]}"""
 
-    result = _run_llm(prompt, purpose="name")
+    result = _run_llm(prompt, purpose="name", model=model)
     if result:
         # Clean up the result - take first word/term only
         name = result.strip().lower().split()[0] if result.strip() else None
@@ -521,7 +521,7 @@ Abstract: {meta["abstract"][:500]}"""
     return None
 
 
-def _generate_local_pdf_name(meta: dict, *, use_llm: bool) -> str:
+def _generate_local_pdf_name(meta: dict, *, use_llm: bool, model: Optional[str] = None) -> str:
     """Generate a base name for local PDF ingestion (no collision suffixing)."""
     title = str(meta.get("title") or "").strip()
     if not title:
@@ -529,7 +529,7 @@ def _generate_local_pdf_name(meta: dict, *, use_llm: bool) -> str:
 
     name = _extract_name_from_title(title)
     if not name and use_llm and _litellm_available():
-        name = _generate_name_with_llm(meta)
+        name = _generate_name_with_llm(meta, model=model)
     if not name:
         name = _slugify_title(title)
 
@@ -538,7 +538,9 @@ def _generate_local_pdf_name(meta: dict, *, use_llm: bool) -> str:
     return name or "paper"
 
 
-def generate_auto_name(meta: dict, existing_names: set[str], use_llm: bool = True) -> str:
+def generate_auto_name(
+    meta: dict, existing_names: set[str], use_llm: bool = True, model: Optional[str] = None
+) -> str:
     """Generate a short memorable name for a paper.
 
     Strategy:
@@ -555,7 +557,7 @@ def generate_auto_name(meta: dict, existing_names: set[str], use_llm: bool = Tru
 
     # If no prefix name, try LLM
     if not name and use_llm and _litellm_available():
-        name = _generate_name_with_llm(meta)
+        name = _generate_name_with_llm(meta, model=model)
 
     # Fallback:
     # - arXiv ingest: arxiv ID
@@ -586,6 +588,7 @@ def generate_llm_content(
     do_equations: bool = True,
     do_tags: bool = True,
     do_tldr: bool = True,
+    model: Optional[str] = None,
 ) -> tuple[str, str, list[str], str]:
     """
     Generate summary, equations.md, semantic tags, and tldr.md using LLM.
@@ -607,6 +610,7 @@ def generate_llm_content(
             do_equations=do_equations,
             do_tags=do_tags,
             do_tldr=do_tldr,
+            model=model,
         )
     except ImportError as e:
         echo_warning(f"LiteLLM not installed; falling back to non-LLM generation ({e}).")
@@ -681,7 +685,7 @@ def _litellm_available() -> bool:
         return False
 
 
-def _run_llm(prompt: str, *, purpose: str) -> Optional[str]:
+def _run_llm(prompt: str, *, purpose: str, model: Optional[str] = None) -> Optional[str]:
     """Run a prompt through LiteLLM. Returns None on any failure."""
     try:
         import litellm  # type: ignore[import-not-found]
@@ -691,7 +695,7 @@ def _run_llm(prompt: str, *, purpose: str) -> Optional[str]:
         echo_error("LiteLLM not installed. Install with: pip install litellm")
         return None
 
-    model = default_llm_model()
+    model = model or default_llm_model()
     if _is_ollama_model_id(model):
         _prepare_ollama_env(os.environ)
         err = _ollama_reachability_error(api_base=os.environ["OLLAMA_API_BASE"])
@@ -771,6 +775,7 @@ def generate_with_litellm(
     do_equations: bool = True,
     do_tags: bool = True,
     do_tldr: bool = True,
+    model: Optional[str] = None,
 ) -> tuple[str, str, list[str], str]:
     """Generate summary, equations, tags, and tldr using LiteLLM.
 
@@ -805,7 +810,7 @@ Return ONLY the TL;DR text.
 {context}"""
 
         try:
-            llm_tldr = _run_llm(tldr_prompt, purpose="tldr")
+            llm_tldr = _run_llm(tldr_prompt, purpose="tldr", model=model)
             tldr = llm_tldr if llm_tldr else generate_simple_tldr(meta)
         except Exception:
             tldr = generate_simple_tldr(meta)
@@ -825,7 +830,7 @@ Keep it under 400 words. Use markdown. Only include information from the provide
 {context}"""
 
         try:
-            llm_summary = _run_llm(summary_prompt, purpose="summary")
+            llm_summary = _run_llm(summary_prompt, purpose="summary", model=model)
             summary = llm_summary if llm_summary else generate_simple_summary(meta, tex_content)
         except Exception:
             summary = generate_simple_summary(meta, tex_content)
@@ -847,7 +852,7 @@ Use markdown with ```latex blocks.
 {context}"""
 
             try:
-                llm_equations = _run_llm(eq_prompt, purpose="equations")
+                llm_equations = _run_llm(eq_prompt, purpose="equations", model=model)
                 equations = llm_equations if llm_equations else extract_equations_simple(tex_content)
             except Exception:
                 equations = extract_equations_simple(tex_content)
@@ -865,7 +870,7 @@ Title: {title}
 Abstract: {abstract[:800]}"""
 
         try:
-            llm_tags_text = _run_llm(tag_prompt, purpose="tags")
+            llm_tags_text = _run_llm(tag_prompt, purpose="tags", model=model)
             if llm_tags_text:
                 additional_tags = [
                     t.strip().lower().replace(" ", "-")
@@ -883,6 +888,7 @@ def _add_single_paper(
     name: Optional[str],
     tags: Optional[str],
     no_llm: bool,
+    llm_model: Optional[str],
     tldr: bool,
     duplicate: bool,
     update: bool,
@@ -936,6 +942,7 @@ def _add_single_paper(
             name=target,
             tags=tags,
             no_llm=no_llm,
+            llm_model=llm_model,
             tldr=tldr,
             extract_figures=extract_figures,
             index=index,
@@ -965,7 +972,7 @@ def _add_single_paper(
 
     # 2. Generate name from title if not provided
     if not name:
-        name = generate_auto_name(meta, existing_names, use_llm=not no_llm)
+        name = generate_auto_name(meta, existing_names, use_llm=not no_llm, model=llm_model)
         echo_progress(f"  Auto-generated name: {name}")
 
     paper_dir = config.PAPERS_DIR / name
@@ -1019,7 +1026,9 @@ def _add_single_paper(
         if tldr:
             tldr_content = generate_simple_tldr(meta)
     else:
-        summary, equations, llm_tags, llm_tldr = generate_llm_content(paper_dir, meta, tex_content)
+        summary, equations, llm_tags, llm_tldr = generate_llm_content(
+            paper_dir, meta, tex_content, model=llm_model
+        )
         if tldr:
             tldr_content = llm_tldr
 
@@ -1083,6 +1092,7 @@ def _add_local_pdf(
     doi: Optional[str],
     url: Optional[str],
     no_llm: bool,
+    llm_model: Optional[str] = None,
     tldr: bool = True,
 ) -> tuple[bool, Optional[str]]:
     """Add a local PDF as a first-class paper entry."""
@@ -1125,7 +1135,7 @@ def _add_local_pdf(
             echo_error(f"Paper '{name}' already exists. Use --name to specify a different name.")
             return False, None
     else:
-        candidate = _generate_local_pdf_name({"title": title, "abstract": ""}, use_llm=not no_llm)
+        candidate = _generate_local_pdf_name({"title": title, "abstract": ""}, use_llm=not no_llm, model=llm_model)
         if candidate in existing_names or (config.PAPERS_DIR / candidate).exists():
             echo_error(
                 f"Name conflict for local PDF '{title}': '{candidate}' already exists. "
@@ -1174,7 +1184,9 @@ def _add_local_pdf(
         if tldr:
             tldr_content = generate_simple_tldr(meta)
     else:
-        summary, equations, llm_tags, llm_tldr = generate_llm_content(paper_dir, meta, None, do_tldr=tldr)
+        summary, equations, llm_tags, llm_tldr = generate_llm_content(
+            paper_dir, meta, None, do_tldr=tldr, model=llm_model
+        )
         if tldr:
             tldr_content = llm_tldr
 
@@ -1205,6 +1217,7 @@ def _update_existing_paper(
     name: str,
     tags: Optional[str],
     no_llm: bool,
+    llm_model: Optional[str] = None,
     tldr: bool = True,
     extract_figures: bool = False,
     index: dict,
@@ -1271,7 +1284,9 @@ def _update_existing_paper(
         if tldr:
             tldr_content = generate_simple_tldr(meta)
     else:
-        summary, equations, llm_tags, llm_tldr = generate_llm_content(paper_dir, meta, tex_content)
+        summary, equations, llm_tags, llm_tldr = generate_llm_content(
+            paper_dir, meta, tex_content, model=llm_model
+        )
         if tldr:
             tldr_content = llm_tldr
 
@@ -1326,6 +1341,7 @@ def _regenerate_one_paper(
     overwrite_fields: set[str],
     overwrite_all: bool,
     audit_reasons: Optional[list[str]] = None,
+    llm_model: Optional[str] = None,
 ) -> tuple[bool, Optional[str]]:
     """Regenerate fields for a paper. Returns (success, new_name or None)."""
     paper_dir = config.PAPERS_DIR / name
@@ -1394,7 +1410,7 @@ def _regenerate_one_paper(
     # Regenerate name if requested
     if do_name:
         existing_names = set(index.keys()) - {name}
-        candidate = generate_auto_name(meta, existing_names, use_llm=not no_llm)
+        candidate = generate_auto_name(meta, existing_names, use_llm=not no_llm, model=llm_model)
         if candidate != name:
             new_dir = config.PAPERS_DIR / candidate
             if new_dir.exists():
@@ -1433,6 +1449,7 @@ def _regenerate_one_paper(
                 do_equations=do_equations,
                 do_tags=do_tags,
                 do_tldr=do_tldr,
+                model=llm_model,
             )
             if do_summary:
                 summary = llm_summary
