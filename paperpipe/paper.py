@@ -538,9 +538,7 @@ def _generate_local_pdf_name(meta: dict, *, use_llm: bool, model: Optional[str] 
     return name or "paper"
 
 
-def generate_auto_name(
-    meta: dict, existing_names: set[str], use_llm: bool = True, model: Optional[str] = None
-) -> str:
+def generate_auto_name(meta: dict, existing_names: set[str], use_llm: bool = True, model: Optional[str] = None) -> str:
     """Generate a short memorable name for a paper.
 
     Strategy:
@@ -1026,9 +1024,7 @@ def _add_single_paper(
         if tldr:
             tldr_content = generate_simple_tldr(meta)
     else:
-        summary, equations, llm_tags, llm_tldr = generate_llm_content(
-            paper_dir, meta, tex_content, model=llm_model
-        )
+        summary, equations, llm_tags, llm_tldr = generate_llm_content(paper_dir, meta, tex_content, model=llm_model)
         if tldr:
             tldr_content = llm_tldr
 
@@ -1284,9 +1280,7 @@ def _update_existing_paper(
         if tldr:
             tldr_content = generate_simple_tldr(meta)
     else:
-        summary, equations, llm_tags, llm_tldr = generate_llm_content(
-            paper_dir, meta, tex_content, model=llm_model
-        )
+        summary, equations, llm_tags, llm_tldr = generate_llm_content(paper_dir, meta, tex_content, model=llm_model)
         if tldr:
             tldr_content = llm_tldr
 
