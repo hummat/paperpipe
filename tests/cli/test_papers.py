@@ -1789,3 +1789,74 @@ class TestAddPdfUrl:
         assert _is_url("/local/path/to/paper.pdf") is False
         assert _is_url("./relative/path.pdf") is False
         assert _is_url("paper.pdf") is False
+
+
+class TestCommandAliases:
+    """Tests for command aliases (rm, ls, regen, s, idx)."""
+
+    def test_rm_alias_removes_paper(self, temp_db: Path):
+        """Test that 'rm' is an alias for 'remove'."""
+        papers_dir = temp_db / "papers"
+        (papers_dir / "test-paper").mkdir(parents=True)
+        (papers_dir / "test-paper" / "meta.json").write_text(
+            json.dumps({"arxiv_id": "1234.5678", "title": "Test Paper"})
+        )
+        paperpipe.save_index({"test-paper": {"arxiv_id": "1234.5678", "title": "Test Paper", "tags": [], "added": "x"}})
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["rm", "test-paper", "--yes"])
+        assert result.exit_code == 0
+        assert "Removed: test-paper" in result.output
+        assert not (papers_dir / "test-paper").exists()
+
+    def test_ls_alias_lists_papers(self, temp_db: Path):
+        """Test that 'ls' is an alias for 'list'."""
+        papers_dir = temp_db / "papers"
+        (papers_dir / "paper-a").mkdir(parents=True)
+        (papers_dir / "paper-a" / "meta.json").write_text(json.dumps({"title": "Paper A"}))
+        paperpipe.save_index({"paper-a": {"title": "Paper A", "tags": [], "added": "2024-01-01"}})
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["ls"])
+        assert result.exit_code == 0
+        assert "paper-a" in result.output
+
+    def test_regen_alias_regenerates_paper(self, temp_db: Path):
+        """Test that 'regen' is an alias for 'regenerate'."""
+        papers_dir = temp_db / "papers"
+        (papers_dir / "p1").mkdir(parents=True)
+        (papers_dir / "p1" / "meta.json").write_text(
+            json.dumps({"arxiv_id": "1", "title": "Paper 1", "authors": [], "abstract": ""})
+        )
+        (papers_dir / "p1" / "source.tex").write_text(r"\begin{equation}x=1\end{equation}")
+        paperpipe.save_index({"p1": {"arxiv_id": "1", "title": "Paper 1", "tags": [], "added": "x"}})
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["regen", "p1", "--no-llm", "-o", "summary,equations"])
+        assert result.exit_code == 0
+        assert "Regenerating p1:" in result.output
+        assert (papers_dir / "p1" / "summary.md").exists()
+
+    def test_s_alias_searches_papers(self, temp_db: Path):
+        """Test that 's' is an alias for 'search'."""
+        papers_dir = temp_db / "papers"
+        (papers_dir / "attention-paper").mkdir(parents=True)
+        (papers_dir / "attention-paper" / "meta.json").write_text(
+            json.dumps({"title": "Attention Is All You Need", "tags": ["transformers"]})
+        )
+        paperpipe.save_index(
+            {"attention-paper": {"title": "Attention Is All You Need", "tags": ["transformers"], "added": "x"}}
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["s", "attention"])
+        assert result.exit_code == 0
+        assert "attention-paper" in result.output
+
+    def test_idx_alias_shows_index_status(self, temp_db: Path):
+        """Test that 'idx' is an alias for 'index'."""
+        runner = CliRunner()
+        # Just check that the command is recognized and runs
+        result = runner.invoke(cli_mod.cli, ["idx", "--help"])
+        assert result.exit_code == 0
+        assert "index" in result.output.lower() or "pqa" in result.output.lower()

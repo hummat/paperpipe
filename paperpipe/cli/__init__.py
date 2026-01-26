@@ -46,3 +46,10 @@ cli.add_command(install)
 cli.add_command(uninstall)
 cli.add_command(docs)
 cli.add_command(rebuild_index)
+
+# Command aliases for ergonomics
+cli.add_command(remove, name="rm")
+cli.add_command(list_papers, name="ls")
+cli.add_command(regenerate, name="regen")
+cli.add_command(search, name="s")
+cli.add_command(index_cmd, name="idx")
