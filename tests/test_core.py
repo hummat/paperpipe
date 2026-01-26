@@ -226,6 +226,65 @@ class TestResolvePaperNameFromRef:
         assert name is None
         assert "not found" in error.lower()
 
+    # Fuzzy matching tests
+
+    def test_fuzzy_match_normalized_hyphen(self, temp_db: Path):
+        """Normalized match: ifnet -> if-net"""
+        index = {"if-net": {"title": "IF-Net"}}
+        name, error = core._resolve_paper_name_from_ref("ifnet", index)
+        assert name == "if-net"
+        assert error == ""
+
+    def test_fuzzy_match_normalized_case(self, temp_db: Path):
+        """Normalized match: nerf -> NeRF"""
+        index = {"NeRF": {"title": "NeRF"}}
+        name, error = core._resolve_paper_name_from_ref("nerf", index)
+        assert name == "NeRF"
+        assert error == ""
+
+    def test_fuzzy_match_high_confidence_auto(self, temp_db: Path):
+        """High similarity (>= 0.85) single match auto-selects"""
+        index = {"nerf-2020": {"title": "NeRF"}}
+        # nerf2020 vs nerf-2020 has high similarity after normalization
+        name, error = core._resolve_paper_name_from_ref("nerf2020", index)
+        assert name == "nerf-2020"
+        assert error == ""
+
+    def test_fuzzy_match_multiple_non_interactive(self, temp_db: Path, monkeypatch):
+        """Multiple fuzzy matches in non-interactive mode returns error with suggestions"""
+        import sys
+
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+
+        # Use similar-length names so they all match with get_close_matches
+        index = {"nerfa": {}, "nerfb": {}, "nerfc": {}}
+        name, error = core._resolve_paper_name_from_ref("nerf", index)
+        assert name is None
+        assert "Did you mean" in error or "Multiple papers match" in error
+
+    def test_fuzzy_match_interactive_selection(self, temp_db: Path, monkeypatch):
+        """Interactive selection from multiple fuzzy matches"""
+        import sys
+
+        import click
+
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+        monkeypatch.setattr(click, "prompt", lambda *args, **kwargs: 1)
+
+        # Use similar-length names so they all match with get_close_matches
+        index = {"nerfa": {}, "nerfb": {}}
+        name, error = core._resolve_paper_name_from_ref("nerf", index)
+        assert name is not None
+        assert error == ""
+
+    def test_exact_match_takes_priority(self, temp_db: Path):
+        """Exact match should be preferred over fuzzy"""
+        index = {"nerf": {}, "nerf-2020": {}}
+        name, error = core._resolve_paper_name_from_ref("nerf", index)
+        assert name == "nerf"
+        assert error == ""
+
 
 class TestCategoriesToTags:
     def test_known_categories(self):

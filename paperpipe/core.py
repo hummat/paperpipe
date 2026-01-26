@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 import click
 
 from . import config
+from .matching import MatchType, find_paper_matches, get_best_fuzzy_similarity, select_paper_interactively
 from .output import echo_warning
 
 
@@ -212,7 +213,7 @@ def _resolve_paper_name_from_ref(paper_or_arxiv: str, index: dict) -> tuple[Opti
     Resolve a user-supplied reference into a paper name.
 
     Supports:
-      - paper name (directory / index key)
+      - paper name (directory / index key) with fuzzy matching
       - arXiv ID
       - arXiv URL (abs/pdf/e-print)
     """
@@ -220,14 +221,40 @@ def _resolve_paper_name_from_ref(paper_or_arxiv: str, index: dict) -> tuple[Opti
     if not raw:
         return None, "Missing paper name or arXiv ID/URL."
 
-    if raw in index:
-        return raw, ""
+    # Try fuzzy matching (includes exact match)
+    match_result = find_paper_matches(raw, index, fuzzy_cutoff=0.7)
 
+    if match_result.match_type == MatchType.EXACT:
+        return match_result.matches[0], ""
+
+    # Check if name exists on disk before fuzzy matching (handles out-of-sync index)
     if _is_safe_paper_name(raw):
         paper_dir = config.PAPERS_DIR / raw
         if paper_dir.exists():
             return raw, ""
 
+    if match_result.match_type == MatchType.NORMALIZED:
+        # Auto-match normalized names (high confidence)
+        return match_result.matches[0], ""
+
+    if match_result.match_type == MatchType.FUZZY:
+        # Auto-match if single high-confidence result (>= 0.85)
+        best_match = match_result.matches[0]
+        similarity = get_best_fuzzy_similarity(raw, best_match)
+
+        if similarity >= 0.85 and len(match_result.matches) == 1:
+            return best_match, ""
+
+        # Multiple or lower confidence: interactive selection
+        selected = select_paper_interactively(match_result.matches, raw, index)
+        if selected:
+            return selected, ""
+
+        # Non-interactive or user cancelled
+        matches_str = ", ".join(match_result.matches)
+        return None, f"Multiple papers match '{raw}'. Did you mean: {matches_str}?"
+
+    # Try as arXiv ID
     try:
         arxiv_id = normalize_arxiv_id(raw)
     except ValueError:

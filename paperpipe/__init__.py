@@ -7,6 +7,7 @@ from .config import *  # noqa: F403
 from .core import *  # noqa: F403
 from .install import *  # noqa: F403
 from .leann import *  # noqa: F403
+from .matching import *  # noqa: F403
 from .output import *  # noqa: F403
 from .paper import *  # noqa: F403
 from .paperqa import *  # noqa: F403
