@@ -211,11 +211,6 @@ def _leann_incremental_update(
     Returns: (added_count, unchanged_count, error_count)
     Raises: IncrementalUpdateError if incremental update not possible
     """
-    try:
-        from leann.api import LeannBuilder
-    except ImportError as e:
-        raise IncrementalUpdateError(f"LEANN Python API not available: {e}") from e
-
     manifest = _load_leann_manifest(index_name)
     if manifest is None:
         raise IncrementalUpdateError("No manifest found; run full build first")
@@ -238,6 +233,8 @@ def _leann_incremental_update(
         )
 
     delta = _compute_index_delta(docs_dir, manifest)
+    if delta.removed_files:
+        raise IncrementalUpdateError("Removed files detected; full rebuild required")
     files_to_add = delta.new_files + delta.changed_files
 
     if not files_to_add:
@@ -247,6 +244,11 @@ def _leann_incremental_update(
                 manifest["files"].pop(removed, None)
             _save_leann_manifest(index_name, manifest)
         return 0, delta.unchanged_count, 0
+
+    try:
+        from leann.api import LeannBuilder
+    except ImportError as e:
+        raise IncrementalUpdateError(f"LEANN Python API not available: {e}") from e
 
     index_dir = config.PAPER_DB / ".leann" / "indexes" / index_name
     index_path = index_dir / "documents.leann"
@@ -487,7 +489,7 @@ def _leann_build_index(
 
     # Try incremental update if manifest exists and not forcing full rebuild
     manifest = _load_leann_manifest(index_name)
-    can_incremental = manifest is not None and not manifest.get("is_compact", True) and not force
+    can_incremental = manifest is not None and not manifest.get("is_compact", True) and not force and no_compact
 
     if can_incremental:
         # Extract embedding settings from extra_args

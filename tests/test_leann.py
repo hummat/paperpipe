@@ -622,6 +622,31 @@ class TestLeannIncrementalUpdate:
                 embedding_model="nomic-embed-text",
             )
 
+    def test_incremental_update_error_removed_files(self, temp_db: Path) -> None:
+        from paperpipe.leann import IncrementalUpdateError, _leann_incremental_update, _save_leann_manifest
+
+        docs_dir = temp_db / "docs"
+        docs_dir.mkdir(parents=True)
+
+        manifest = _make_manifest(
+            files={
+                "/nonexistent/removed.pdf": {
+                    "mtime": 12345.0,
+                    "indexed_at": "2026-01-26T10:00:00Z",
+                    "status": "ok",
+                }
+            }
+        )
+        _save_leann_manifest("test-index", manifest)
+
+        with pytest.raises(IncrementalUpdateError, match="Removed files"):
+            _leann_incremental_update(
+                index_name="test-index",
+                docs_dir=docs_dir,
+                embedding_mode="ollama",
+                embedding_model="nomic-embed-text",
+            )
+
     def test_incremental_update_no_changes_returns_zero(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from paperpipe.leann import _leann_incremental_update, _save_leann_manifest
 
