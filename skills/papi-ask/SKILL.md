@@ -47,3 +47,5 @@ RAG answers include:
 - Synthesized response
 - Citations with page/section references
 - Confidence indicators
+
+For general CLI commands, see `/papi`.

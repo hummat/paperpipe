@@ -26,3 +26,5 @@ Create a project-focused note in markdown.
 If multiple papers are included, structure sections per paper and add a short cross-paper synthesis.
 
 Return the complete markdown only.
+
+For general CLI commands, see `/papi`.

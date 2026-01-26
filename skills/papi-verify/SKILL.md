@@ -25,3 +25,5 @@ Project context (optional): $ARGUMENTS
 
 End with:
 **Cited papers**: <comma-separated paper names and/or arXiv IDs>
+
+For general CLI commands, see `/papi`.

@@ -6,9 +6,9 @@ allowed-tools: Read, Bash, Glob, Grep
 
 # Paper Reference Assistant (CLI)
 
-**Tool priority: Use `papi` CLI first. MCP RAG tools only when CLI is insufficient.**
+**Entry point skill.** Use `papi` CLI first; MCP RAG tools only when CLI is insufficient.
 
-For specialized workflows, use dedicated skills:
+For specialized workflows, invoke dedicated skills:
 - `/papi-ask` — RAG queries requiring synthesis
 - `/papi-verify` — verify code against paper
 - `/papi-compare` — compare papers for decision

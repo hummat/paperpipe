@@ -17,3 +17,5 @@ You are given paper excerpts (paste `papi show ... --level ...` output above, or
 
 End with:
 **Cited papers**: <comma-separated paper names and/or arXiv IDs>
+
+For general CLI commands, see `/papi`.

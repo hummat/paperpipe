@@ -28,3 +28,5 @@ For each non-trivial claim, include a short quote snippet (<= 15 words) and cite
 
 End with:
 **Cited papers**: <comma-separated paper names and/or arXiv IDs>
+
+For general CLI commands, see `/papi`.

@@ -23,3 +23,5 @@ Task: Initialize or update PaperPipe integration in this project's agent instruc
 - Extract only the content inside the code block (lines between the triple backticks)
 - Do NOT include the `<details>` glossary section from `papi docs` output
 - Preserve all existing content in the agent instructions file
+
+For general CLI commands, see `/papi`.
