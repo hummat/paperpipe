@@ -103,7 +103,7 @@ pip install -e ".[all]"
 | `papi add --pdf file.pdf` | Add a local PDF or URL |
 | `papi add --from-file list.json` | Import papers from a JSON list or text file |
 | `papi list` | List papers (filter with `--tag`) |
-| `papi search "query"` | Search across titles, tags, summaries, equations (`--rg` for grep-style, default uses ranked BM25 if indexed) |
+| `papi search "query"` | Search across titles, tags, summaries, equations (`--rg` for grep-style, `-p paper1,paper2` to limit scope) |
 | `papi index --backend search` | Build/update ranked search index (`search.db`) |
 | `papi show <paper> --level eq` | Print equations (best for agent sessions) |
 | `papi show <paper> --level tex` | Print LaTeX source |
@@ -178,6 +178,13 @@ Hybrid ranked+exact search:
 ```bash
 papi search --hybrid "surface reconstruction"
 papi search --hybrid --show-grep-hits "surface reconstruction"
+```
+
+Limit search to specific papers:
+
+```bash
+papi search "attention" -p attention-is-all-you-need
+papi search "loss" -p paper1,paper2,paper3
 ```
 
 ### What are FTS and BM25?

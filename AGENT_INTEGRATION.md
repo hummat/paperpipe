@@ -34,7 +34,7 @@ This repo implements methods from scientific papers. Papers are managed via `pap
 ### When NOT to Use MCP RAG
 
 - Paper name known → `papi show <paper> -l summary`
-- Exact term search → `papi search --rg "term"`
+- Exact term search → `papi search --rg "term"` (add `-p paper1,paper2` to limit scope)
 - Checking equations → `papi show <paper> -l eq`
 - Only use RAG when above methods fail or semantic matching required
 

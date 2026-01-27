@@ -9,6 +9,7 @@
 | `papi list [--tag TAG]` | List papers (optionally filtered) |
 | `papi tags` | List all tags with counts |
 | `papi search "query"` | Ranked search (BM25 if `search.db` exists) |
+| `papi search "query" -p paper1,paper2` | Search within specific papers |
 | `papi search --rg QUERY` | Exact text via ripgrep |
 | `papi search --rg --regex PATTERN` | Regex patterns |
 | `papi show <papers...> [-l eq\|tex\|summary]` | Print paper content |
