@@ -424,6 +424,67 @@ class TestSearchCommand:
         assert "schema version mismatch" in result.output.lower()
         assert "index --backend search --search-rebuild" in result.output
 
+    def test_search_papers_filter_limits_scope(self, temp_db: Path) -> None:
+        """Test that -p/--papers filters search to specific papers."""
+        paper_a = temp_db / "papers" / "paper-a"
+        paper_a.mkdir(parents=True)
+        (paper_a / "summary.md").write_text("neural network training\n")
+
+        paper_b = temp_db / "papers" / "paper-b"
+        paper_b.mkdir(parents=True)
+        (paper_b / "summary.md").write_text("neural network inference\n")
+
+        paperpipe.save_index(
+            {
+                "paper-a": {"arxiv_id": None, "title": "Training Paper", "tags": []},
+                "paper-b": {"arxiv_id": None, "title": "Inference Paper", "tags": []},
+            }
+        )
+
+        runner = CliRunner()
+        # Without filter: both papers match "neural"
+        result = runner.invoke(cli_mod.cli, ["search", "neural"])
+        assert result.exit_code == 0, result.output
+        assert "paper-a" in result.output
+        assert "paper-b" in result.output
+
+        # With filter: only paper-a is searched
+        result = runner.invoke(cli_mod.cli, ["search", "neural", "-p", "paper-a"])
+        assert result.exit_code == 0, result.output
+        assert "paper-a" in result.output
+        assert "paper-b" not in result.output
+
+    def test_search_papers_filter_comma_separated(self, temp_db: Path) -> None:
+        """Test that -p accepts comma-separated paper names."""
+        for name in ["paper-a", "paper-b", "paper-c"]:
+            paper_dir = temp_db / "papers" / name
+            paper_dir.mkdir(parents=True)
+            (paper_dir / "summary.md").write_text("neural network\n")
+
+        paperpipe.save_index(
+            {
+                "paper-a": {"arxiv_id": None, "title": "A", "tags": []},
+                "paper-b": {"arxiv_id": None, "title": "B", "tags": []},
+                "paper-c": {"arxiv_id": None, "title": "C", "tags": []},
+            }
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["search", "neural", "-p", "paper-a,paper-b"])
+        assert result.exit_code == 0, result.output
+        assert "paper-a" in result.output
+        assert "paper-b" in result.output
+        assert "paper-c" not in result.output
+
+    def test_search_papers_filter_nonexistent_paper(self, temp_db: Path) -> None:
+        """Test that filtering to nonexistent papers shows appropriate message."""
+        paperpipe.save_index({"paper-a": {"arxiv_id": None, "title": "A", "tags": []}})
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["search", "neural", "-p", "nonexistent"])
+        assert result.exit_code == 0, result.output
+        assert "No matching papers" in result.output
+
 
 class TestTagsCommand:
     def test_tags_empty(self, temp_db: Path):

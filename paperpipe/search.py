@@ -29,6 +29,7 @@ def _search_grep(
     ignore_case: bool,
     as_json: bool,
     include_tex: bool,
+    papers: tuple[str, ...] = (),
 ) -> bool:
     """Search using ripgrep/grep for exact hits + line numbers + context."""
     if context_lines < 0:
@@ -43,6 +44,15 @@ def _search_grep(
     if not config.PAPERS_DIR.exists():
         click.echo("No papers directory found.")
         return True
+
+    # Determine search paths: specific paper dirs or all of PAPERS_DIR
+    if papers:
+        search_paths = [config.PAPERS_DIR / p for p in papers if (config.PAPERS_DIR / p).exists()]
+        if not search_paths:
+            click.echo(f"No matching papers found for: {', '.join(papers)}")
+            return True
+    else:
+        search_paths = [config.PAPERS_DIR]
 
     effective_context_lines = 0 if as_json else context_lines
 
@@ -68,7 +78,7 @@ def _search_grep(
         for glob_pat in include_globs:
             cmd.extend(["--glob", glob_pat])
         cmd.append(query)
-        cmd.append(str(config.PAPERS_DIR))
+        cmd.extend(str(p) for p in search_paths)
         proc = subprocess.run(cmd, capture_output=True, text=True)
         if proc.returncode == 0:
             out = _relativize_grep_output(proc.stdout, root_dir=config.PAPERS_DIR)
@@ -102,7 +112,8 @@ def _search_grep(
             cmd.append("-i")
         for glob_pat in include_globs:
             cmd.append(f"--include={Path(glob_pat).name}")
-        cmd.extend([query, str(config.PAPERS_DIR)])
+        cmd.append(query)
+        cmd.extend(str(p) for p in search_paths)
         proc = subprocess.run(cmd, capture_output=True, text=True)
         if proc.returncode == 0:
             out = _relativize_grep_output(proc.stdout, root_dir=config.PAPERS_DIR)
@@ -169,6 +180,7 @@ def _collect_grep_matches(
     max_matches: int,
     ignore_case: bool,
     include_tex: bool,
+    papers: tuple[str, ...] = (),
 ) -> list[dict[str, object]]:
     include_globs = ["**/summary.md", "**/equations.md", "**/notes.md", "**/meta.json"]
     if include_tex:
@@ -176,6 +188,14 @@ def _collect_grep_matches(
 
     if not config.PAPERS_DIR.exists():
         return []
+
+    # Determine search paths: specific paper dirs or all of PAPERS_DIR
+    if papers:
+        search_paths = [config.PAPERS_DIR / p for p in papers if (config.PAPERS_DIR / p).exists()]
+        if not search_paths:
+            return []
+    else:
+        search_paths = [config.PAPERS_DIR]
 
     rg = shutil.which("rg")
     if rg:
@@ -198,7 +218,7 @@ def _collect_grep_matches(
         for glob_pat in include_globs:
             cmd.extend(["--glob", glob_pat])
         cmd.append(query)
-        cmd.append(str(config.PAPERS_DIR))
+        cmd.extend(str(p) for p in search_paths)
         proc = subprocess.run(cmd, capture_output=True, text=True)
         if proc.returncode == 0:
             out = _relativize_grep_output(proc.stdout, root_dir=config.PAPERS_DIR)
@@ -224,7 +244,8 @@ def _collect_grep_matches(
             cmd.append("-i")
         for glob_pat in include_globs:
             cmd.append(f"--include={Path(glob_pat).name}")
-        cmd.extend([query, str(config.PAPERS_DIR)])
+        cmd.append(query)
+        cmd.extend(str(p) for p in search_paths)
         proc = subprocess.run(cmd, capture_output=True, text=True)
         if proc.returncode == 0:
             out = _relativize_grep_output(proc.stdout, root_dir=config.PAPERS_DIR)
@@ -390,7 +411,7 @@ def _search_index_rebuild(*, include_tex: bool) -> int:
         return count
 
 
-def _search_fts(*, query: str, limit: int) -> list[dict[str, object]]:
+def _search_fts(*, query: str, limit: int, papers: tuple[str, ...] = ()) -> list[dict[str, object]]:
     db_path = _search_db_path()
     if not db_path.exists():
         return []
@@ -399,6 +420,21 @@ def _search_fts(*, query: str, limit: int) -> list[dict[str, object]]:
         _ensure_search_index_schema(conn)
 
         def run(match_query: str) -> list[sqlite3.Row]:
+            if papers:
+                placeholders = ",".join("?" for _ in papers)
+                return conn.execute(
+                    f"""
+                    SELECT
+                      name,
+                      title,
+                      bm25(papers_fts, 0.0, 10.0, 3.0, 5.0, 2.0, 1.0, 1.0, 0.5, 0.2) AS bm25
+                    FROM papers_fts
+                    WHERE papers_fts MATCH ? AND name IN ({placeholders})
+                    ORDER BY bm25
+                    LIMIT ?
+                    """,
+                    (match_query, *papers, limit),
+                ).fetchall()
             return conn.execute(
                 """
                 SELECT

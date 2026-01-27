@@ -49,8 +49,21 @@ def list_papers(tag: Optional[str], as_json: bool):
         click.echo()
 
 
+def _parse_papers_option(_ctx: click.Context, _param: click.Parameter, value: Optional[str]) -> tuple[str, ...]:
+    """Parse comma-separated paper names into a tuple."""
+    if not value:
+        return ()
+    return tuple(p.strip() for p in value.split(",") if p.strip())
+
+
 @click.command()
 @click.argument("query")
+@click.option(
+    "--papers",
+    "-p",
+    callback=_parse_papers_option,
+    help="Limit search to specific paper(s). Comma-separated.",
+)
 @click.option(
     "--limit",
     type=int,
@@ -132,6 +145,7 @@ def list_papers(tag: Optional[str], as_json: bool):
 def search(
     ctx: click.Context,
     query: str,
+    papers: tuple[str, ...],
     limit: int,
     use_grep: bool,
     fixed_strings: bool,
@@ -203,6 +217,7 @@ def search(
             ignore_case=ignore_case,
             as_json=as_json,
             include_tex=tex,
+            papers=papers,
         )
         if handled:
             return
@@ -224,13 +239,14 @@ def search(
                 )
 
         if hybrid:
-            fts_results = _search_fts(query=query, limit=max(limit, 50))
+            fts_results = _search_fts(query=query, limit=max(limit, 50), papers=papers)
             grep_matches = _collect_grep_matches(
                 query=query,
                 fixed_strings=True,
                 max_matches=200,
                 ignore_case=True,
                 include_tex=tex,
+                papers=papers,
             )
         else:
             fts_results = []
@@ -285,7 +301,7 @@ def search(
         return
 
     if use_fts and _search_db_path().exists():
-        fts_results = _search_fts(query=query, limit=limit)
+        fts_results = _search_fts(query=query, limit=limit, papers=papers)
 
         if fts_results:
             for r in fts_results:
@@ -297,6 +313,13 @@ def search(
             return
 
     index = load_index()
+
+    # Filter index to specified papers if provided
+    if papers:
+        index = {k: v for k, v in index.items() if k in papers}
+        if not index:
+            click.echo(f"No matching papers found for: {', '.join(papers)}")
+            return
 
     def collect_results(*, fuzzy_mode: bool) -> list[tuple[str, dict, int, list[str]]]:
         results: list[tuple[str, dict, int, list[str]]] = []
