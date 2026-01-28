@@ -12,7 +12,13 @@ from urllib.parse import urlparse
 import click
 
 from . import config
-from .matching import MatchType, find_paper_matches, get_best_fuzzy_similarity, select_paper_interactively
+from .matching import (
+    MatchType,
+    find_paper_matches,
+    get_best_fuzzy_similarity,
+    normalize_paper_name,
+    select_paper_interactively,
+)
 from .output import echo_warning
 
 
@@ -233,6 +239,20 @@ def _resolve_paper_name_from_ref(paper_or_arxiv: str, index: dict) -> tuple[Opti
         if paper_dir.exists():
             return raw, ""
 
+    # Check for normalized match on disk (e.g., "ifnet" -> "if-net" folder)
+    if match_result.match_type in (MatchType.NOT_FOUND, MatchType.FUZZY) and config.PAPERS_DIR.exists():
+        query_norm = normalize_paper_name(raw)
+        disk_matches = [
+            d.name for d in config.PAPERS_DIR.iterdir() if d.is_dir() and normalize_paper_name(d.name) == query_norm
+        ]
+        if len(disk_matches) == 1:
+            return disk_matches[0], ""
+        if len(disk_matches) > 1:
+            selected = select_paper_interactively(disk_matches, raw, index)
+            if selected:
+                return selected, ""
+            return None, f"Multiple papers match '{raw}' on disk: {', '.join(sorted(disk_matches))}"
+
     if match_result.match_type == MatchType.NORMALIZED:
         # Auto-match normalized names (high confidence)
         return match_result.matches[0], ""
@@ -252,6 +272,8 @@ def _resolve_paper_name_from_ref(paper_or_arxiv: str, index: dict) -> tuple[Opti
 
         # Non-interactive or user cancelled
         matches_str = ", ".join(match_result.matches)
+        if len(match_result.matches) == 1:
+            return None, f"Paper not found: '{raw}'. Did you mean: {matches_str}?"
         return None, f"Multiple papers match '{raw}'. Did you mean: {matches_str}?"
 
     # Try as arXiv ID
