@@ -285,6 +285,30 @@ class TestResolvePaperNameFromRef:
         assert name == "nerf"
         assert error == ""
 
+    def test_normalized_disk_fallback(self, temp_db: Path):
+        """Finds paper on disk via normalized name even if not in index"""
+        # Create paper on disk with hyphenated name
+        paper_dir = temp_db / "papers" / "if-net"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "meta.json").write_text('{"title": "IF-Net"}')
+
+        # Query without hyphen - not in index, but should find on disk
+        name, error = core._resolve_paper_name_from_ref("ifnet", {})
+        assert name == "if-net"
+        assert error == ""
+
+    def test_normalized_disk_fallback_multiple(self, temp_db: Path):
+        """Multiple normalized matches on disk returns error in non-interactive mode"""
+        # Create two papers that normalize to the same thing
+        for pname in ["IF-Net", "if_net"]:
+            paper_dir = temp_db / "papers" / pname
+            paper_dir.mkdir(parents=True)
+            (paper_dir / "meta.json").write_text(f'{{"title": "{pname}"}}')
+
+        name, error = core._resolve_paper_name_from_ref("ifnet", {})
+        assert name is None
+        assert "Multiple papers match" in error
+
 
 class TestCategoriesToTags:
     def test_known_categories(self):
