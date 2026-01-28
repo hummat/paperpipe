@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 import paperpipe
 import paperpipe.paper as paper_mod
 
@@ -333,6 +335,111 @@ class TestDownloadPdf:
 
         assert result is False
         assert not dest.exists()
+
+
+class TestSearchArxivByTitle:
+    """Unit tests for search_arxiv_by_title with mocked arxiv library."""
+
+    def test_returns_sorted_results_by_similarity(self, monkeypatch):
+        """Test that results are sorted by similarity score."""
+        from datetime import datetime
+        from unittest.mock import MagicMock
+
+        arxiv = pytest.importorskip("arxiv")
+
+        # Create mock papers with varying similarity to "Attention Is All You Need"
+        mock_papers = []
+        for title, entry_id in [
+            ("Neural Networks for Pattern Recognition", "https://arxiv.org/abs/1234.56789"),
+            ("Attention Is All You Need", "https://arxiv.org/abs/1706.03762"),
+            ("Self-Attention Mechanisms", "https://arxiv.org/abs/2001.00001"),
+        ]:
+            mock_paper = MagicMock()
+            mock_paper.title = title
+            mock_paper.entry_id = entry_id
+            mock_paper.authors = [MagicMock()]
+            mock_paper.authors[0].name = "Test Author"
+            mock_paper.published = datetime(2023, 1, 1)
+            mock_papers.append(mock_paper)
+
+        mock_client = MagicMock()
+        mock_client.results.return_value = iter(mock_papers)
+
+        monkeypatch.setattr(arxiv, "Search", lambda query, max_results, sort_by: MagicMock())
+        monkeypatch.setattr(arxiv, "Client", lambda: mock_client)
+
+        results = paper_mod.search_arxiv_by_title("Attention Is All You Need")
+
+        # Should be sorted by similarity (exact match first)
+        assert len(results) == 3
+        assert results[0]["title"] == "Attention Is All You Need"
+        assert results[0]["similarity"] == 1.0
+        assert results[0]["arxiv_id"] == "1706.03762"
+
+    def test_strips_version_suffix_from_arxiv_id(self, monkeypatch):
+        """Test that version suffixes (v1, v2) are stripped from arXiv IDs."""
+        from datetime import datetime
+        from unittest.mock import MagicMock
+
+        arxiv = pytest.importorskip("arxiv")
+
+        mock_paper = MagicMock()
+        mock_paper.title = "Test Paper"
+        mock_paper.entry_id = "https://arxiv.org/abs/2301.00001v3"
+        mock_paper.authors = []
+        mock_paper.published = datetime(2023, 1, 1)
+
+        mock_client = MagicMock()
+        mock_client.results.return_value = iter([mock_paper])
+
+        monkeypatch.setattr(arxiv, "Search", lambda query, max_results, sort_by: MagicMock())
+        monkeypatch.setattr(arxiv, "Client", lambda: mock_client)
+
+        results = paper_mod.search_arxiv_by_title("Test Paper")
+
+        assert results[0]["arxiv_id"] == "2301.00001"  # No v3 suffix
+
+    def test_returns_empty_list_for_no_results(self, monkeypatch):
+        """Test that empty list is returned when no papers match."""
+        from unittest.mock import MagicMock
+
+        arxiv = pytest.importorskip("arxiv")
+
+        mock_client = MagicMock()
+        mock_client.results.return_value = iter([])
+
+        monkeypatch.setattr(arxiv, "Search", lambda query, max_results, sort_by: MagicMock())
+        monkeypatch.setattr(arxiv, "Client", lambda: mock_client)
+
+        results = paper_mod.search_arxiv_by_title("Nonexistent Paper Title XYZ123")
+
+        assert results == []
+
+    def test_limits_authors_to_five(self, monkeypatch):
+        """Test that only first 5 authors are included in results."""
+        from datetime import datetime
+        from unittest.mock import MagicMock
+
+        arxiv = pytest.importorskip("arxiv")
+
+        mock_paper = MagicMock()
+        mock_paper.title = "Test Paper"
+        mock_paper.entry_id = "https://arxiv.org/abs/2301.00001"
+        mock_paper.authors = [MagicMock() for _ in range(10)]
+        for i, author in enumerate(mock_paper.authors):
+            author.name = f"Author {i}"
+        mock_paper.published = datetime(2023, 1, 1)
+
+        mock_client = MagicMock()
+        mock_client.results.return_value = iter([mock_paper])
+
+        monkeypatch.setattr(arxiv, "Search", lambda query, max_results, sort_by: MagicMock())
+        monkeypatch.setattr(arxiv, "Client", lambda: mock_client)
+
+        results = paper_mod.search_arxiv_by_title("Test Paper")
+
+        assert len(results[0]["authors"]) == 5
+        assert results[0]["authors"][4] == "Author 4"
 
 
 class TestDownloadSource:

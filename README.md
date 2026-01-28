@@ -12,6 +12,7 @@
 # 1. Add papers you're implementing
 papi add 2303.08813                    # LoRA paper
 papi add https://arxiv.org/abs/1706.03762  # Attention paper
+papi add "Attention Is All You Need"   # Search by title
 
 # 2. Check what equations you need to implement
 papi show lora --level eq             # prints equations to stdout
@@ -99,7 +100,7 @@ pip install -e ".[all]"
 
 | Command | Purpose |
 |---------|---------|
-| `papi add <arxiv-id-or-url>` | Add a paper (downloads PDF + LaTeX, generates summary/equations/TL;DR) |
+| `papi add <arxiv-id-or-url-or-title>` | Add a paper (downloads PDF + LaTeX, generates summary/equations/TL;DR) |
 | `papi add --pdf file.pdf` | Add a local PDF or URL |
 | `papi add --from-file list.json` | Import papers from a JSON list or text file |
 | `papi list` | List papers (filter with `--tag`) |
@@ -147,6 +148,13 @@ papi add --from-file paper_ids.txt --tags "imported"
 papi add --from-file papers.bib
 # or install with BibTeX support:
 # uv tool install paperpipe --with "paperpipe[bibtex]"
+```
+
+**Title Search:**
+```bash
+# Add papers by title (auto-selects if high confidence match)
+papi add "Attention Is All You Need"
+papi add "NeRF: Representing Scenes as Neural Radiance Fields"
 ```
 
 **Semantic Scholar Support:**
