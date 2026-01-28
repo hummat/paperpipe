@@ -144,3 +144,37 @@ def get_best_fuzzy_similarity(query: str, match: str) -> float:
     query_norm = normalize_paper_name(query)
     match_norm = normalize_paper_name(match)
     return SequenceMatcher(None, query_norm, match_norm).ratio()
+
+
+def select_arxiv_result_interactively(results: list[dict], query: str) -> Optional[str]:
+    """Prompt user to select from arXiv search results.
+
+    Args:
+        results: List of search results from search_arxiv_by_title()
+        query: Original search query for display
+
+    Returns:
+        Selected arXiv ID or None if user cancels or non-interactive
+    """
+    if not results:
+        return None
+
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return None
+
+    click.secho(f"Multiple papers match '{query}':", fg="yellow")
+    for i, r in enumerate(results, 1):
+        title_short = r["title"][:60] + "..." if len(r["title"]) > 60 else r["title"]
+        authors = ", ".join(r["authors"][:3]) + ("..." if len(r["authors"]) > 3 else "")
+        click.echo(f"  {i}. [{r['arxiv_id']}] {title_short}")
+        click.echo(f"     {authors} ({r['published']}) [{int(r['similarity'] * 100)}% match]")
+    click.echo("  0. Cancel")
+
+    try:
+        choice = click.prompt("Select paper", type=int, default=0)
+        if 1 <= choice <= len(results):
+            return results[choice - 1]["arxiv_id"]
+    except (click.Abort, KeyboardInterrupt):
+        pass
+
+    return None

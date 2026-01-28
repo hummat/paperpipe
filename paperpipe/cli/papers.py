@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -37,6 +38,85 @@ from ..search import _maybe_delete_from_search_index, _maybe_update_search_index
 def _is_url(value: str) -> bool:
     """Check if value looks like an HTTP(S) URL."""
     return value.startswith("http://") or value.startswith("https://")
+
+
+def _looks_like_title_search(value: str) -> bool:
+    """Check if value could be a title search query.
+
+    Returns True for any non-empty string that isn't obviously an arXiv ID pattern.
+    This allows single-token titles like "CLIP", "DALL-E", "ELECTRA" to trigger search.
+    """
+    import re
+
+    value = value.strip()
+    if not value:
+        return False
+    # Reject strings that look like arXiv IDs (e.g., "1706.03762", "hep-th/9901001")
+    # These patterns are: YYMM.NNNNN or category/YYNNNNN
+    arxiv_pattern = r"^(\d{4}\.\d{4,5}(v\d+)?|[a-z-]+/\d{7}(v\d+)?)$"
+    if re.match(arxiv_pattern, value, re.IGNORECASE):
+        return False
+    return True
+
+
+def _resolve_identifier_to_arxiv_id(
+    identifier: str, *, similarity_threshold: float = 0.85
+) -> tuple[Optional[str], Optional[str]]:
+    """Resolve identifier to arXiv ID. Returns (arxiv_id, error_message).
+
+    Handles: Semantic Scholar IDs, arXiv IDs/URLs, and title searches.
+    """
+    from ..matching import select_arxiv_result_interactively
+    from ..paper import search_arxiv_by_title
+
+    identifier = identifier.strip()
+
+    # 1. Semantic Scholar
+    if _is_semantic_scholar_id(identifier):
+        s2_id = _extract_semantic_scholar_id(identifier)
+        metadata = _fetch_semantic_scholar_metadata(s2_id)
+        if metadata and metadata.get("arxiv_id"):
+            return metadata["arxiv_id"], None
+        elif metadata:
+            return None, f"Paper {identifier} does not have an arXiv ID."
+        return None, f"Failed to fetch Semantic Scholar metadata: {identifier}"
+
+    # 2. arXiv ID/URL
+    try:
+        return normalize_arxiv_id(identifier), None
+    except ValueError:
+        pass
+
+    # 3. Title search
+    if not _looks_like_title_search(identifier):
+        return None, f"Could not parse arXiv ID from: {identifier!r}"
+
+    echo_progress(f"Searching arXiv for: {identifier}")
+    try:
+        results = search_arxiv_by_title(identifier, max_results=5)
+    except Exception as e:
+        return None, f"arXiv search failed: {e}"
+
+    if not results:
+        return None, f"No papers found matching: {identifier}"
+
+    # Auto-select if high similarity
+    top = results[0]
+    if top["similarity"] >= similarity_threshold:
+        echo_progress(f"  Found: {top['title'][:60]}... ({int(top['similarity'] * 100)}% match)")
+        return top["arxiv_id"], None
+
+    # Interactive selection
+    selected = select_arxiv_result_interactively(results, identifier)
+    if selected:
+        return selected, None
+
+    # Non-interactive fallback
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        echo_warning(f"Auto-selecting top result: {top['title'][:50]}...")
+        return top["arxiv_id"], None
+
+    return None, "No paper selected"
 
 
 @click.command()
@@ -159,31 +239,17 @@ def add(
     # Track S2 papers without arXiv IDs (these are failures we can't process)
     s2_no_arxiv_failures: list[str] = []
 
-    # 1. From CLI args
+    # 1. From CLI args (handles arXiv IDs, Semantic Scholar IDs, and title searches)
     for identifier in arxiv_ids:
-        # Check if this is a Semantic Scholar ID
-        if _is_semantic_scholar_id(identifier):
-            # Fetch metadata from Semantic Scholar
-            s2_id = _extract_semantic_scholar_id(identifier)
-            metadata = _fetch_semantic_scholar_metadata(s2_id)
-
-            if metadata and metadata.get("arxiv_id"):
-                # If we found an arXiv ID, use that for paperpipe
-                tasks.append((metadata["arxiv_id"], name, tags))
-            elif metadata:
-                # If we have metadata but no arXiv ID, track as failure
-                echo_warning(
-                    f"Paper {identifier} does not have an arXiv ID. Currently only arXiv papers are supported."
-                )
+        resolved_id, error = _resolve_identifier_to_arxiv_id(identifier)
+        if error or not resolved_id:
+            if error and "does not have an arXiv ID" in error:
+                echo_warning(error + " Currently only arXiv papers are supported.")
                 s2_no_arxiv_failures.append(identifier)
                 continue
-            else:
-                # Failed to fetch metadata
-                echo_error(f"Failed to fetch metadata for Semantic Scholar paper: {identifier}")
-                raise SystemExit(1)
-        else:
-            # Regular arXiv ID processing
-            tasks.append((identifier, name, tags))
+            echo_error(error or f"Could not resolve identifier: {identifier}")
+            raise SystemExit(1)
+        tasks.append((resolved_id, name, tags))
 
     # 2. From file
     if from_file:

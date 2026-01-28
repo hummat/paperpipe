@@ -10,6 +10,7 @@ from paperpipe.matching import (
     find_paper_matches,
     get_best_fuzzy_similarity,
     normalize_paper_name,
+    select_arxiv_result_interactively,
     select_paper_interactively,
 )
 
@@ -199,3 +200,91 @@ class TestMatchResult:
         assert MatchType.NORMALIZED.value == "normalized"
         assert MatchType.FUZZY.value == "fuzzy"
         assert MatchType.NOT_FOUND.value == "not_found"
+
+
+class TestSelectArxivResultInteractively:
+    """Tests for select_arxiv_result_interactively function."""
+
+    def test_returns_none_for_empty_list(self):
+        result = select_arxiv_result_interactively([], "query")
+        assert result is None
+
+    def test_returns_none_for_non_tty(self, monkeypatch):
+        import sys
+
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+        results = [
+            {"arxiv_id": "1234.56789", "title": "Test", "authors": [], "published": "2023-01-01", "similarity": 0.8}
+        ]
+        result = select_arxiv_result_interactively(results, "query")
+        assert result is None
+
+    @pytest.mark.parametrize(
+        "choice,expected",
+        [
+            (1, "1234.56789"),
+            (2, "5678.12345"),
+            (0, None),
+        ],
+    )
+    def test_interactive_selection(self, monkeypatch, choice, expected):
+        import sys
+
+        import click
+
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+        monkeypatch.setattr(click, "prompt", lambda *args, **kwargs: choice)
+
+        results = [
+            {
+                "arxiv_id": "1234.56789",
+                "title": "Paper A",
+                "authors": ["Author"],
+                "published": "2023-01-01",
+                "similarity": 0.9,
+            },
+            {
+                "arxiv_id": "5678.12345",
+                "title": "Paper B",
+                "authors": ["Other"],
+                "published": "2022-06-15",
+                "similarity": 0.7,
+            },
+        ]
+        result = select_arxiv_result_interactively(results, "query")
+        assert result == expected
+
+    def test_handles_abort(self, monkeypatch):
+        import sys
+
+        import click
+
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+
+        def raise_abort(*args, **kwargs):
+            raise click.Abort()
+
+        monkeypatch.setattr(click, "prompt", raise_abort)
+
+        results = [
+            {"arxiv_id": "1234.56789", "title": "Test", "authors": [], "published": "2023-01-01", "similarity": 0.8}
+        ]
+        result = select_arxiv_result_interactively(results, "query")
+        assert result is None
+
+    def test_handles_out_of_range_selection(self, monkeypatch):
+        import sys
+
+        import click
+
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+        monkeypatch.setattr(click, "prompt", lambda *args, **kwargs: 99)  # Out of range
+
+        results = [
+            {"arxiv_id": "1234.56789", "title": "Test", "authors": [], "published": "2023-01-01", "similarity": 0.8}
+        ]
+        result = select_arxiv_result_interactively(results, "query")
+        assert result is None

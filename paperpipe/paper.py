@@ -64,6 +64,47 @@ def fetch_arxiv_metadata(arxiv_id: str) -> dict:
     }
 
 
+def search_arxiv_by_title(query: str, *, max_results: int = 5) -> list[dict]:
+    """Search arXiv by title and return matching papers.
+
+    Args:
+        query: Title search query
+        max_results: Maximum number of results to return
+
+    Returns:
+        List of dicts with arxiv_id, title, authors, published, similarity
+    """
+    from difflib import SequenceMatcher
+
+    import arxiv
+
+    search = arxiv.Search(
+        query=f'ti:"{query}"',
+        max_results=max_results,
+        sort_by=arxiv.SortCriterion.Relevance,
+    )
+
+    results = []
+    query_lower = query.lower()
+
+    for paper in arxiv.Client().results(search):
+        arxiv_id = paper.entry_id.split("/abs/")[-1]
+        arxiv_id = arxiv_base_id(arxiv_id)  # Strip version suffix
+
+        results.append(
+            {
+                "arxiv_id": arxiv_id,
+                "title": paper.title,
+                "authors": [a.name for a in paper.authors[:5]],
+                "published": paper.published.strftime("%Y-%m-%d"),
+                "similarity": SequenceMatcher(None, query_lower, paper.title.lower()).ratio(),
+            }
+        )
+
+    results.sort(key=lambda x: x["similarity"], reverse=True)
+    return results
+
+
 def download_pdf(arxiv_id: str, dest: Path) -> bool:
     """Download paper PDF."""
     import arxiv
