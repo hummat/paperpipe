@@ -252,6 +252,8 @@ def _resolve_paper_name_from_ref(paper_or_arxiv: str, index: dict) -> tuple[Opti
 
         # Non-interactive or user cancelled
         matches_str = ", ".join(match_result.matches)
+        if len(match_result.matches) == 1:
+            return None, f"Paper not found: '{raw}'. Did you mean: {matches_str}?"
         return None, f"Multiple papers match '{raw}'. Did you mean: {matches_str}?"
 
     # Try as arXiv ID

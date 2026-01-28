@@ -119,7 +119,10 @@ def select_paper_interactively(
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         return None
 
-    click.secho(f"Multiple papers match '{query}':", fg="yellow")
+    if len(matches) == 1:
+        click.secho(f"No exact match for '{query}'. Did you mean:", fg="yellow")
+    else:
+        click.secho(f"Multiple papers match '{query}':", fg="yellow")
     for i, name in enumerate(matches, 1):
         title = index.get(name, {}).get("title", "")
         if title:
