@@ -76,7 +76,7 @@ def _parse_papers_option(_ctx: click.Context, _param: click.Parameter, value: Op
     "--rg",
     "use_grep",
     is_flag=True,
-    help="Use ripgrep/grep for fast exact-match search (shows file:line hits).",
+    help="Use ripgrep/grep for fast literal-match search (shows file:line hits). Add --regex for regex patterns.",
 )
 @click.option(
     "--fixed-strings/--regex",
