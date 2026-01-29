@@ -10,8 +10,8 @@
 | `papi tags` | List all tags with counts |
 | `papi search "query"` | Ranked search (BM25 if `search.db` exists) |
 | `papi search "query" -p paper1,paper2` | Search within specific papers |
-| `papi search --rg QUERY` | Exact text via ripgrep |
-| `papi search --rg --regex PATTERN` | Regex patterns |
+| `papi search --rg QUERY` | Literal text match via ripgrep (NOT regex by default) |
+| `papi search --rg --regex PATTERN` | Regex patterns (must add `--regex` explicitly) |
 | `papi show <papers...> [-l eq\|tex\|summary]` | Print paper content |
 | `papi notes <paper> [--print]` | Open/print implementation notes |
 | `papi index [--backend pqa\|leann\|search]` | Build retrieval index |

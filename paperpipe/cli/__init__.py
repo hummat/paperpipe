@@ -14,8 +14,52 @@ from .rebuild import rebuild_index
 from .search_cli import list_papers, search, tags
 from .system import docs, install, path, uninstall
 
+# Aliases: maps alias -> canonical name
+_ALIASES: dict[str, str] = {
+    "rm": "remove",
+    "ls": "list",
+    "regen": "regenerate",
+    "s": "search",
+    "idx": "index",
+}
 
-@click.group()
+
+class AliasGroup(click.Group):
+    """Click Group that supports hidden command aliases."""
+
+    def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
+        # Resolve alias to canonical name
+        canonical = _ALIASES.get(cmd_name, cmd_name)
+        return super().get_command(ctx, canonical)
+
+    def format_commands(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
+        # Show aliases inline with their canonical commands
+        commands = []
+        for subcommand in self.list_commands(ctx):
+            cmd = self.get_command(ctx, subcommand)
+            if cmd is None or cmd.hidden:
+                continue
+            # Find aliases for this command
+            aliases = [alias for alias, canon in _ALIASES.items() if canon == subcommand]
+            if aliases:
+                name_col = ", ".join([subcommand, *sorted(aliases)])
+            else:
+                name_col = subcommand
+            commands.append((name_col, cmd))
+
+        if commands:
+            limit = formatter.width - 6 - max(len(cmd[0]) for cmd in commands)
+            rows = []
+            for name_col, cmd in commands:
+                help_text = cmd.get_short_help_str(limit=limit)
+                rows.append((name_col, help_text))
+
+            if rows:
+                with formatter.section("Commands"):
+                    formatter.write_dl(rows)
+
+
+@click.group(cls=AliasGroup)
 @click.version_option(version=_cli_version())
 @click.option("--quiet", "-q", is_flag=True, help="Suppress progress messages.")
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug output.")
@@ -27,7 +71,7 @@ def cli(quiet: bool = False, verbose: bool = False):
     ensure_db()
 
 
-# Register all commands
+# Register all commands (aliases resolved via AliasGroup.get_command)
 cli.add_command(add)
 cli.add_command(regenerate)
 cli.add_command(list_papers, name="list")
@@ -46,10 +90,3 @@ cli.add_command(install)
 cli.add_command(uninstall)
 cli.add_command(docs)
 cli.add_command(rebuild_index)
-
-# Command aliases for ergonomics
-cli.add_command(remove, name="rm")
-cli.add_command(list_papers, name="ls")
-cli.add_command(regenerate, name="regen")
-cli.add_command(search, name="s")
-cli.add_command(index_cmd, name="idx")

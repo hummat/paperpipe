@@ -44,8 +44,8 @@ papi list | grep -i "keyword"  # check if paper exists before searching
 ## Search Commands
 
 ```bash
-papi search --rg "query"              # exact text (fast, no LLM)
-papi search --rg --regex "pattern"    # regex (OR, wildcards)
+papi search --rg "query"              # literal text match (fast, no LLM) — NOT regex by default!
+papi search --rg --regex "pattern"    # regex patterns (add --regex explicitly)
 papi search "query"                   # ranked BM25
 papi search --hybrid "query"          # ranked + exact boost
 papi search "query" -p paper1,paper2  # limit search to specific papers
