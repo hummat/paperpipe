@@ -236,8 +236,8 @@ def add(
 
     # Collect tasks: list of (arxiv_id, name_override, tags_override)
     tasks: list[tuple[str, Optional[str], Optional[str]]] = []
-    # Track S2 papers without arXiv IDs (these are failures we can't process)
-    s2_no_arxiv_failures: list[str] = []
+    # Track resolution failures (S2 papers without arXiv IDs, title search failures, etc.)
+    resolution_failures: list[str] = []
 
     # 1. From CLI args (handles arXiv IDs, Semantic Scholar IDs, and title searches)
     for identifier in arxiv_ids:
@@ -245,10 +245,10 @@ def add(
         if error or not resolved_id:
             if error and "does not have an arXiv ID" in error:
                 echo_warning(error + " Currently only arXiv papers are supported.")
-                s2_no_arxiv_failures.append(identifier)
-                continue
-            echo_error(error or f"Could not resolve identifier: {identifier}")
-            raise SystemExit(1)
+            else:
+                echo_error(error or f"Could not resolve identifier: {identifier}")
+            resolution_failures.append(identifier)
+            continue
         tasks.append((resolved_id, name, tags))
 
     # 2. From file
@@ -338,12 +338,9 @@ def add(
                     tasks.append((line, None, tags))
 
     if not tasks:
-        if s2_no_arxiv_failures:
-            # All inputs were S2 papers without arXiv IDs - this is a failure
-            echo_error(
-                f"No papers to add: {len(s2_no_arxiv_failures)} Semantic Scholar paper(s) "
-                "had no arXiv ID and could not be processed."
-            )
+        if resolution_failures:
+            # All inputs failed to resolve (S2 without arXiv, title search failures, etc.)
+            echo_error(f"No papers to add: {len(resolution_failures)} identifier(s) could not be resolved.")
             raise SystemExit(1)
         click.echo("No papers to add.")
         return
@@ -355,8 +352,8 @@ def add(
     added = 0
     updated = 0
     skipped = 0
-    # Include S2 papers without arXiv IDs in the failure count
-    failures = len(s2_no_arxiv_failures)
+    # Include resolution failures in the failure count
+    failures = len(resolution_failures)
 
     for i, (arxiv_id, p_name, p_tags) in enumerate(tasks, 1):
         if len(tasks) > 1:
@@ -392,8 +389,8 @@ def add(
         else:
             failures += 1
 
-    # Print summary for multiple papers (including S2 failures that weren't added to tasks)
-    total_inputs = len(tasks) + len(s2_no_arxiv_failures)
+    # Print summary for multiple papers (including resolution failures)
+    total_inputs = len(tasks) + len(resolution_failures)
     if total_inputs > 1:
         click.echo()
         if failures == 0:
