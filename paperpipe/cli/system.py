@@ -17,6 +17,7 @@ from ..install import (
     _uninstall_prompts,
     _uninstall_skill,
 )
+from ..output import echo_warning
 
 
 @click.command()
@@ -112,6 +113,11 @@ def install(
         _install_prompts(targets=non_repo_targets, force=force, copy=copy)
     if want_mcp:
         _install_mcp(targets=targets, name=name, embedding=embedding, force=force)
+
+    # Hint when --repo silently skipped skill installation
+    if want_skill and targets and "repo" in targets and not non_repo_targets:
+        echo_warning("Note: --repo only installs MCP config. To install slash commands (/papi, /papi-ask, …):")
+        click.echo("  papi install skill")
 
 
 @click.command("uninstall")
