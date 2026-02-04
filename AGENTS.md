@@ -40,11 +40,21 @@ Key flows:
 
 ## Commands
 
+**Use `uv run` (not bare `python`/`pytest`) and `make` targets for all commands.**
+
 ```bash
+# Verify after changes — ALWAYS run this:
+make check                    # fmt + lint + type + test
+
 # Install
-pip install -e ".[dev]"       # editable + dev tools
-pip install -e ".[all]"       # editable + all optional features
 uv sync --group dev           # via uv (matches CI)
+pip install -e ".[dev]"       # alternative: editable + dev tools
+
+# Individual steps (if needed)
+make fmt                      # ruff format
+make lint                     # ruff check
+make type                     # pyright
+make test                     # pytest (skip integration)
 
 # CLI
 papi --help
@@ -81,7 +91,7 @@ uv run pytest -m "integration or not integration"  # all tests
 ## Code Workflow
 
 1. **Before editing**: read files first; understand existing code
-2. **After code changes**: `make check` (or: `ruff format .` → `ruff check .` → `pyright` → `pytest`)
+2. **After code changes**: run `make check` (runs: ruff format → ruff check → pyright → pytest via uv)
 3. **Doc check**: explicitly verify if docs/prompts need updating (even if "no doc impact")
 4. **CLI changes**: update `README.md`, `AGENT_INTEGRATION.md`, `skills/papi/SKILL.md`, `skills/papi/commands.md`
 5. **Doc style**: don't document default behavior (it's default); keep agent-facing docs KISS and concise

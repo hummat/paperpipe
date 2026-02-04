@@ -40,6 +40,15 @@ def _is_url(value: str) -> bool:
     return value.startswith("http://") or value.startswith("https://")
 
 
+def _is_pdf_url(value: str) -> bool:
+    """Check if value is an HTTP(S) URL pointing to a PDF file."""
+    if not _is_url(value):
+        return False
+    from urllib.parse import urlparse
+
+    return urlparse(value).path.lower().endswith(".pdf")
+
+
 def _looks_like_title_search(value: str) -> bool:
     """Check if value could be a title search query.
 
@@ -238,11 +247,48 @@ def add(
     tasks: list[tuple[str, Optional[str], Optional[str]]] = []
     # Track resolution failures (S2 papers without arXiv IDs, title search failures, etc.)
     resolution_failures: list[str] = []
+    # Track PDF URL additions that bypass arXiv resolution
+    pdf_added = 0
 
     # 1. From CLI args (handles arXiv IDs, Semantic Scholar IDs, and title searches)
     for identifier in arxiv_ids:
         resolved_id, error = _resolve_identifier_to_arxiv_id(identifier)
         if error or not resolved_id:
+            # Fall back to PDF download for direct PDF URLs
+            if _is_pdf_url(identifier):
+                echo_progress(f"Downloading PDF from {identifier}...")
+                temp_pdf_path, dl_error = download_pdf_from_url(identifier)
+                if dl_error or not temp_pdf_path:
+                    echo_error(dl_error or f"Failed to download PDF: {identifier}")
+                    resolution_failures.append(identifier)
+                    continue
+                try:
+                    success, paper_name = _add_local_pdf(
+                        pdf=temp_pdf_path,
+                        title=title,
+                        name=name if len(arxiv_ids) == 1 else None,
+                        tags=tags,
+                        authors=authors,
+                        abstract=abstract,
+                        year=year,
+                        venue=venue,
+                        doi=doi,
+                        url=url or identifier,
+                        no_llm=no_llm,
+                        llm_model=llm_model,
+                        tldr=tldr,
+                    )
+                    if success:
+                        pdf_added += 1
+                        if paper_name:
+                            _maybe_update_search_index(name=paper_name)
+                    else:
+                        resolution_failures.append(identifier)
+                finally:
+                    if temp_pdf_path.exists():
+                        temp_pdf_path.unlink()
+                continue
+
             if error and "does not have an arXiv ID" in error:
                 echo_warning(error + " Currently only arXiv papers are supported.")
             else:
@@ -338,6 +384,12 @@ def add(
                     tasks.append((line, None, tags))
 
     if not tasks:
+        if pdf_added:
+            # All identifiers were PDF URLs handled inline; nothing left for arXiv processing
+            if resolution_failures:
+                echo_warning(f"added {pdf_added}, {len(resolution_failures)} failed")
+                raise SystemExit(1)
+            return
         if resolution_failures:
             # All inputs failed to resolve (S2 without arXiv, title search failures, etc.)
             echo_error(f"No papers to add: {len(resolution_failures)} identifier(s) could not be resolved.")
@@ -349,7 +401,7 @@ def add(
     existing_names = set(index.keys())
     base_to_names = _index_arxiv_base_to_names(index)
 
-    added = 0
+    added = pdf_added
     updated = 0
     skipped = 0
     # Include resolution failures in the failure count
@@ -390,7 +442,7 @@ def add(
             failures += 1
 
     # Print summary for multiple papers (including resolution failures)
-    total_inputs = len(tasks) + len(resolution_failures)
+    total_inputs = len(tasks) + len(resolution_failures) + pdf_added
     if total_inputs > 1:
         click.echo()
         if failures == 0:

@@ -105,10 +105,11 @@ def install(
     if (name != "paperqa" or embedding is not None) and not want_mcp:
         raise click.UsageError("--name/--embedding are only valid when installing mcp")
 
-    if want_skill:
-        _install_skill(targets=tuple([t for t in targets if t != "repo"]), force=force, copy=copy)
-    if want_prompts:
-        _install_prompts(targets=tuple([t for t in targets if t != "repo"]), force=force, copy=copy)
+    non_repo_targets = tuple([t for t in targets if t != "repo"])
+    if want_skill and (not targets or non_repo_targets):
+        _install_skill(targets=non_repo_targets, force=force, copy=copy)
+    if want_prompts and (not targets or non_repo_targets):
+        _install_prompts(targets=non_repo_targets, force=force, copy=copy)
     if want_mcp:
         _install_mcp(targets=targets, name=name, embedding=embedding, force=force)
 
@@ -187,9 +188,9 @@ def uninstall(components: tuple[str, ...], targets: tuple[str, ...], force: bool
     # Default uninstall order is reverse of install: mcp -> prompts -> skill.
     if want_mcp:
         _uninstall_mcp(targets=targets, name=name, force=force)
-    if want_prompts:
+    if want_prompts and (not targets or non_repo_targets):
         _uninstall_prompts(targets=non_repo_targets, force=force)
-    if want_skill:
+    if want_skill and (not targets or non_repo_targets):
         _uninstall_skill(targets=non_repo_targets, force=force)
 
 
