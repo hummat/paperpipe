@@ -99,6 +99,76 @@ class TestExtractNameFromTitle:
         assert paper_mod._extract_name_from_title("GPT (Generative): A Model") == "gpt-generative"
 
 
+class TestExtractTitleAndNameFromPdf:
+    """Tests for extract_title_and_name_from_pdf combined extraction."""
+
+    def _make_pdf(self, tmp_path: Path) -> Path:
+        pdf = tmp_path / "test.pdf"
+        pdf.write_bytes(b"%PDF-1.4\n")
+        return pdf
+
+    def _mock_fitz(self, monkeypatch, page_text: str):
+        import sys
+
+        class MockPage:
+            def get_text(self):
+                return page_text
+
+        class MockDoc:
+            def __init__(self, *_a, **_kw):
+                pass
+
+            def __len__(self):
+                return 1
+
+            def __getitem__(self, _i):
+                return MockPage()
+
+            def close(self):
+                pass
+
+        mock_fitz = type("MockFitz", (), {"open": MockDoc})()
+        monkeypatch.setitem(sys.modules, "fitz", mock_fitz)
+
+    def test_parses_title_and_name(self, tmp_path: Path, monkeypatch):
+        pdf = self._make_pdf(tmp_path)
+        monkeypatch.setattr(paper_mod, "_litellm_available", lambda: True)
+        self._mock_fitz(monkeypatch, "Attention Is All You Need\nAbstract...")
+        monkeypatch.setattr(
+            paper_mod,
+            "_run_llm",
+            lambda prompt, *, purpose, model=None: "TITLE: Attention Is All You Need\nNAME: transformer",
+        )
+        title, name = paper_mod.extract_title_and_name_from_pdf(pdf)
+        assert title == "Attention Is All You Need"
+        assert name == "transformer"
+
+    def test_returns_none_on_llm_failure(self, tmp_path: Path, monkeypatch):
+        pdf = self._make_pdf(tmp_path)
+        monkeypatch.setattr(paper_mod, "_litellm_available", lambda: True)
+        self._mock_fitz(monkeypatch, "Some text")
+        monkeypatch.setattr(paper_mod, "_run_llm", lambda prompt, *, purpose, model=None: None)
+        title, name = paper_mod.extract_title_and_name_from_pdf(pdf)
+        assert title is None
+        assert name is None
+
+    def test_returns_none_when_litellm_unavailable(self, tmp_path: Path, monkeypatch):
+        pdf = self._make_pdf(tmp_path)
+        monkeypatch.setattr(paper_mod, "_litellm_available", lambda: False)
+        title, name = paper_mod.extract_title_and_name_from_pdf(pdf)
+        assert title is None
+        assert name is None
+
+    def test_name_none_when_too_short(self, tmp_path: Path, monkeypatch):
+        pdf = self._make_pdf(tmp_path)
+        monkeypatch.setattr(paper_mod, "_litellm_available", lambda: True)
+        self._mock_fitz(monkeypatch, "Some Title\nAbstract...")
+        monkeypatch.setattr(paper_mod, "_run_llm", lambda prompt, *, purpose, model=None: "TITLE: Some Title\nNAME: ab")
+        title, name = paper_mod.extract_title_and_name_from_pdf(pdf)
+        assert title == "Some Title"
+        assert name is None  # "ab" is < 3 chars
+
+
 class TestGenerateAutoName:
     """Tests for generate_auto_name function."""
 

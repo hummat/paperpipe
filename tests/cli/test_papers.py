@@ -279,8 +279,12 @@ class TestAddCommand:
         pdf_path = temp_db / "local.pdf"
         pdf_path.write_bytes(b"%PDF-1.4\n%local\n")
 
-        # Mock the title extraction function
-        monkeypatch.setattr(paper_mod, "extract_title_from_pdf", lambda _: "Extracted Paper Title")
+        # Mock the combined title+name extraction function
+        monkeypatch.setattr(
+            paper_mod,
+            "extract_title_and_name_from_pdf",
+            lambda *a, **kw: ("Extracted Paper Title", "extracted-paper-title"),
+        )
 
         runner = CliRunner()
         result = runner.invoke(

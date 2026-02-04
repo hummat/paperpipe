@@ -749,6 +749,7 @@ def _run_llm(prompt: str, *, purpose: str, model: Optional[str] = None) -> Optio
             model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=default_llm_temperature(),
+            timeout=60,
         )
         out = response.choices[0].message.content  # type: ignore[union-attr]
         if out:
@@ -756,8 +757,13 @@ def _run_llm(prompt: str, *, purpose: str, model: Optional[str] = None) -> Optio
         echo_progress(f"  LLM ({model}): {purpose} ok")
         return out or None
     except Exception as e:
-        err_msg = str(e).split("\n")[0][:100]
-        echo_error(f"LLM ({model}): {purpose} failed: {err_msg}")
+        err_str = str(e)
+        # Surface rate-limit errors clearly
+        if "429" in err_str or "rate" in err_str.lower():
+            echo_error(f"LLM ({model}): rate-limited during {purpose}. Wait a moment and retry, or use --no-llm.")
+        else:
+            err_msg = err_str.split("\n")[0][:100]
+            echo_error(f"LLM ({model}): {purpose} failed: {err_msg}")
         return None
 
 
@@ -803,6 +809,72 @@ First page text:
         # Clean up: remove quotes, newlines, limit length
         result = result.strip().strip("\"'").split("\n")[0][:200]
     return result if result else None
+
+
+def extract_title_and_name_from_pdf(
+    pdf_path: Path, *, model: Optional[str] = None
+) -> tuple[Optional[str], Optional[str]]:
+    """Extract title *and* short name from a PDF in a single LLM call.
+
+    Returns (title, name).  Either or both may be ``None`` on failure.
+    """
+    if not _litellm_available():
+        return None, None
+
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        echo_warning("PyMuPDF not installed; cannot extract title from PDF. Use --title to specify manually.")
+        return None, None
+
+    try:
+        doc = fitz.open(pdf_path)
+        if len(doc) == 0:
+            doc.close()
+            return None, None
+        first_page_text = str(doc[0].get_text())[:3000]
+        doc.close()
+    except Exception as e:
+        echo_warning(f"Cannot read PDF for title extraction: {e}")
+        return None, None
+
+    if not first_page_text.strip():
+        return None, None
+
+    prompt = f"""From the first page of this academic paper, extract:
+1. The paper title
+2. A short name (1-2 words, lowercase, hyphenated if multi-word) that researchers commonly use to refer to this paper
+
+Examples of short names:
+- "Attention Is All You Need" → transformer
+- "Deep Residual Learning for Image Recognition" → resnet
+- "Generative Adversarial Networks" → gan
+- "BERT: Pre-training of Deep Bidirectional Transformers" → bert
+
+Return EXACTLY two lines, nothing else:
+TITLE: <the title>
+NAME: <the short name>
+
+First page text:
+{first_page_text}"""
+
+    result = _run_llm(prompt, purpose="title+name extraction", model=model)
+    if not result:
+        return None, None
+
+    title: Optional[str] = None
+    name: Optional[str] = None
+    for line in result.splitlines():
+        line = line.strip()
+        if line.upper().startswith("TITLE:"):
+            title = line[len("TITLE:") :].strip().strip("\"'")[:200]
+        elif line.upper().startswith("NAME:"):
+            raw = line[len("NAME:") :].strip().lower().split()[0] if line[len("NAME:") :].strip() else None
+            if raw:
+                raw = re.sub(r"[^a-z0-9-]", "", raw).strip("-")
+                if raw and 3 <= len(raw) <= 30:
+                    name = raw
+    return title or None, name
 
 
 def generate_with_litellm(
@@ -1141,11 +1213,23 @@ def _add_local_pdf(
         return False, None
 
     title = (title or "").strip()
-    if not title:
-        if no_llm:
-            echo_error("Missing --title (required with --no-llm).")
+    need_title = not title
+    need_name = not name
+
+    if need_title and no_llm:
+        echo_error("Missing --title (required with --no-llm).")
+        return False, None
+
+    # When both title and name must be extracted, use a single LLM call.
+    llm_extracted_name: Optional[str] = None
+    if need_title and need_name and not no_llm:
+        echo_progress("Extracting title from PDF...")
+        title, llm_extracted_name = extract_title_and_name_from_pdf(pdf, model=llm_model)
+        if not title:
+            echo_error("Could not extract title from PDF. Use --title to specify manually.")
             return False, None
-        # Try to extract title from PDF using LLM
+        echo_progress(f"  Extracted title: {title}")
+    elif need_title:
         echo_progress("Extracting title from PDF...")
         title = extract_title_from_pdf(pdf)
         if not title:
@@ -1172,7 +1256,12 @@ def _add_local_pdf(
             echo_error(f"Paper '{name}' already exists. Use --name to specify a different name.")
             return False, None
     else:
-        candidate = _generate_local_pdf_name({"title": title, "abstract": ""}, use_llm=not no_llm, model=llm_model)
+        # Prefer name from the combined extraction; fall back to normal generation.
+        candidate = (
+            llm_extracted_name
+            or _extract_name_from_title(title)
+            or _generate_local_pdf_name({"title": title, "abstract": ""}, use_llm=not no_llm, model=llm_model)
+        )
         if candidate in existing_names or (config.PAPERS_DIR / candidate).exists():
             echo_error(
                 f"Name conflict for local PDF '{title}': '{candidate}' already exists. "
