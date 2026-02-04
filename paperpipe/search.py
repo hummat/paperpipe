@@ -302,6 +302,10 @@ def _ensure_search_index_schema(conn: sqlite3.Connection) -> None:
             "INSERT INTO search_meta(key, value) VALUES ('schema_version', ?)", (config._SEARCH_DB_SCHEMA_VERSION,)
         )
 
+    # Ensure include_tex meta key exists (may be absent in DBs created before this feature).
+    if conn.execute("SELECT 1 FROM search_meta WHERE key='include_tex'").fetchone() is None:
+        conn.execute("INSERT INTO search_meta(key, value) VALUES ('include_tex', '0')")
+
     if not _sqlite_fts5_available(conn):
         raise click.ClickException("SQLite FTS5 not available in this Python/SQLite build.")
 
@@ -324,12 +328,13 @@ def _ensure_search_index_schema(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _set_search_index_meta(conn: sqlite3.Connection, *, include_tex: bool) -> None:
+def _set_search_index_meta(conn: sqlite3.Connection, *, include_tex: bool, commit: bool = True) -> None:
     conn.execute(
         "INSERT OR REPLACE INTO search_meta(key, value) VALUES ('include_tex', ?)",
         ("1" if include_tex else "0",),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def _get_search_index_include_tex(conn: sqlite3.Connection) -> bool:
@@ -337,12 +342,15 @@ def _get_search_index_include_tex(conn: sqlite3.Connection) -> bool:
     return bool(row and str(row["value"]).strip() == "1")
 
 
-def _search_index_delete(conn: sqlite3.Connection, *, name: str) -> None:
+def _search_index_delete(conn: sqlite3.Connection, *, name: str, commit: bool = True) -> None:
     conn.execute("DELETE FROM papers_fts WHERE name = ?", (name,))
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
-def _search_index_upsert(conn: sqlite3.Connection, *, name: str, index: Optional[dict[str, Any]] = None) -> None:
+def _search_index_upsert(
+    conn: sqlite3.Connection, *, name: str, index: Optional[dict[str, Any]] = None, commit: bool = True
+) -> None:
     paper_dir = config.PAPERS_DIR / name
     meta_path = paper_dir / "meta.json"
     if not paper_dir.exists() or not meta_path.exists():
@@ -394,19 +402,20 @@ def _search_index_upsert(conn: sqlite3.Connection, *, name: str, index: Optional
         """,
         (name, title, authors, tags, abstract, summary, equations, notes, tex),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def _search_index_rebuild(*, include_tex: bool) -> int:
     db_path = _search_db_path()
     with _sqlite_connect(db_path) as conn:
         _ensure_search_index_schema(conn)
-        _set_search_index_meta(conn, include_tex=include_tex)
+        _set_search_index_meta(conn, include_tex=include_tex, commit=False)
         conn.execute("DELETE FROM papers_fts")
         idx = load_index()
         count = 0
         for name in sorted(idx.keys()):
-            _search_index_upsert(conn, name=name, index=idx)
+            _search_index_upsert(conn, name=name, index=idx, commit=False)
             count += 1
         return count
 

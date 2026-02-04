@@ -485,6 +485,87 @@ class TestSearchCommand:
         assert result.exit_code == 0, result.output
         assert "No matching papers" in result.output
 
+    def test_incremental_index_removes_orphaned_entries(self, temp_db: Path) -> None:
+        """Incremental update should delete FTS rows for papers removed from the main index."""
+        if not fts5_available():
+            pytest.skip("SQLite FTS5 not available")
+
+        for name in ("keep", "remove"):
+            d = temp_db / "papers" / name
+            d.mkdir(parents=True)
+            (d / "meta.json").write_text(json.dumps({"title": name, "authors": [], "tags": []}))
+            (d / "summary.md").write_text(f"{name} summary.\n")
+
+        paperpipe.save_index(
+            {
+                "keep": {"arxiv_id": None, "title": "keep", "tags": []},
+                "remove": {"arxiv_id": None, "title": "remove", "tags": []},
+            }
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["index", "--backend", "search", "--search-rebuild"])
+        assert result.exit_code == 0, result.output
+
+        # Drop "remove" from main index, keep its paper dir (simulates stale entry).
+        paperpipe.save_index({"keep": {"arxiv_id": None, "title": "keep", "tags": []}})
+
+        result = runner.invoke(cli_mod.cli, ["index", "--backend", "search"])
+        assert result.exit_code == 0, result.output
+
+        from paperpipe.search import _search_db_path, _sqlite_connect
+
+        with _sqlite_connect(_search_db_path()) as conn:
+            names = {r["name"] for r in conn.execute("SELECT name FROM papers_fts").fetchall()}
+        assert "keep" in names
+        assert "remove" not in names
+
+    def test_rebuild_sets_include_tex_meta(self, temp_db: Path) -> None:
+        """--search-rebuild --search-include-tex should persist the include_tex flag in meta."""
+        if not fts5_available():
+            pytest.skip("SQLite FTS5 not available")
+
+        d = temp_db / "papers" / "p"
+        d.mkdir(parents=True)
+        (d / "meta.json").write_text(json.dumps({"title": "P", "authors": [], "tags": []}))
+        (d / "summary.md").write_text("s\n")
+        paperpipe.save_index({"p": {"arxiv_id": None, "title": "P", "tags": []}})
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli_mod.cli, ["index", "--backend", "search", "--search-rebuild", "--search-include-tex"]
+        )
+        assert result.exit_code == 0, result.output
+
+        from paperpipe.search import _get_search_index_include_tex, _search_db_path, _sqlite_connect
+
+        with _sqlite_connect(_search_db_path()) as conn:
+            assert _get_search_index_include_tex(conn) is True
+
+    def test_rebuild_batches_commits(self, temp_db: Path) -> None:
+        """Rebuild should not commit per-row; the context manager handles the single commit."""
+        if not fts5_available():
+            pytest.skip("SQLite FTS5 not available")
+
+        for name in ("a", "b", "c"):
+            d = temp_db / "papers" / name
+            d.mkdir(parents=True)
+            (d / "meta.json").write_text(json.dumps({"title": name, "authors": [], "tags": []}))
+            (d / "summary.md").write_text(f"{name}\n")
+        paperpipe.save_index({n: {"arxiv_id": None, "title": n, "tags": []} for n in ("a", "b", "c")})
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["index", "--backend", "search", "--search-rebuild"])
+        assert result.exit_code == 0, result.output
+        assert "3 paper(s)" in result.output
+
+        # Verify all papers are searchable (proves the single commit worked).
+        from paperpipe.search import _search_db_path, _sqlite_connect
+
+        with _sqlite_connect(_search_db_path()) as conn:
+            names = {r["name"] for r in conn.execute("SELECT name FROM papers_fts").fetchall()}
+        assert names == {"a", "b", "c"}
+
 
 class TestTagsCommand:
     def test_tags_empty(self, temp_db: Path):

@@ -30,10 +30,11 @@ from ..config import (
 )
 from ..core import load_index
 from ..leann import _leann_build_index
-from ..output import echo_error, echo_progress, echo_success
+from ..output import debug, echo_error, echo_progress, echo_success
 from ..search import (
     _ensure_search_index_schema,
     _search_db_path,
+    _search_index_delete,
     _search_index_rebuild,
     _search_index_upsert,
     _sqlite_connect,
@@ -261,10 +262,19 @@ def index_cmd(
         with _sqlite_connect(db_path) as conn:
             _ensure_search_index_schema(conn)
             idx = load_index()
+            current_names = set(idx.keys())
             count = 0
-            for name in sorted(idx.keys()):
-                _search_index_upsert(conn, name=name, index=idx)
+            for name in sorted(current_names):
+                _search_index_upsert(conn, name=name, index=idx, commit=False)
                 count += 1
+            # Remove orphaned entries for papers no longer in the index.
+            indexed_rows = conn.execute("SELECT name FROM papers_fts").fetchall()
+            indexed_names = {row["name"] for row in indexed_rows}
+            orphans = indexed_names - current_names
+            for name in orphans:
+                _search_index_delete(conn, name=name, commit=False)
+            if orphans:
+                debug("Removed %d orphaned search index entries: %s", len(orphans), ", ".join(sorted(orphans)))
             echo_success(f"Updated search index for {count} paper(s) at {db_path}")
         return
 
