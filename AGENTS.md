@@ -92,7 +92,7 @@ uv run pytest -m "integration or not integration"  # all tests
 
 1. **Before editing**: read files first; understand existing code
 2. **After code changes**: run `make check` (runs: ruff format → ruff check → pyright → pytest via uv)
-3. **Doc check**: explicitly verify if docs/prompts need updating (even if "no doc impact")
+3. **Doc check**: explicitly verify if docs/skills need updating (even if "no doc impact")
 4. **CLI changes**: update `README.md`, `AGENT_INTEGRATION.md`, `skills/papi/SKILL.md`, `skills/papi/commands.md`
 5. **Doc style**: don't document default behavior (it's default); keep agent-facing docs KISS and concise
 

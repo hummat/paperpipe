@@ -79,6 +79,7 @@ papi notes {name}                     # open/print implementation notes
 ```bash
 papi add 2303.13476                   # arXiv ID
 papi add https://arxiv.org/abs/...    # URL
+papi add 2303.13476 1706.03762 "Attention Is All You Need"  # multiple at once (mixed sources OK)
 papi add --pdf /path/to.pdf           # local PDF
 papi add --pdf "https://..."          # PDF from URL
 papi add --from-file papers.bib       # bulk import

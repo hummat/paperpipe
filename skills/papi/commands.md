@@ -20,7 +20,7 @@
 
 | Command | Description |
 |---------|-------------|
-| `papi add <arxiv-id-or-url>` | Add paper (idempotent) |
+| `papi add <id-or-url-or-title>...` | Add one or more papers (mixed sources OK) |
 | `papi add --pdf PATH_OR_URL` | Add local PDF or URL |
 | `papi add --from-file <file>` | Import from JSON/BibTeX/text |
 | `papi add <id> --update` | Refresh existing paper |

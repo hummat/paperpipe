@@ -49,6 +49,11 @@ def _is_pdf_url(value: str) -> bool:
     return urlparse(value).path.lower().endswith(".pdf")
 
 
+def _is_local_pdf(value: str) -> bool:
+    """Check if value is a path to an existing local PDF file."""
+    return value.lower().endswith(".pdf") and Path(value).is_file()
+
+
 def _looks_like_title_search(value: str) -> bool:
     """Check if value could be a title search query.
 
@@ -287,6 +292,31 @@ def add(
                 finally:
                     if temp_pdf_path.exists():
                         temp_pdf_path.unlink()
+                continue
+
+            # Fall back to local PDF file
+            if _is_local_pdf(identifier):
+                success, paper_name = _add_local_pdf(
+                    pdf=Path(identifier),
+                    title=title,
+                    name=name if len(arxiv_ids) == 1 else None,
+                    tags=tags,
+                    authors=authors,
+                    abstract=abstract,
+                    year=year,
+                    venue=venue,
+                    doi=doi,
+                    url=url,
+                    no_llm=no_llm,
+                    llm_model=llm_model,
+                    tldr=tldr,
+                )
+                if success:
+                    pdf_added += 1
+                    if paper_name:
+                        _maybe_update_search_index(name=paper_name)
+                else:
+                    resolution_failures.append(identifier)
                 continue
 
             if error and "does not have an arXiv ID" in error:

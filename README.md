@@ -9,9 +9,12 @@
 ## Typical workflow
 
 ```bash
-# 1. Add papers you're implementing
+# 1. Add papers you're implementing (multiple at once, mixed sources OK)
+papi add 2303.08813 1706.03762 "Attention Is All You Need"
+
+# Or one at a time
 papi add 2303.08813                    # LoRA paper
-papi add https://arxiv.org/abs/1706.03762  # Attention paper
+papi add https://arxiv.org/abs/1706.03762  # URL
 papi add "Attention Is All You Need"   # Search by title
 
 # 2. Check what equations you need to implement
@@ -100,7 +103,7 @@ pip install -e ".[all]"
 
 | Command | Purpose |
 |---------|---------|
-| `papi add <arxiv-id-or-url-or-title>` | Add a paper (downloads PDF + LaTeX, generates summary/equations/TL;DR) |
+| `papi add <id-or-url-or-title>...` | Add one or more papers (downloads PDF + LaTeX, generates summary/equations/TL;DR) |
 | `papi add --pdf file.pdf` | Add a local PDF or URL |
 | `papi add --from-file list.json` | Import papers from a JSON list or text file |
 | `papi list` | List papers (filter with `--tag`) |
@@ -162,6 +165,12 @@ papi add "NeRF: Representing Scenes as Neural Radiance Fields"
 # Add papers from Semantic Scholar
 papi add https://www.semanticscholar.org/paper/...
 papi add 0123456789abcdef0123456789abcdef01234567  # S2 paper ID
+```
+
+**Multiple papers at once** (mixed sources OK):
+```bash
+papi add 2303.08813 1706.03762 "Attention Is All You Need"
+papi add 2303.08813 https://www.semanticscholar.org/paper/... "NeRF"
 ```
 
 Exact text search (fast, no LLM required):
@@ -245,7 +254,7 @@ mode = "auto" # auto|fts|scan|hybrid
 paperpipe is designed to work with coding agents. Install the skill and MCP servers:
 
 ```bash
-papi install                          # installs skill + prompts + MCP for detected CLIs
+papi install                          # installs skill + MCP for detected CLIs
 # or be specific:
 papi install skill --claude --codex --gemini
 papi install mcp --claude --codex --gemini
@@ -256,9 +265,9 @@ After installation, your agent can:
 - Call MCP tools like `retrieve_chunks` for RAG retrieval
 - Verify code against paper equations
 
-### Custom prompts
+### Custom skills
 
-| Prompt | Description |
+| Skill | Description |
 |--------|-------------|
 | `/papi` | Route questions to the cheapest papi command |
 | `/papi-init` | Add/update PaperPipe integration in your project's AGENTS.md/CLAUDE.md |
@@ -680,7 +689,9 @@ papi list --tag attention
 ## Non-arXiv papers
 
 ```bash
-papi add --pdf ./paper.pdf
+papi add ./paper.pdf                                       # local PDF (auto-detected)
+papi add "https://example.com/paper.pdf"                   # PDF URL (auto-detected)
+papi add --pdf ./paper.pdf --title "My Paper" --no-llm     # --pdf for explicit metadata options
 papi add --pdf "https://example.com/paper.pdf" --tags siggraph
 ```
 

@@ -93,7 +93,7 @@ def install(
     allowed = {"skill", "prompts", "mcp"}
     unknown = sorted({c for c in requested if c not in allowed})
     if unknown:
-        raise click.UsageError(f"Unknown component(s): {', '.join(unknown)} (choose from: skill, prompts, mcp)")
+        raise click.UsageError(f"Unknown component(s): {', '.join(unknown)} (choose from: skill, mcp)")
 
     want_skill = "skill" in requested
     want_prompts = "prompts" in requested
@@ -178,7 +178,7 @@ def uninstall(components: tuple[str, ...], targets: tuple[str, ...], force: bool
     allowed = {"skill", "prompts", "mcp"}
     unknown = sorted({c for c in requested if c not in allowed})
     if unknown:
-        raise click.UsageError(f"Unknown component(s): {', '.join(unknown)} (choose from: skill, prompts, mcp)")
+        raise click.UsageError(f"Unknown component(s): {', '.join(unknown)} (choose from: skill, mcp)")
 
     want_skill = "skill" in requested
     want_prompts = "prompts" in requested
