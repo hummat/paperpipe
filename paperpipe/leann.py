@@ -389,7 +389,14 @@ def _leann_incremental_update(
                     metadata = dict(chunk.get("metadata") or {})
                     if "id" not in metadata:
                         metadata["id"] = f"{pdf.resolve()}::{i}"
-                    builder.add_text(chunk.get("text", ""), metadata=metadata)
+                    # Sanitize text: PDF extractors can produce lone surrogates
+                    # (e.g. \ud835 from math symbols) that are invalid in UTF-8.
+                    text = chunk.get("text", "").encode("utf-8", errors="replace").decode("utf-8")
+                    metadata = {
+                        k: v.encode("utf-8", errors="replace").decode("utf-8") if isinstance(v, str) else v
+                        for k, v in metadata.items()
+                    }
+                    builder.add_text(text, metadata=metadata)
                 manifest["files"][str(pdf.resolve())] = {
                     "mtime": pdf.stat().st_mtime,
                     "indexed_at": now_iso,
