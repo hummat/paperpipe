@@ -620,8 +620,25 @@ def generate_auto_name(meta: dict, existing_names: set[str], use_llm: bool = Tru
 def _extract_pdf_text(pdf_path: Path, *, max_chars: int = 50000) -> Optional[str]:
     """Extract text from PDF for use as LLM context.
 
+    Uses pymupdf4llm for structured markdown output (better reading order,
+    table detection) if available, falling back to raw fitz.get_text().
+
     Returns up to max_chars of text from the PDF, or None if extraction fails.
     """
+    # Try pymupdf4llm first for better structured output
+    try:
+        import pymupdf4llm
+
+        md_text = pymupdf4llm.to_markdown(pdf_path)
+        if md_text:
+            text = md_text[:max_chars].strip()
+            return text if text else None
+    except ImportError:
+        debug("pymupdf4llm not available, falling back to raw fitz")
+    except Exception as e:
+        debug("pymupdf4llm extraction failed for %s: %s, falling back to fitz", pdf_path, e)
+
+    # Fallback to raw fitz
     try:
         import fitz  # PyMuPDF
     except ImportError:
@@ -820,6 +837,44 @@ def _run_llm(prompt: str, *, purpose: str, model: Optional[str] = None) -> Optio
         return None
 
 
+def _extract_first_page_text(pdf_path: Path, max_chars: int = 3000) -> Optional[str]:
+    """Extract text from the first page of a PDF.
+
+    Uses pymupdf4llm for structured output if available, falling back to raw fitz.
+    Returns None if extraction fails.
+    """
+    # Try pymupdf4llm first (better reading order for multi-column layouts)
+    try:
+        import pymupdf4llm
+
+        md_text = pymupdf4llm.to_markdown(pdf_path, pages=[0])
+        if md_text:
+            text = md_text[:max_chars].strip()
+            if text:
+                return text
+    except ImportError:
+        pass
+    except Exception as e:
+        debug("pymupdf4llm first-page extraction failed for %s: %s", pdf_path, e)
+
+    # Fallback to raw fitz
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        return None
+
+    try:
+        doc = fitz.open(pdf_path)
+        if len(doc) == 0:
+            doc.close()
+            return None
+        first_page_text = str(doc[0].get_text())[:max_chars]
+        doc.close()
+        return first_page_text.strip() if first_page_text.strip() else None
+    except Exception:
+        return None
+
+
 def extract_title_from_pdf(pdf_path: Path) -> Optional[str]:
     """Extract title from a PDF using LLM.
 
@@ -829,26 +884,9 @@ def extract_title_from_pdf(pdf_path: Path) -> Optional[str]:
     if not _litellm_available():
         return None
 
-    # Try to extract text from first page using PyMuPDF
-    try:
-        import fitz  # PyMuPDF
-    except ImportError:
-        echo_warning("PyMuPDF not installed; cannot extract title from PDF. Use --title to specify manually.")
-        return None
-
-    try:
-        doc = fitz.open(pdf_path)
-        if len(doc) == 0:
-            doc.close()
-            return None
-        # Get text from first page (where title usually is)
-        first_page_text = str(doc[0].get_text())[:3000]  # Limit to avoid huge prompts
-        doc.close()
-    except Exception as e:
-        echo_warning(f"Cannot read PDF for title extraction: {e}")
-        return None
-
-    if not first_page_text.strip():
+    first_page_text = _extract_first_page_text(pdf_path)
+    if not first_page_text:
+        echo_warning("Cannot extract text from PDF for title extraction. Use --title to specify manually.")
         return None
 
     prompt = f"""Extract the title of this academic paper from the first page text below.
@@ -874,24 +912,9 @@ def extract_title_and_name_from_pdf(
     if not _litellm_available():
         return None, None
 
-    try:
-        import fitz  # PyMuPDF
-    except ImportError:
-        echo_warning("PyMuPDF not installed; cannot extract title from PDF. Use --title to specify manually.")
-        return None, None
-
-    try:
-        doc = fitz.open(pdf_path)
-        if len(doc) == 0:
-            doc.close()
-            return None, None
-        first_page_text = str(doc[0].get_text())[:3000]
-        doc.close()
-    except Exception as e:
-        echo_warning(f"Cannot read PDF for title extraction: {e}")
-        return None, None
-
-    if not first_page_text.strip():
+    first_page_text = _extract_first_page_text(pdf_path)
+    if not first_page_text:
+        echo_warning("Cannot extract text from PDF for title extraction. Use --title to specify manually.")
         return None, None
 
     prompt = f"""From the first page of this academic paper, extract:
