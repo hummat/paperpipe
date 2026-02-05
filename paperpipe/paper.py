@@ -956,11 +956,17 @@ def generate_with_litellm(
     tldr = ""
     if do_tldr:
         # Generate TL;DR (short, 2-3 sentences)
-        tldr_prompt = f"""Write a very short TL;DR (2-3 sentences) for this paper.
-Focus on the main problem and the proposed solution.
-Return ONLY the TL;DR text.
+        tldr_prompt = f"""Write a 2-3 sentence TL;DR for this paper.
 
-{context}"""
+STRICT RULES:
+- Use ONLY information explicitly stated in the context below
+- Do NOT infer, assume, or add details not directly present
+- Focus on the problem and solution AS DESCRIBED by the authors
+
+Context:
+{context}
+
+TL;DR:"""
 
         try:
             llm_tldr = _run_llm(tldr_prompt, purpose="tldr", model=model)
@@ -970,17 +976,32 @@ Return ONLY the TL;DR text.
 
     summary = ""
     if do_summary:
-        # Generate summary
-        summary_prompt = f"""Write a technical summary of this paper for a developer implementing the methods.
+        # Generate summary with strict grounding to reduce hallucination
+        summary_prompt = f"""You are a strictly grounded assistant. Your task is to summarize this paper for a developer.
 
-Include:
-- Core contribution (1-2 sentences)
-- Key methods/architecture
-- Important implementation details
+CRITICAL RULES - FOLLOW EXACTLY:
+1. Use ONLY information explicitly stated in the context below
+2. Do NOT fabricate, infer, or assume any technical details
+3. Do NOT name specific architectures, algorithms, or techniques unless they are explicitly mentioned
+4. If the context lacks detail on a topic, write "Not specified in paper" rather than guessing
+5. Prefer quoting or closely paraphrasing the authors' own descriptions
 
-Keep it under 400 words. Use markdown. Only include information from the provided context.
+FORMAT (use markdown):
+### Core Contribution
+[1-2 sentences describing the main contribution AS STATED by the authors]
 
-{context}"""
+### Method
+[Describe the approach using ONLY terms and descriptions from the paper. If specific architecture names like "CVAE", "PointNet++", "ResNet" etc. are not mentioned, do NOT add them.]
+
+### Key Details
+[List specific details that ARE mentioned: datasets, metrics, hyperparameters, etc. Omit sections where details are not provided.]
+
+Keep under 400 words. Accuracy over completeness.
+
+Context:
+{context}
+
+Summary:"""
 
         try:
             llm_summary = _run_llm(summary_prompt, purpose="summary", model=model)
@@ -990,18 +1011,26 @@ Keep it under 400 words. Use markdown. Only include information from the provide
 
     equations = ""
     if do_equations:
-        # Generate equations.md
+        # Generate equations.md - extraction task, less prone to hallucination
         if tex_content:
-            eq_prompt = f"""Extract the key equations from this paper's LaTeX source.
+            eq_prompt = f"""Extract key equations from this paper's LaTeX source.
 
-For each important equation:
-1. Show the LaTeX
-2. Briefly explain what it represents
-3. Note key variables
+RULES:
+- Copy equations EXACTLY as they appear in the source (do not modify LaTeX)
+- Only explain what the AUTHORS explicitly describe - do not infer meanings
+- If variable meaning is not stated, write "not defined in paper"
+- Skip trivial equations (e.g., x=1, simple arithmetic)
 
-Focus on: definitions, loss functions, main results. Skip trivial math.
-Use markdown with ```latex blocks.
+FORMAT for each equation:
+```latex
+[exact LaTeX from source]
+```
+**Meaning:** [author's description, or "not explicitly described"]
+**Variables:** [only those defined in paper]
 
+Focus on: loss functions, main formulas, key definitions.
+
+LaTeX source:
 {context}"""
 
             try:
