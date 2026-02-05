@@ -627,7 +627,7 @@ def _extract_pdf_text(pdf_path: Path) -> Optional[str]:
     """
     # Try pymupdf4llm first for better structured output
     try:
-        import pymupdf4llm
+        import pymupdf4llm  # type: ignore[import-not-found]
 
         md_text = pymupdf4llm.to_markdown(pdf_path)
         if md_text:
@@ -940,7 +940,7 @@ def _extract_first_page_text(pdf_path: Path, max_chars: int = 3000) -> Optional[
     """
     # Try pymupdf4llm first (better reading order for multi-column layouts)
     try:
-        import pymupdf4llm
+        import pymupdf4llm  # type: ignore[import-not-found]
 
         md_text = pymupdf4llm.to_markdown(pdf_path, pages=[0])
         if md_text:
