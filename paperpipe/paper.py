@@ -783,26 +783,98 @@ def _litellm_available() -> bool:
         return False
 
 
+# Fallback context window sizes for common models (when litellm doesn't have mapping).
+# Maps base model name patterns to max input tokens.
+_MODEL_CONTEXT_WINDOWS: dict[str, int] = {
+    # Gemini models
+    "gemini-2": 1_048_576,
+    "gemini-3": 1_048_576,
+    "gemini-1.5": 1_048_576,
+    "gemini-pro": 32_000,
+    # Claude models
+    "claude-4": 250_000,
+    "claude-sonnet-4": 250_000,
+    "claude-opus-4": 250_000,
+    "claude-3": 200_000,
+    "claude-3.5": 200_000,
+    "claude-3.6": 200_000,
+    "claude-3.7": 250_000,
+    # OpenAI models
+    "gpt-4o": 128_000,
+    "gpt-4-turbo": 128_000,
+    "gpt-4.1": 1_047_576,
+    "gpt-4.5": 1_047_576,
+    "gpt-5": 400_000,
+    "o1": 200_000,
+    "o3": 200_000,
+    "o4": 200_000,
+    # DeepSeek
+    "deepseek": 64_000,
+    # Llama
+    "llama-3": 128_000,
+    "llama-4": 128_000,
+    "llama3": 8_192,
+    "llama4": 128_000,
+    # Mistral
+    "mistral-large": 128_000,
+    "mistral-medium": 32_000,
+    "mistral-small": 32_000,
+    # Qwen
+    "qwen": 32_000,
+    "qwen2": 128_000,
+    "qwen3": 128_000,
+}
+
+
+def _get_fallback_context_window(model: str) -> Optional[int]:
+    """Get context window from local fallback map.
+
+    Extracts base model name from provider-prefixed models like
+    'openrouter/google/gemini-3-flash' -> 'gemini-3-flash'.
+    """
+    # Extract base model name (last component after slashes, lowercase)
+    base_name = model.split("/")[-1].lower()
+
+    # Try exact match first
+    if base_name in _MODEL_CONTEXT_WINDOWS:
+        return _MODEL_CONTEXT_WINDOWS[base_name]
+
+    # Try prefix matching (e.g., "gemini-3" matches "gemini-3-flash")
+    for pattern, context_size in _MODEL_CONTEXT_WINDOWS.items():
+        if base_name.startswith(pattern):
+            return context_size
+
+    return None
+
+
 def _check_context_limit(messages: list[dict[str, str]], model: str, litellm_module: Any) -> tuple[bool, Optional[str]]:
     """Check if messages fit within model's context window.
 
     Returns (ok, error_message). If model info unavailable, returns (True, None).
     """
+    max_input: Optional[int] = None
+
+    # Try litellm first
     try:
         info = litellm_module.get_model_info(model)
         max_input = info.get("max_input_tokens")
-        if not max_input:
-            return True, None  # No limit info available
     except Exception:
-        # Model not mapped in litellm - let the API handle it
-        debug("Could not get model info for %s, skipping context check", model)
+        pass
+
+    # Fallback to local map if litellm doesn't have it
+    if not max_input:
+        max_input = _get_fallback_context_window(model)
+
+    if not max_input:
+        debug("No context window info for %s, skipping check", model)
         return True, None
 
     try:
         token_count = litellm_module.token_counter(model=model, messages=messages)
     except Exception:
-        # Token counting failed - proceed anyway
-        return True, None
+        # Token counting failed - estimate from chars (rough: 4 chars ≈ 1 token)
+        total_chars = sum(len(m.get("content", "")) for m in messages)
+        token_count = total_chars // 4
 
     if token_count > max_input:
         return False, (
