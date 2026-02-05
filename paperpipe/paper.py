@@ -1271,11 +1271,17 @@ def _add_local_pdf(
     venue: Optional[str],
     doi: Optional[str],
     url: Optional[str],
+    source_url: Optional[str] = None,
     no_llm: bool,
     llm_model: Optional[str] = None,
     tldr: bool = True,
 ) -> tuple[bool, Optional[str]]:
-    """Add a local PDF as a first-class paper entry."""
+    """Add a local PDF as a first-class paper entry.
+
+    Args:
+        source_url: The URL where the PDF was downloaded from (for provenance tracking).
+                   Distinct from `url` which is the publisher/project page.
+    """
     if not pdf.exists() or not pdf.is_file():
         echo_error(f"PDF not found: {pdf}")
         return False, None
@@ -1366,6 +1372,7 @@ def _add_local_pdf(
         "venue": (venue or "").strip() or None,
         "doi": (doi or "").strip() or None,
         "url": (url or "").strip() or None,
+        "source_url": (source_url or "").strip() or None,
         "added": datetime.now().isoformat(),
         "has_source": False,
         "has_pdf": dest_pdf.exists(),
