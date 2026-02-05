@@ -54,6 +54,39 @@ def _is_local_pdf(value: str) -> bool:
     return value.lower().endswith(".pdf") and Path(value).is_file()
 
 
+def _find_paper_by_source_url(source_url: str) -> Optional[str]:
+    """Check if a paper with the given source_url already exists.
+
+    Returns the paper name if found, None otherwise.
+    """
+    from urllib.parse import urlparse
+
+    if not source_url:
+        return None
+
+    # Normalize URL for comparison (strip trailing slashes, lowercase host)
+    parsed = urlparse(source_url.lower().rstrip("/"))
+    normalized = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+
+    for paper_dir in config.PAPERS_DIR.iterdir():
+        if not paper_dir.is_dir():
+            continue
+        meta_path = paper_dir / "meta.json"
+        if not meta_path.exists():
+            continue
+        try:
+            meta = json.loads(meta_path.read_text())
+            existing_url = meta.get("source_url") or ""
+            if existing_url:
+                existing_parsed = urlparse(existing_url.lower().rstrip("/"))
+                existing_normalized = f"{existing_parsed.scheme}://{existing_parsed.netloc}{existing_parsed.path}"
+                if normalized == existing_normalized:
+                    return paper_dir.name
+        except (json.JSONDecodeError, OSError):
+            continue
+    return None
+
+
 def _looks_like_title_search(value: str) -> bool:
     """Check if value could be a title search query.
 
@@ -198,13 +231,25 @@ def add(
 
         # Handle URL vs local file
         temp_pdf_path: Optional[Path] = None
+        source_url: Optional[str] = None
         if _is_url(pdf):
+            # Check for source URL duplicates BEFORE downloading
+            existing = _find_paper_by_source_url(pdf)
+            if existing:
+                echo_error(
+                    f"Paper from this URL already exists: '{existing}'\n"
+                    f"  Source URL: {pdf}\n"
+                    f"Use `papi show {existing}` to view it, or --name to add as a separate entry."
+                )
+                raise SystemExit(1)
+
             echo_progress(f"Downloading PDF from {pdf}...")
             temp_pdf_path, error = download_pdf_from_url(pdf)
             if error or not temp_pdf_path:
                 echo_error(error or "Failed to download PDF")
                 raise SystemExit(1)
             pdf_path = temp_pdf_path
+            source_url = pdf  # Track where we downloaded from
         else:
             pdf_path = Path(pdf)
             if not pdf_path.exists():
@@ -226,6 +271,7 @@ def add(
                 venue=venue,
                 doi=doi,
                 url=url,
+                source_url=source_url,
                 no_llm=no_llm,
                 llm_model=llm_model,
                 tldr=tldr,
@@ -261,6 +307,13 @@ def add(
         if error or not resolved_id:
             # Fall back to PDF download for direct PDF URLs
             if _is_pdf_url(identifier):
+                # Check for source URL duplicates BEFORE downloading
+                existing = _find_paper_by_source_url(identifier)
+                if existing:
+                    echo_error(f"Paper from this URL already exists: '{existing}'\n  Source URL: {identifier}")
+                    resolution_failures.append(identifier)
+                    continue
+
                 echo_progress(f"Downloading PDF from {identifier}...")
                 temp_pdf_path, dl_error = download_pdf_from_url(identifier)
                 if dl_error or not temp_pdf_path:
@@ -279,6 +332,7 @@ def add(
                         venue=venue,
                         doi=doi,
                         url=url or identifier,
+                        source_url=identifier,
                         no_llm=no_llm,
                         llm_model=llm_model,
                         tldr=tldr,
