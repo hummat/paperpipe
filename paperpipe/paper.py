@@ -645,8 +645,9 @@ def _extract_pdf_text(pdf_path: Path, *, max_chars: int = 50000) -> Optional[str
 
             text = "\n".join(text_parts).strip()
             return text if text else None
-    except (OSError, ValueError) as e:
-        # fitz raises ValueError for invalid PDFs, OSError for file access issues
+    except (OSError, ValueError, RuntimeError) as e:
+        # fitz raises ValueError for invalid PDFs, OSError for file access issues,
+        # and RuntimeError subclasses (e.g., pymupdf.FileNotFoundError) for missing files
         debug("PDF text extraction failed for %s: %s", pdf_path, e)
         return None
 
