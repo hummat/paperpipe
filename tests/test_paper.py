@@ -54,6 +54,143 @@ class TestGenerateLlmContent:
         assert "No LaTeX source" in equations
         assert "Test Paper" in tldr
 
+    def test_extracts_pdf_text_when_no_latex_source(self, tmp_path, monkeypatch):
+        """Integration test: PDF text should be extracted when tex_content is None.
+
+        This test catches the bug where local PDFs had no content for LLM summarization.
+        """
+        pytest.importorskip("fitz")
+        import fitz
+
+        # Create a PDF with recognizable content
+        pdf_path = tmp_path / "paper.pdf"
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((72, 72), "This paper introduces a novel deep learning method.")
+        doc.save(pdf_path)
+        doc.close()
+
+        meta = {
+            "arxiv_id": None,
+            "title": "Test Paper",
+            "authors": ["Author"],
+            "abstract": "No abstract available (local PDF).",  # Placeholder - the bug scenario
+            "categories": [],
+            "published": None,
+        }
+
+        # Track what content is passed to the LLM
+        captured_content = []
+
+        def mock_generate_with_litellm(meta, tex_content, **kwargs):
+            captured_content.append(tex_content)
+            # Return valid output structure
+            return ("summary", "equations", [], "tldr")
+
+        monkeypatch.setattr(paper_mod, "_litellm_available", lambda: True)
+        monkeypatch.setattr(paper_mod, "generate_with_litellm", mock_generate_with_litellm)
+
+        paperpipe.generate_llm_content(tmp_path, meta, None)
+
+        # The critical assertion: LLM should receive PDF text, not None/empty
+        assert len(captured_content) == 1
+        assert captured_content[0] is not None, "LLM received no content - PDF extraction failed"
+        assert "deep learning" in captured_content[0], "PDF text was not extracted"
+
+    def test_rejects_placeholder_only_content(self, tmp_path, monkeypatch):
+        """Verify that placeholder abstracts don't constitute meaningful content."""
+        # No PDF, no tex, just placeholder abstract - this should NOT go to LLM with content
+        meta = {
+            "title": "Test",
+            "authors": [],
+            "abstract": "No abstract available (local PDF).",
+        }
+
+        captured_content = []
+
+        def mock_generate_with_litellm(meta, tex_content, **kwargs):
+            captured_content.append(tex_content)
+            return ("summary", "equations", [], "tldr")
+
+        monkeypatch.setattr(paper_mod, "_litellm_available", lambda: True)
+        monkeypatch.setattr(paper_mod, "generate_with_litellm", mock_generate_with_litellm)
+
+        paperpipe.generate_llm_content(tmp_path, meta, None)
+
+        # With no PDF and no tex, content should be None
+        assert len(captured_content) == 1
+        assert captured_content[0] is None, "Expected no content when PDF doesn't exist"
+
+
+class TestExtractPdfText:
+    """Tests for _extract_pdf_text function."""
+
+    def test_returns_none_for_nonexistent_file(self, tmp_path):
+        """Should return None for files that don't exist."""
+        result = paper_mod._extract_pdf_text(tmp_path / "nonexistent.pdf")
+        assert result is None
+
+    def test_returns_none_for_invalid_pdf(self, tmp_path):
+        """Should return None for invalid PDF files."""
+        bad_pdf = tmp_path / "bad.pdf"
+        bad_pdf.write_text("not a pdf")
+        result = paper_mod._extract_pdf_text(bad_pdf)
+        assert result is None
+
+    def test_extracts_text_from_valid_pdf(self, tmp_path):
+        """Should extract text from a valid PDF (if fitz is available)."""
+        pytest.importorskip("fitz")
+
+        # Create a minimal valid PDF using fitz
+        import fitz
+
+        pdf_path = tmp_path / "test.pdf"
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((72, 72), "Hello World")
+        doc.save(pdf_path)
+        doc.close()
+
+        result = paper_mod._extract_pdf_text(pdf_path, max_chars=1000)
+        assert result is not None
+        assert "Hello" in result
+
+    def test_truncates_at_max_chars(self, tmp_path):
+        """Should truncate text at max_chars boundary."""
+        pytest.importorskip("fitz")
+
+        import fitz
+
+        pdf_path = tmp_path / "long.pdf"
+        doc = fitz.open()
+        for _ in range(5):
+            page = doc.new_page()
+            page.insert_text((72, 72), "X" * 500)
+        doc.save(pdf_path)
+        doc.close()
+
+        # max_chars is approximate due to page boundaries and newline joins
+        result = paper_mod._extract_pdf_text(pdf_path, max_chars=100)
+        assert result is not None
+        # Should be close to max_chars (allow slack for newlines between pages)
+        assert len(result) <= 115  # 100 + reasonable slack for newlines
+
+    def test_returns_none_for_empty_pdf(self, tmp_path):
+        """Should return None for PDFs with no extractable text (e.g., image-only)."""
+        pytest.importorskip("fitz")
+
+        import fitz
+
+        # Create PDF with blank page (no text)
+        pdf_path = tmp_path / "empty.pdf"
+        doc = fitz.open()
+        doc.new_page()  # Blank page with no text
+        doc.save(pdf_path)
+        doc.close()
+
+        result = paper_mod._extract_pdf_text(pdf_path)
+        assert result is None  # Empty string filtered to None
+
 
 class TestGenerateSimpleTldr:
     """Tests for generate_simple_tldr function."""

@@ -192,6 +192,104 @@ class TestLlmIntegration:
 
 
 @pytest.mark.integration
+@pytest.mark.skipif(not litellm_available(), reason="LiteLLM not installed or no API key configured")
+class TestLocalPdfIntegration:
+    """Integration tests for local PDF workflow (no arXiv source)."""
+
+    @pytest.mark.slow
+    def test_add_local_pdf_with_llm_extracts_content(self, temp_db: Path, tmp_path: Path):
+        """Test that local PDF content is extracted and used by LLM.
+
+        This is the integration test that would have caught the hallucination bug
+        where LLM received no content for local PDFs without LaTeX source.
+        """
+        pytest.importorskip("fitz")
+        import fitz
+
+        # Create a test PDF with recognizable content
+        pdf_path = tmp_path / "test_paper.pdf"
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((72, 72), "Novel Deep Learning Architecture for Image Classification")
+        page.insert_text((72, 100), "We propose a convolutional neural network with attention.")
+        page.insert_text((72, 128), "Our method achieves 95% accuracy on ImageNet.")
+        doc.save(pdf_path)
+        doc.close()
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli_mod.cli,
+            [
+                "add",
+                "--pdf",
+                str(pdf_path),
+                "--title",
+                "Test Deep Learning Paper",
+                "--name",
+                "test-dl-paper",
+            ],
+        )
+
+        assert result.exit_code == 0, f"Failed: {result.output}"
+        assert "Added: test-dl-paper" in result.output
+
+        # Verify LLM used PDF content (not hallucinated)
+        paper_dir = temp_db / "papers" / "test-dl-paper"
+        summary = (paper_dir / "summary.md").read_text()
+
+        # Summary should mention terms from the PDF, not random ML architectures
+        # If the LLM had no content, it would hallucinate unrelated terms
+        summary_lower = summary.lower()
+        assert any(
+            term in summary_lower
+            for term in ["image", "classification", "neural", "attention", "accuracy", "cnn", "convolutional"]
+        ), f"Summary doesn't reflect PDF content: {summary[:500]}"
+
+    @pytest.mark.slow
+    def test_add_local_pdf_no_llm_still_works(self, temp_db: Path, tmp_path: Path):
+        """Test local PDF workflow without LLM (simple extraction)."""
+        pytest.importorskip("fitz")
+        import fitz
+
+        pdf_path = tmp_path / "simple.pdf"
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((72, 72), "Simple Test Document")
+        doc.save(pdf_path)
+        doc.close()
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli_mod.cli,
+            [
+                "add",
+                "--pdf",
+                str(pdf_path),
+                "--title",
+                "Simple Test",
+                "--name",
+                "simple-test",
+                "--no-llm",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert "Added: simple-test" in result.output
+
+        # Verify basic structure created
+        paper_dir = temp_db / "papers" / "simple-test"
+        assert (paper_dir / "paper.pdf").exists()
+        assert (paper_dir / "summary.md").exists()
+        assert (paper_dir / "meta.json").exists()
+
+        meta = json.loads((paper_dir / "meta.json").read_text())
+        assert meta["title"] == "Simple Test"
+        assert meta["arxiv_id"] is None
+        assert meta["has_pdf"] is True
+        assert meta["has_source"] is False
+
+
+@pytest.mark.integration
 @pytest.mark.skipif(not pqa_available(), reason="PaperQA2 (pqa) not installed")
 class TestPaperQAIntegration:
     """Integration tests for PaperQA2."""

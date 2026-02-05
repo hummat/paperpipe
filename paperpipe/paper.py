@@ -617,6 +617,41 @@ def generate_auto_name(meta: dict, existing_names: set[str], use_llm: bool = Tru
     return name
 
 
+def _extract_pdf_text(pdf_path: Path, *, max_chars: int = 50000) -> Optional[str]:
+    """Extract text from PDF for use as LLM context.
+
+    Returns up to max_chars of text from the PDF, or None if extraction fails.
+    """
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        debug("PyMuPDF (fitz) not installed - PDF text extraction unavailable")
+        return None
+
+    try:
+        with fitz.open(pdf_path) as doc:
+            text_parts: list[str] = []
+            total_chars = 0
+
+            for page in doc:
+                page_text = str(page.get_text())
+                if total_chars + len(page_text) > max_chars:
+                    # Take partial page to stay under limit
+                    remaining = max_chars - total_chars
+                    text_parts.append(page_text[:remaining])
+                    break
+                text_parts.append(page_text)
+                total_chars += len(page_text)
+
+            text = "\n".join(text_parts).strip()
+            return text if text else None
+    except (OSError, ValueError, RuntimeError) as e:
+        # fitz raises ValueError for invalid PDFs, OSError for file access issues,
+        # and RuntimeError subclasses (e.g., pymupdf.FileNotFoundError) for missing files
+        debug("PDF text extraction failed for %s: %s", pdf_path, e)
+        return None
+
+
 def generate_llm_content(
     paper_dir: Path,
     meta: dict,
@@ -633,6 +668,17 @@ def generate_llm_content(
     Generate summary, equations.md, semantic tags, and tldr.md using LLM.
     Returns (summary, equations_md, additional_tags, tldr)
     """
+    # If no LaTeX source, try to extract text from PDF as fallback context
+    content_for_llm = tex_content
+    has_latex = tex_content is not None
+    if not content_for_llm:
+        pdf_path = paper_dir / "paper.pdf"
+        if pdf_path.exists():
+            echo_progress("  Extracting text from PDF (no LaTeX source)...")
+            content_for_llm = _extract_pdf_text(pdf_path)
+            if content_for_llm:
+                echo_progress(f"  Extracted {len(content_for_llm) // 1000}k chars from PDF")
+
     if not _litellm_available():
         # Fallback: simple extraction without LLM
         summary = generate_simple_summary(meta, tex_content)
@@ -640,17 +686,24 @@ def generate_llm_content(
         tldr = generate_simple_tldr(meta)
         return summary, equations, [], tldr
 
+    # Only extract equations if we have actual LaTeX source (not PDF text)
+    effective_do_equations = do_equations and has_latex
+
     try:
-        return generate_with_litellm(
+        summary, equations, tags, tldr = generate_with_litellm(
             meta,
-            tex_content,
+            content_for_llm,
             audit_reasons=audit_reasons,
             do_summary=do_summary,
-            do_equations=do_equations,
+            do_equations=effective_do_equations,
             do_tags=do_tags,
             do_tldr=do_tldr,
             model=model,
         )
+        # If no LaTeX source, ensure equations reflects that
+        if not has_latex and not equations:
+            equations = "No LaTeX source available."
+        return summary, equations, tags, tldr
     except ImportError as e:
         echo_warning(f"LiteLLM not installed; falling back to non-LLM generation ({e}).")
         debug("LiteLLM import failed:\n%s", traceback.format_exc())
@@ -906,7 +959,7 @@ def generate_with_litellm(
         context_parts.append("\nPrevious issues to address:")
         context_parts.extend([f"- {r}" for r in audit_reasons[:8]])
     if tex_content:
-        context_parts.append("\nLaTeX source:")
+        context_parts.append("\nPaper content:")
         context_parts.append(tex_content)
 
     context = "\n".join(context_parts)
@@ -914,58 +967,90 @@ def generate_with_litellm(
     tldr = ""
     if do_tldr:
         # Generate TL;DR (short, 2-3 sentences)
-        tldr_prompt = f"""Write a very short TL;DR (2-3 sentences) for this paper.
-Focus on the main problem and the proposed solution.
-Return ONLY the TL;DR text.
+        tldr_prompt = f"""Write a 2-3 sentence TL;DR for this paper.
 
-{context}"""
+STRICT RULES:
+- Use ONLY information explicitly stated in the context below
+- Do NOT infer, assume, or add details not directly present
+- Focus on the problem and solution AS DESCRIBED by the authors
+
+Context:
+{context}
+
+TL;DR:"""
 
         try:
             llm_tldr = _run_llm(tldr_prompt, purpose="tldr", model=model)
             tldr = llm_tldr if llm_tldr else generate_simple_tldr(meta)
-        except Exception:
+        except Exception as e:
+            debug("TL;DR generation failed: %s", e)
             tldr = generate_simple_tldr(meta)
 
     summary = ""
     if do_summary:
-        # Generate summary
-        summary_prompt = f"""Write a technical summary of this paper for a developer implementing the methods.
+        # Generate summary with strict grounding to reduce hallucination
+        summary_prompt = f"""You are a strictly grounded assistant. Your task is to summarize this paper for a developer.
 
-Include:
-- Core contribution (1-2 sentences)
-- Key methods/architecture
-- Important implementation details
+CRITICAL RULES - FOLLOW EXACTLY:
+1. Use ONLY information explicitly stated in the context below
+2. Do NOT fabricate, infer, or assume any technical details
+3. Do NOT name specific architectures, algorithms, or techniques unless they are explicitly mentioned
+4. If the context lacks detail on a topic, write "Not specified in paper" rather than guessing
+5. Prefer quoting or closely paraphrasing the authors' own descriptions
 
-Keep it under 400 words. Use markdown. Only include information from the provided context.
+FORMAT (use markdown):
+### Core Contribution
+[1-2 sentences describing the main contribution AS STATED by the authors]
 
-{context}"""
+### Method
+[Describe the approach using ONLY terms and descriptions from the paper. If specific architecture names like "CVAE", "PointNet++", "ResNet" etc. are not mentioned, do NOT add them.]
+
+### Key Details
+[List specific details that ARE mentioned: datasets, metrics, hyperparameters, etc. Omit sections where details are not provided.]
+
+Keep under 400 words. Accuracy over completeness.
+
+Context:
+{context}
+
+Summary:"""
 
         try:
             llm_summary = _run_llm(summary_prompt, purpose="summary", model=model)
             summary = llm_summary if llm_summary else generate_simple_summary(meta, tex_content)
-        except Exception:
+        except Exception as e:
+            debug("Summary generation failed: %s", e)
             summary = generate_simple_summary(meta, tex_content)
 
     equations = ""
     if do_equations:
-        # Generate equations.md
+        # Generate equations.md - extraction task, less prone to hallucination
         if tex_content:
-            eq_prompt = f"""Extract the key equations from this paper's LaTeX source.
+            eq_prompt = f"""Extract key equations from this paper's LaTeX source.
 
-For each important equation:
-1. Show the LaTeX
-2. Briefly explain what it represents
-3. Note key variables
+RULES:
+- Copy equations EXACTLY as they appear in the source (do not modify LaTeX)
+- Only explain what the AUTHORS explicitly describe - do not infer meanings
+- If variable meaning is not stated, write "not defined in paper"
+- Skip trivial equations (e.g., x=1, simple arithmetic)
 
-Focus on: definitions, loss functions, main results. Skip trivial math.
-Use markdown with ```latex blocks.
+FORMAT for each equation:
+```latex
+[exact LaTeX from source]
+```
+**Meaning:** [author's description, or "not explicitly described"]
+**Variables:** [only those defined in paper]
 
+Focus on: loss functions, main formulas, key definitions.
+
+LaTeX source:
 {context}"""
 
             try:
                 llm_equations = _run_llm(eq_prompt, purpose="equations", model=model)
                 equations = llm_equations if llm_equations else extract_equations_simple(tex_content)
-            except Exception:
+            except Exception as e:
+                debug("Equations extraction failed: %s", e)
                 equations = extract_equations_simple(tex_content)
         else:
             equations = "No LaTeX source available."
@@ -988,8 +1073,8 @@ Abstract: {abstract[:800]}"""
                     for t in llm_tags_text.split("\n")
                     if t.strip() and len(t.strip()) < 30
                 ][:5]
-        except Exception:
-            pass
+        except Exception as e:
+            debug("Tags generation failed: %s", e)
 
     return summary, equations, additional_tags, tldr
 
@@ -1200,11 +1285,17 @@ def _add_local_pdf(
     venue: Optional[str],
     doi: Optional[str],
     url: Optional[str],
+    source_url: Optional[str] = None,
     no_llm: bool,
     llm_model: Optional[str] = None,
     tldr: bool = True,
 ) -> tuple[bool, Optional[str]]:
-    """Add a local PDF as a first-class paper entry."""
+    """Add a local PDF as a first-class paper entry.
+
+    Args:
+        source_url: The URL where the PDF was downloaded from (for provenance tracking).
+                   Distinct from `url` which is the publisher/project page.
+    """
     if not pdf.exists() or not pdf.is_file():
         echo_error(f"PDF not found: {pdf}")
         return False, None
@@ -1295,6 +1386,7 @@ def _add_local_pdf(
         "venue": (venue or "").strip() or None,
         "doi": (doi or "").strip() or None,
         "url": (url or "").strip() or None,
+        "source_url": (source_url or "").strip() or None,
         "added": datetime.now().isoformat(),
         "has_source": False,
         "has_pdf": dest_pdf.exists(),
@@ -1485,14 +1577,18 @@ def _regenerate_one_paper(
     tldr_path = paper_dir / "tldr.md"
     pdf_path = paper_dir / "paper.pdf"
 
+    figures_dir = paper_dir / "figures"
+
     # Determine what needs regeneration
     if overwrite_all:
-        do_summary = True
-        do_equations = True
-        do_tags = True
+        # Regenerate existing fields (semantic: "redo what's there")
+        # Exception: name always regenerates (cheap operation, improves naming)
+        do_summary = summary_path.exists()
+        do_equations = equations_path.exists()
+        do_tags = bool(meta.get("tags"))
         do_name = True
-        do_tldr = True
-        do_figures = True
+        do_tldr = tldr_path.exists()
+        do_figures = figures_dir.exists() and any(figures_dir.iterdir())
     elif overwrite_fields:
         do_summary = "summary" in overwrite_fields
         do_equations = "equations" in overwrite_fields
@@ -1546,6 +1642,7 @@ def _regenerate_one_paper(
                 equations_path = paper_dir / "equations.md"
                 tldr_path = paper_dir / "tldr.md"
                 meta_path = paper_dir / "meta.json"
+                pdf_path = paper_dir / "paper.pdf"
                 new_name = candidate
                 echo_progress(f"  Renamed: {name} → {candidate}")
 
