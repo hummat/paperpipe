@@ -645,7 +645,8 @@ def _extract_pdf_text(pdf_path: Path, *, max_chars: int = 50000) -> Optional[str
         doc.close()
         text = "\n".join(text_parts).strip()
         return text if text else None
-    except Exception:
+    except Exception as e:
+        debug("PDF text extraction failed for %s: %s", pdf_path, e)
         return None
 
 
@@ -948,7 +949,7 @@ def generate_with_litellm(
         context_parts.append("\nPrevious issues to address:")
         context_parts.extend([f"- {r}" for r in audit_reasons[:8]])
     if tex_content:
-        context_parts.append("\nLaTeX source:")
+        context_parts.append("\nPaper content:")
         context_parts.append(tex_content)
 
     context = "\n".join(context_parts)
@@ -971,7 +972,8 @@ TL;DR:"""
         try:
             llm_tldr = _run_llm(tldr_prompt, purpose="tldr", model=model)
             tldr = llm_tldr if llm_tldr else generate_simple_tldr(meta)
-        except Exception:
+        except Exception as e:
+            debug("TL;DR generation failed: %s", e)
             tldr = generate_simple_tldr(meta)
 
     summary = ""
@@ -1006,7 +1008,8 @@ Summary:"""
         try:
             llm_summary = _run_llm(summary_prompt, purpose="summary", model=model)
             summary = llm_summary if llm_summary else generate_simple_summary(meta, tex_content)
-        except Exception:
+        except Exception as e:
+            debug("Summary generation failed: %s", e)
             summary = generate_simple_summary(meta, tex_content)
 
     equations = ""
@@ -1036,7 +1039,8 @@ LaTeX source:
             try:
                 llm_equations = _run_llm(eq_prompt, purpose="equations", model=model)
                 equations = llm_equations if llm_equations else extract_equations_simple(tex_content)
-            except Exception:
+            except Exception as e:
+                debug("Equations extraction failed: %s", e)
                 equations = extract_equations_simple(tex_content)
         else:
             equations = "No LaTeX source available."
@@ -1059,8 +1063,8 @@ Abstract: {abstract[:800]}"""
                     for t in llm_tags_text.split("\n")
                     if t.strip() and len(t.strip()) < 30
                 ][:5]
-        except Exception:
-            pass
+        except Exception as e:
+            debug("Tags generation failed: %s", e)
 
     return summary, equations, additional_tags, tldr
 
