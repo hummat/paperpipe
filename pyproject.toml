@@ -50,7 +50,6 @@ dev = [
     "twine>=5.0.0",
     # Optional deps for test coverage (mirrors [dependency-groups].dev)
     "bibtexparser>=1.4.0",
-    "litellm>=1.0.0",
     "pymupdf>=1.24.0",
 ]
 
@@ -64,7 +63,6 @@ dev = [
     "twine>=5.0.0",
     # Optional deps needed for unit test coverage (not integration tests)
     "bibtexparser>=1.4.0",
-    "litellm>=1.0.0",
     "pymupdf>=1.24.0",
 ]
 
