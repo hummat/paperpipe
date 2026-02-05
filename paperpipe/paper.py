@@ -617,13 +617,13 @@ def generate_auto_name(meta: dict, existing_names: set[str], use_llm: bool = Tru
     return name
 
 
-def _extract_pdf_text(pdf_path: Path, *, max_chars: int = 50000) -> Optional[str]:
-    """Extract text from PDF for use as LLM context.
+def _extract_pdf_text(pdf_path: Path) -> Optional[str]:
+    """Extract full text from PDF for use as LLM context.
 
     Uses pymupdf4llm for structured markdown output (better reading order,
     table detection) if available, falling back to raw fitz.get_text().
 
-    Returns up to max_chars of text from the PDF, or None if extraction fails.
+    Returns full text from the PDF, or None if extraction fails.
     """
     # Try pymupdf4llm first for better structured output
     try:
@@ -631,8 +631,7 @@ def _extract_pdf_text(pdf_path: Path, *, max_chars: int = 50000) -> Optional[str
 
         md_text = pymupdf4llm.to_markdown(pdf_path)
         if md_text:
-            text = md_text[:max_chars].strip()
-            return text if text else None
+            return md_text.strip() or None
     except ImportError:
         debug("pymupdf4llm not available, falling back to raw fitz")
     except Exception as e:
@@ -648,18 +647,8 @@ def _extract_pdf_text(pdf_path: Path, *, max_chars: int = 50000) -> Optional[str
     try:
         with fitz.open(pdf_path) as doc:
             text_parts: list[str] = []
-            total_chars = 0
-
             for page in doc:
-                page_text = str(page.get_text())
-                if total_chars + len(page_text) > max_chars:
-                    # Take partial page to stay under limit
-                    remaining = max_chars - total_chars
-                    text_parts.append(page_text[:remaining])
-                    break
-                text_parts.append(page_text)
-                total_chars += len(page_text)
-
+                text_parts.append(str(page.get_text()))
             text = "\n".join(text_parts).strip()
             return text if text else None
     except (OSError, ValueError, RuntimeError) as e:
@@ -794,6 +783,35 @@ def _litellm_available() -> bool:
         return False
 
 
+def _check_context_limit(messages: list[dict[str, str]], model: str, litellm_module: Any) -> tuple[bool, Optional[str]]:
+    """Check if messages fit within model's context window.
+
+    Returns (ok, error_message). If model info unavailable, returns (True, None).
+    """
+    try:
+        info = litellm_module.get_model_info(model)
+        max_input = info.get("max_input_tokens")
+        if not max_input:
+            return True, None  # No limit info available
+    except Exception:
+        # Model not mapped in litellm - let the API handle it
+        debug("Could not get model info for %s, skipping context check", model)
+        return True, None
+
+    try:
+        token_count = litellm_module.token_counter(model=model, messages=messages)
+    except Exception:
+        # Token counting failed - proceed anyway
+        return True, None
+
+    if token_count > max_input:
+        return False, (
+            f"Content exceeds model context limit: {token_count:,} tokens > {max_input:,} max. "
+            f"Use a model with larger context window or a shorter paper."
+        )
+    return True, None
+
+
 def _run_llm(prompt: str, *, purpose: str, model: Optional[str] = None) -> Optional[str]:
     """Run a prompt through LiteLLM. Returns None on any failure."""
     try:
@@ -812,12 +830,21 @@ def _run_llm(prompt: str, *, purpose: str, model: Optional[str] = None) -> Optio
             echo_error(err)
             echo_error("Start Ollama (`ollama serve`) or set OLLAMA_HOST / OLLAMA_API_BASE to a reachable server.")
             return None
+
+    messages = [{"role": "user", "content": prompt}]
+
+    # Check context limit before calling API
+    ok, err_msg = _check_context_limit(messages, model, litellm)
+    if not ok:
+        echo_error(f"LLM ({model}): {err_msg}")
+        return None
+
     echo_progress(f"  LLM ({model}): generating {purpose}...")
 
     try:
         response = litellm.completion(
             model=model,
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
             temperature=default_llm_temperature(),
             timeout=60,
         )

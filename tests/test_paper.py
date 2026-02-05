@@ -151,29 +151,29 @@ class TestExtractPdfText:
         doc.save(pdf_path)
         doc.close()
 
-        result = paper_mod._extract_pdf_text(pdf_path, max_chars=1000)
+        result = paper_mod._extract_pdf_text(pdf_path)
         assert result is not None
         assert "Hello" in result
 
-    def test_truncates_at_max_chars(self, tmp_path):
-        """Should truncate text at max_chars boundary."""
+    def test_extracts_full_text_from_multipage_pdf(self, tmp_path):
+        """Should extract all text from multi-page PDFs without truncation."""
         pytest.importorskip("fitz")
 
         import fitz
 
         pdf_path = tmp_path / "long.pdf"
         doc = fitz.open()
-        for _ in range(5):
+        for i in range(5):
             page = doc.new_page()
-            page.insert_text((72, 72), "X" * 500)
+            page.insert_text((72, 72), f"Page{i}" + "X" * 500)
         doc.save(pdf_path)
         doc.close()
 
-        # max_chars is approximate due to page boundaries and newline joins
-        result = paper_mod._extract_pdf_text(pdf_path, max_chars=100)
+        result = paper_mod._extract_pdf_text(pdf_path)
         assert result is not None
-        # Should be close to max_chars (allow slack for newlines between pages)
-        assert len(result) <= 115  # 100 + reasonable slack for newlines
+        # Should contain text from all pages
+        for i in range(5):
+            assert f"Page{i}" in result
 
     def test_returns_none_for_empty_pdf(self, tmp_path):
         """Should return None for PDFs with no extractable text (e.g., image-only)."""
