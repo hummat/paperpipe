@@ -252,6 +252,11 @@ class TestLeannCommands:
     def test_ask_backend_leann_defaults_to_gemini_openai_compat(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann" if cmd == "leann" else None)
         monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+        # Ensure default LLM model is used (not overridden by env or cached config)
+        monkeypatch.delenv("PAPERPIPE_LLM_MODEL", raising=False)
+        monkeypatch.delenv("PAPERPIPE_LEANN_LLM_PROVIDER", raising=False)
+        monkeypatch.delenv("PAPERPIPE_LEANN_LLM_MODEL", raising=False)
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
 
         meta = temp_db / ".leann" / "indexes" / "papers_ollama_nomic-embed-text" / "documents.leann.meta.json"
         meta.parent.mkdir(parents=True)
