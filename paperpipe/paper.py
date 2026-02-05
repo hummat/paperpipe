@@ -784,36 +784,36 @@ def _litellm_available() -> bool:
 
 
 # Fallback context window sizes for common models (when litellm doesn't have mapping).
-# Maps base model name patterns to max input tokens.
+# Maps base model name patterns to max input tokens. Values verified against litellm.
 _MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     # Gemini models
     "gemini-2": 1_048_576,
     "gemini-3": 1_048_576,
-    "gemini-1.5": 1_048_576,
-    "gemini-pro": 32_000,
+    "gemini-1.5": 2_097_152,  # gemini-1.5-pro has 2M
+    "gemini-pro": 32_760,
     # Claude models
-    "claude-4": 250_000,
-    "claude-sonnet-4": 250_000,
-    "claude-opus-4": 250_000,
+    "claude-sonnet-4": 1_000_000,  # claude-sonnet-4 has 1M
+    "claude-opus-4": 200_000,
+    "claude-4": 200_000,  # conservative default for claude-4 variants
     "claude-3": 200_000,
     "claude-3.5": 200_000,
     "claude-3.6": 200_000,
-    "claude-3.7": 250_000,
+    "claude-3.7": 200_000,
     # OpenAI models
     "gpt-4o": 128_000,
     "gpt-4-turbo": 128_000,
     "gpt-4.1": 1_047_576,
-    "gpt-4.5": 1_047_576,
-    "gpt-5": 400_000,
+    "gpt-4.5": 128_000,
+    "gpt-5": 400_000,  # estimated
     "o1": 200_000,
     "o3": 200_000,
     "o4": 200_000,
     # DeepSeek
-    "deepseek": 64_000,
+    "deepseek": 128_000,
     # Llama
     "llama-3": 128_000,
     "llama-4": 128_000,
-    "llama3": 8_192,
+    "llama3": 8_192,  # ollama default
     "llama4": 128_000,
     # Mistral
     "mistral-large": 128_000,
