@@ -784,45 +784,41 @@ def _litellm_available() -> bool:
 
 
 # Fallback context window sizes for common models (when litellm doesn't have mapping).
-# Maps base model name patterns to max input tokens. Values verified against litellm.
+# Maps base model name patterns to max input tokens. Values verified against litellm 2026-02.
 _MODEL_CONTEXT_WINDOWS: dict[str, int] = {
-    # Gemini
+    # Gemini (current: 2.5 flash/pro, 2.0 flash)
+    "gemini-2.5": 1_048_576,
+    "gemini-2.0": 1_048_576,
     "gemini-2": 1_048_576,
-    "gemini-3": 1_048_576,
     "gemini-1.5": 2_097_152,
     "gemini-pro": 32_760,
-    # Claude
+    # Claude (current: sonnet-4, opus-4, sonnet-4.5, opus-4.5)
     "claude-sonnet-4": 1_000_000,
     "claude-opus-4": 200_000,
-    "claude-4": 200_000,
+    "claude-sonnet-3": 200_000,
+    "claude-opus-3": 200_000,
     "claude-3": 200_000,
-    "claude-3.5": 200_000,
-    "claude-3.6": 200_000,
-    "claude-3.7": 200_000,
-    # OpenAI
+    # OpenAI (current: gpt-4o, gpt-4.1, o3, o4-mini, gpt-5.x)
+    "gpt-5": 272_000,
+    "gpt-4.1": 1_047_576,
     "gpt-4o": 128_000,
     "gpt-4-turbo": 128_000,
-    "gpt-4.1": 1_047_576,
-    "gpt-4.5": 128_000,
-    "gpt-5": 272_000,
-    "o1": 200_000,
-    "o3": 200_000,
     "o4": 200_000,
-    # DeepSeek
+    "o3": 200_000,
+    "o1": 200_000,
+    # DeepSeek (current: deepseek-chat, deepseek-reasoner, V3.x)
     "deepseek": 128_000,
-    # Llama
+    # Llama (current: Llama-4-Scout 10M, Llama-4-Maverick 1M, Llama-3.3)
+    "llama-4-scout": 10_000_000,
+    "llama-4-maverick": 1_000_000,
+    "llama-4": 1_000_000,
     "llama-3": 128_000,
-    "llama-4": 128_000,
     "llama3": 8_192,
-    "llama4": 128_000,
-    # Mistral
+    # Mistral (current: mistral-large, mistral-small)
     "mistral-large": 128_000,
-    "mistral-medium": 32_000,
     "mistral-small": 32_000,
     # Qwen
-    "qwen": 32_000,
-    "qwen2": 128_000,
-    "qwen3": 128_000,
+    "qwen": 128_000,
 }
 
 
