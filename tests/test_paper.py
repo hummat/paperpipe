@@ -151,29 +151,29 @@ class TestExtractPdfText:
         doc.save(pdf_path)
         doc.close()
 
-        result = paper_mod._extract_pdf_text(pdf_path, max_chars=1000)
+        result = paper_mod._extract_pdf_text(pdf_path)
         assert result is not None
         assert "Hello" in result
 
-    def test_truncates_at_max_chars(self, tmp_path):
-        """Should truncate text at max_chars boundary."""
+    def test_extracts_full_text_from_multipage_pdf(self, tmp_path):
+        """Should extract all text from multi-page PDFs without truncation."""
         pytest.importorskip("fitz")
 
         import fitz
 
         pdf_path = tmp_path / "long.pdf"
         doc = fitz.open()
-        for _ in range(5):
+        for i in range(5):
             page = doc.new_page()
-            page.insert_text((72, 72), "X" * 500)
+            page.insert_text((72, 72), f"Page{i}" + "X" * 500)
         doc.save(pdf_path)
         doc.close()
 
-        # max_chars is approximate due to page boundaries and newline joins
-        result = paper_mod._extract_pdf_text(pdf_path, max_chars=100)
+        result = paper_mod._extract_pdf_text(pdf_path)
         assert result is not None
-        # Should be close to max_chars (allow slack for newlines between pages)
-        assert len(result) <= 115  # 100 + reasonable slack for newlines
+        # Should contain text from all pages
+        for i in range(5):
+            assert f"Page{i}" in result
 
     def test_returns_none_for_empty_pdf(self, tmp_path):
         """Should return None for PDFs with no extractable text (e.g., image-only)."""
@@ -190,6 +190,170 @@ class TestExtractPdfText:
 
         result = paper_mod._extract_pdf_text(pdf_path)
         assert result is None  # Empty string filtered to None
+
+    def test_falls_back_to_fitz_when_pymupdf4llm_unavailable(self, tmp_path, monkeypatch):
+        """Should use fitz fallback when pymupdf4llm is not installed."""
+        pytest.importorskip("fitz")
+        import sys
+
+        import fitz
+
+        # Block pymupdf4llm import
+        monkeypatch.setitem(sys.modules, "pymupdf4llm", None)
+
+        pdf_path = tmp_path / "test.pdf"
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((72, 72), "Fallback Test")
+        doc.save(pdf_path)
+        doc.close()
+
+        result = paper_mod._extract_pdf_text(pdf_path)
+        assert result is not None
+        assert "Fallback" in result
+
+
+class TestExtractFirstPageText:
+    """Tests for _extract_first_page_text helper."""
+
+    def test_extracts_first_page_text(self, tmp_path):
+        """Should extract text from the first page of a PDF."""
+        pytest.importorskip("fitz")
+        import fitz
+
+        pdf_path = tmp_path / "test.pdf"
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((72, 72), "First Page Title")
+        doc.save(pdf_path)
+        doc.close()
+
+        result = paper_mod._extract_first_page_text(pdf_path)
+        assert result is not None
+        assert "First Page" in result
+
+    def test_falls_back_to_fitz_when_pymupdf4llm_unavailable(self, tmp_path, monkeypatch):
+        """Should use fitz fallback when pymupdf4llm is not installed."""
+        pytest.importorskip("fitz")
+        import sys
+
+        import fitz
+
+        # Block pymupdf4llm import
+        monkeypatch.setitem(sys.modules, "pymupdf4llm", None)
+
+        pdf_path = tmp_path / "test.pdf"
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((72, 72), "Fallback Title")
+        doc.save(pdf_path)
+        doc.close()
+
+        result = paper_mod._extract_first_page_text(pdf_path)
+        assert result is not None
+        assert "Fallback" in result
+
+    def test_returns_none_for_empty_pdf(self, tmp_path):
+        """Should return None for PDFs with no text."""
+        pytest.importorskip("fitz")
+        import fitz
+
+        pdf_path = tmp_path / "empty.pdf"
+        doc = fitz.open()
+        doc.new_page()
+        doc.save(pdf_path)
+        doc.close()
+
+        result = paper_mod._extract_first_page_text(pdf_path)
+        assert result is None
+
+
+class TestGetFallbackContextWindow:
+    """Tests for _get_fallback_context_window helper."""
+
+    def test_exact_match(self):
+        """Should return context window for exact model name match."""
+        result = paper_mod._get_fallback_context_window("gpt-4o")
+        assert result == 128_000
+
+    def test_prefix_match(self):
+        """Should return context window for prefix match."""
+        result = paper_mod._get_fallback_context_window("gemini-2.5-flash-preview")
+        assert result == 1_048_576
+
+    def test_extracts_base_name_from_provider_prefix(self):
+        """Should extract base model name from provider/vendor/model format."""
+        result = paper_mod._get_fallback_context_window("openrouter/google/gemini-2.5-flash")
+        assert result == 1_048_576
+
+    def test_returns_none_for_unknown_model(self):
+        """Should return None for unknown models."""
+        result = paper_mod._get_fallback_context_window("unknown/model")
+        assert result is None
+
+
+class TestCheckContextLimit:
+    """Tests for _check_context_limit helper."""
+
+    def test_returns_ok_when_under_limit(self, monkeypatch):
+        """Should return (True, None) when content is under limit."""
+        import types
+
+        mock_litellm = types.SimpleNamespace(
+            get_model_info=lambda m: {"max_input_tokens": 100_000},
+            token_counter=lambda model, messages: 1000,
+        )
+
+        ok, err = paper_mod._check_context_limit([{"role": "user", "content": "test"}], "gpt-4o", mock_litellm)
+        assert ok is True
+        assert err is None
+
+    def test_returns_error_when_over_limit(self):
+        """Should return (False, error_msg) when content exceeds limit."""
+        import types
+
+        mock_litellm = types.SimpleNamespace(
+            get_model_info=lambda m: {"max_input_tokens": 100},
+            token_counter=lambda model, messages: 200,
+        )
+
+        ok, err = paper_mod._check_context_limit([{"role": "user", "content": "x" * 1000}], "gpt-4o", mock_litellm)
+        assert ok is False
+        assert err is not None and "exceeds model context limit" in err
+
+    def test_uses_fallback_when_litellm_fails(self):
+        """Should use fallback context window when litellm.get_model_info fails."""
+        import types
+
+        def raise_error(m):
+            raise Exception("Model not found")
+
+        mock_litellm = types.SimpleNamespace(
+            get_model_info=raise_error,
+            token_counter=lambda model, messages: 1000,
+        )
+
+        # gpt-4o has 128k in fallback map
+        ok, err = paper_mod._check_context_limit([{"role": "user", "content": "test"}], "gpt-4o", mock_litellm)
+        assert ok is True
+        assert err is None
+
+    def test_estimates_tokens_when_counter_fails(self):
+        """Should estimate tokens from chars when token_counter fails."""
+        import types
+
+        def raise_error(*args, **kwargs):
+            raise Exception("Token counter failed")
+
+        mock_litellm = types.SimpleNamespace(
+            get_model_info=lambda m: {"max_input_tokens": 100},
+            token_counter=raise_error,
+        )
+
+        # 1000 chars ≈ 250 tokens, which exceeds 100 limit
+        ok, err = paper_mod._check_context_limit([{"role": "user", "content": "x" * 1000}], "gpt-4o", mock_litellm)
+        assert ok is False
+        assert err is not None and "exceeds" in err
 
 
 class TestGenerateSimpleTldr:

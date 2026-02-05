@@ -617,11 +617,27 @@ def generate_auto_name(meta: dict, existing_names: set[str], use_llm: bool = Tru
     return name
 
 
-def _extract_pdf_text(pdf_path: Path, *, max_chars: int = 50000) -> Optional[str]:
-    """Extract text from PDF for use as LLM context.
+def _extract_pdf_text(pdf_path: Path) -> Optional[str]:
+    """Extract full text from PDF for use as LLM context.
 
-    Returns up to max_chars of text from the PDF, or None if extraction fails.
+    Uses pymupdf4llm for structured markdown output (better reading order,
+    table detection) if available, falling back to raw fitz.get_text().
+
+    Returns full text from the PDF, or None if extraction fails.
     """
+    # Try pymupdf4llm first for better structured output
+    try:
+        import pymupdf4llm  # type: ignore[import-not-found]
+
+        md_text = pymupdf4llm.to_markdown(pdf_path)
+        if md_text:
+            return md_text.strip() or None
+    except ImportError:
+        debug("pymupdf4llm not available, falling back to raw fitz")
+    except Exception as e:
+        debug("pymupdf4llm extraction failed for %s: %s, falling back to fitz", pdf_path, e)
+
+    # Fallback to raw fitz
     try:
         import fitz  # PyMuPDF
     except ImportError:
@@ -631,18 +647,8 @@ def _extract_pdf_text(pdf_path: Path, *, max_chars: int = 50000) -> Optional[str
     try:
         with fitz.open(pdf_path) as doc:
             text_parts: list[str] = []
-            total_chars = 0
-
             for page in doc:
-                page_text = str(page.get_text())
-                if total_chars + len(page_text) > max_chars:
-                    # Take partial page to stay under limit
-                    remaining = max_chars - total_chars
-                    text_parts.append(page_text[:remaining])
-                    break
-                text_parts.append(page_text)
-                total_chars += len(page_text)
-
+                text_parts.append(str(page.get_text()))
             text = "\n".join(text_parts).strip()
             return text if text else None
     except (OSError, ValueError, RuntimeError) as e:
@@ -777,6 +783,103 @@ def _litellm_available() -> bool:
         return False
 
 
+# Fallback context window sizes for common models (when litellm doesn't have mapping).
+# Maps base model name patterns to max input tokens. Values verified against litellm 2026-02.
+_MODEL_CONTEXT_WINDOWS: dict[str, int] = {
+    # Gemini (current: 2.5 flash/pro, 2.0 flash)
+    "gemini-2.5": 1_048_576,
+    "gemini-2.0": 1_048_576,
+    "gemini-2": 1_048_576,
+    "gemini-1.5": 2_097_152,
+    "gemini-pro": 32_760,
+    # Claude (current: sonnet-4, opus-4, sonnet-4.5, opus-4.5)
+    "claude-sonnet-4": 1_000_000,
+    "claude-opus-4": 200_000,
+    "claude-sonnet-3": 200_000,
+    "claude-opus-3": 200_000,
+    "claude-3": 200_000,
+    # OpenAI (current: gpt-4o, gpt-4.1, o3, o4-mini, gpt-5.x)
+    "gpt-5": 272_000,
+    "gpt-4.1": 1_047_576,
+    "gpt-4o": 128_000,
+    "gpt-4-turbo": 128_000,
+    "o4": 200_000,
+    "o3": 200_000,
+    "o1": 200_000,
+    # DeepSeek (current: deepseek-chat, deepseek-reasoner, V3.x)
+    "deepseek": 128_000,
+    # Llama (current: Llama-4-Scout 10M, Llama-4-Maverick 1M, Llama-3.3)
+    "llama-4-scout": 10_000_000,
+    "llama-4-maverick": 1_000_000,
+    "llama-4": 1_000_000,
+    "llama-3": 128_000,
+    "llama3": 8_192,
+    # Mistral (current: mistral-large, mistral-small)
+    "mistral-large": 128_000,
+    "mistral-small": 32_000,
+    # Qwen
+    "qwen": 128_000,
+}
+
+
+def _get_fallback_context_window(model: str) -> Optional[int]:
+    """Get context window from local fallback map.
+
+    Extracts base model name from provider-prefixed models like
+    'openrouter/google/gemini-3-flash' -> 'gemini-3-flash'.
+    """
+    # Extract base model name (last component after slashes, lowercase)
+    base_name = model.split("/")[-1].lower()
+
+    # Try exact match first
+    if base_name in _MODEL_CONTEXT_WINDOWS:
+        return _MODEL_CONTEXT_WINDOWS[base_name]
+
+    # Try prefix matching (e.g., "gemini-3" matches "gemini-3-flash")
+    for pattern, context_size in _MODEL_CONTEXT_WINDOWS.items():
+        if base_name.startswith(pattern):
+            return context_size
+
+    return None
+
+
+def _check_context_limit(messages: list[dict[str, str]], model: str, litellm_module: Any) -> tuple[bool, Optional[str]]:
+    """Check if messages fit within model's context window.
+
+    Returns (ok, error_message). If model info unavailable, returns (True, None).
+    """
+    max_input: Optional[int] = None
+
+    # Try litellm first
+    try:
+        info = litellm_module.get_model_info(model)
+        max_input = info.get("max_input_tokens")
+    except Exception:
+        pass
+
+    # Fallback to local map if litellm doesn't have it
+    if not max_input:
+        max_input = _get_fallback_context_window(model)
+
+    if not max_input:
+        debug("No context window info for %s, skipping check", model)
+        return True, None
+
+    try:
+        token_count = litellm_module.token_counter(model=model, messages=messages)
+    except Exception:
+        # Token counting failed - estimate from chars (rough: 4 chars ≈ 1 token)
+        total_chars = sum(len(m.get("content", "")) for m in messages)
+        token_count = total_chars // 4
+
+    if token_count > max_input:
+        return False, (
+            f"Content exceeds model context limit: {token_count:,} tokens > {max_input:,} max. "
+            f"Use a model with larger context window or a shorter paper."
+        )
+    return True, None
+
+
 def _run_llm(prompt: str, *, purpose: str, model: Optional[str] = None) -> Optional[str]:
     """Run a prompt through LiteLLM. Returns None on any failure."""
     try:
@@ -795,12 +898,21 @@ def _run_llm(prompt: str, *, purpose: str, model: Optional[str] = None) -> Optio
             echo_error(err)
             echo_error("Start Ollama (`ollama serve`) or set OLLAMA_HOST / OLLAMA_API_BASE to a reachable server.")
             return None
+
+    messages = [{"role": "user", "content": prompt}]
+
+    # Check context limit before calling API
+    ok, err_msg = _check_context_limit(messages, model, litellm)
+    if not ok:
+        echo_error(f"LLM ({model}): {err_msg}")
+        return None
+
     echo_progress(f"  LLM ({model}): generating {purpose}...")
 
     try:
         response = litellm.completion(
             model=model,
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
             temperature=default_llm_temperature(),
             timeout=60,
         )
@@ -820,6 +932,44 @@ def _run_llm(prompt: str, *, purpose: str, model: Optional[str] = None) -> Optio
         return None
 
 
+def _extract_first_page_text(pdf_path: Path, max_chars: int = 3000) -> Optional[str]:
+    """Extract text from the first page of a PDF.
+
+    Uses pymupdf4llm for structured output if available, falling back to raw fitz.
+    Returns None if extraction fails.
+    """
+    # Try pymupdf4llm first (better reading order for multi-column layouts)
+    try:
+        import pymupdf4llm  # type: ignore[import-not-found]
+
+        md_text = pymupdf4llm.to_markdown(pdf_path, pages=[0])
+        if md_text:
+            text = md_text[:max_chars].strip()
+            if text:
+                return text
+    except ImportError:
+        pass
+    except Exception as e:
+        debug("pymupdf4llm first-page extraction failed for %s: %s", pdf_path, e)
+
+    # Fallback to raw fitz
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        return None
+
+    try:
+        doc = fitz.open(pdf_path)
+        if len(doc) == 0:
+            doc.close()
+            return None
+        first_page_text = str(doc[0].get_text())[:max_chars]
+        doc.close()
+        return first_page_text.strip() if first_page_text.strip() else None
+    except Exception:
+        return None
+
+
 def extract_title_from_pdf(pdf_path: Path) -> Optional[str]:
     """Extract title from a PDF using LLM.
 
@@ -829,26 +979,9 @@ def extract_title_from_pdf(pdf_path: Path) -> Optional[str]:
     if not _litellm_available():
         return None
 
-    # Try to extract text from first page using PyMuPDF
-    try:
-        import fitz  # PyMuPDF
-    except ImportError:
-        echo_warning("PyMuPDF not installed; cannot extract title from PDF. Use --title to specify manually.")
-        return None
-
-    try:
-        doc = fitz.open(pdf_path)
-        if len(doc) == 0:
-            doc.close()
-            return None
-        # Get text from first page (where title usually is)
-        first_page_text = str(doc[0].get_text())[:3000]  # Limit to avoid huge prompts
-        doc.close()
-    except Exception as e:
-        echo_warning(f"Cannot read PDF for title extraction: {e}")
-        return None
-
-    if not first_page_text.strip():
+    first_page_text = _extract_first_page_text(pdf_path)
+    if not first_page_text:
+        echo_warning("Cannot extract text from PDF for title extraction. Use --title to specify manually.")
         return None
 
     prompt = f"""Extract the title of this academic paper from the first page text below.
@@ -874,24 +1007,9 @@ def extract_title_and_name_from_pdf(
     if not _litellm_available():
         return None, None
 
-    try:
-        import fitz  # PyMuPDF
-    except ImportError:
-        echo_warning("PyMuPDF not installed; cannot extract title from PDF. Use --title to specify manually.")
-        return None, None
-
-    try:
-        doc = fitz.open(pdf_path)
-        if len(doc) == 0:
-            doc.close()
-            return None, None
-        first_page_text = str(doc[0].get_text())[:3000]
-        doc.close()
-    except Exception as e:
-        echo_warning(f"Cannot read PDF for title extraction: {e}")
-        return None, None
-
-    if not first_page_text.strip():
+    first_page_text = _extract_first_page_text(pdf_path)
+    if not first_page_text:
+        echo_warning("Cannot extract text from PDF for title extraction. Use --title to specify manually.")
         return None, None
 
     prompt = f"""From the first page of this academic paper, extract:
