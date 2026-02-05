@@ -1992,3 +1992,109 @@ class TestCommandAliases:
         result = runner.invoke(cli_mod.cli, ["idx", "--help"])
         assert result.exit_code == 0
         assert "index" in result.output.lower() or "pqa" in result.output.lower()
+
+
+class TestFindPaperBySourceUrl:
+    """Tests for _find_paper_by_source_url URL deduplication function."""
+
+    def test_returns_none_for_empty_url(self, temp_db: Path):
+        """Should return None for empty or None URL."""
+        from paperpipe.cli.papers import _find_paper_by_source_url
+
+        assert _find_paper_by_source_url("") is None
+        assert _find_paper_by_source_url(None) is None  # type: ignore[arg-type]
+
+    def test_returns_none_when_no_papers(self, temp_db: Path):
+        """Should return None when papers directory is empty."""
+        from paperpipe.cli.papers import _find_paper_by_source_url
+
+        result = _find_paper_by_source_url("https://example.com/paper.pdf")
+        assert result is None
+
+    def test_matches_exact_url(self, temp_db: Path):
+        """Should find paper with exact matching source_url."""
+        from paperpipe.cli.papers import _find_paper_by_source_url
+
+        papers_dir = temp_db / "papers"
+        (papers_dir / "existing-paper").mkdir(parents=True)
+        (papers_dir / "existing-paper" / "meta.json").write_text(
+            json.dumps({"title": "Test", "source_url": "https://example.com/paper.pdf"})
+        )
+
+        result = _find_paper_by_source_url("https://example.com/paper.pdf")
+        assert result == "existing-paper"
+
+    def test_normalizes_trailing_slash(self, temp_db: Path):
+        """Should match URLs that differ only by trailing slash."""
+        from paperpipe.cli.papers import _find_paper_by_source_url
+
+        papers_dir = temp_db / "papers"
+        (papers_dir / "my-paper").mkdir(parents=True)
+        (papers_dir / "my-paper" / "meta.json").write_text(
+            json.dumps({"title": "Test", "source_url": "https://example.com/path/"})
+        )
+
+        # Without trailing slash should still match
+        result = _find_paper_by_source_url("https://example.com/path")
+        assert result == "my-paper"
+
+        # With trailing slash should also match
+        result = _find_paper_by_source_url("https://example.com/path/")
+        assert result == "my-paper"
+
+    def test_normalizes_case_in_host(self, temp_db: Path):
+        """Should match URLs with different host casing."""
+        from paperpipe.cli.papers import _find_paper_by_source_url
+
+        papers_dir = temp_db / "papers"
+        (papers_dir / "case-test").mkdir(parents=True)
+        (papers_dir / "case-test" / "meta.json").write_text(
+            json.dumps({"title": "Test", "source_url": "https://EXAMPLE.COM/paper.pdf"})
+        )
+
+        result = _find_paper_by_source_url("https://example.com/paper.pdf")
+        assert result == "case-test"
+
+    def test_handles_corrupt_meta_json(self, temp_db: Path):
+        """Should skip papers with corrupt meta.json and continue searching."""
+        from paperpipe.cli.papers import _find_paper_by_source_url
+
+        papers_dir = temp_db / "papers"
+        # Corrupt paper
+        (papers_dir / "corrupt-paper").mkdir(parents=True)
+        (papers_dir / "corrupt-paper" / "meta.json").write_text("not valid json {{{")
+        # Valid paper
+        (papers_dir / "valid-paper").mkdir(parents=True)
+        (papers_dir / "valid-paper" / "meta.json").write_text(
+            json.dumps({"title": "Test", "source_url": "https://example.com/valid.pdf"})
+        )
+
+        # Should skip corrupt and find valid
+        result = _find_paper_by_source_url("https://example.com/valid.pdf")
+        assert result == "valid-paper"
+
+    def test_returns_none_for_no_match(self, temp_db: Path):
+        """Should return None when URL doesn't match any paper."""
+        from paperpipe.cli.papers import _find_paper_by_source_url
+
+        papers_dir = temp_db / "papers"
+        (papers_dir / "other-paper").mkdir(parents=True)
+        (papers_dir / "other-paper" / "meta.json").write_text(
+            json.dumps({"title": "Test", "source_url": "https://other.com/different.pdf"})
+        )
+
+        result = _find_paper_by_source_url("https://example.com/paper.pdf")
+        assert result is None
+
+    def test_ignores_papers_without_source_url(self, temp_db: Path):
+        """Should skip papers that don't have source_url field."""
+        from paperpipe.cli.papers import _find_paper_by_source_url
+
+        papers_dir = temp_db / "papers"
+        (papers_dir / "no-source-url").mkdir(parents=True)
+        (papers_dir / "no-source-url" / "meta.json").write_text(
+            json.dumps({"title": "Test", "url": "https://example.com"})  # url, not source_url
+        )
+
+        result = _find_paper_by_source_url("https://example.com")
+        assert result is None

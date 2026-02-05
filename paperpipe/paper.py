@@ -625,27 +625,28 @@ def _extract_pdf_text(pdf_path: Path, *, max_chars: int = 50000) -> Optional[str
     try:
         import fitz  # PyMuPDF
     except ImportError:
+        debug("PyMuPDF (fitz) not installed - PDF text extraction unavailable")
         return None
 
     try:
-        doc = fitz.open(pdf_path)
-        text_parts: list[str] = []
-        total_chars = 0
+        with fitz.open(pdf_path) as doc:
+            text_parts: list[str] = []
+            total_chars = 0
 
-        for page in doc:
-            page_text = str(page.get_text())
-            if total_chars + len(page_text) > max_chars:
-                # Take partial page to stay under limit
-                remaining = max_chars - total_chars
-                text_parts.append(page_text[:remaining])
-                break
-            text_parts.append(page_text)
-            total_chars += len(page_text)
+            for page in doc:
+                page_text = str(page.get_text())
+                if total_chars + len(page_text) > max_chars:
+                    # Take partial page to stay under limit
+                    remaining = max_chars - total_chars
+                    text_parts.append(page_text[:remaining])
+                    break
+                text_parts.append(page_text)
+                total_chars += len(page_text)
 
-        doc.close()
-        text = "\n".join(text_parts).strip()
-        return text if text else None
-    except Exception as e:
+            text = "\n".join(text_parts).strip()
+            return text if text else None
+    except (OSError, ValueError) as e:
+        # fitz raises ValueError for invalid PDFs, OSError for file access issues
         debug("PDF text extraction failed for %s: %s", pdf_path, e)
         return None
 
@@ -1571,11 +1572,12 @@ def _regenerate_one_paper(
 
     # Determine what needs regeneration
     if overwrite_all:
-        # Only regenerate fields that already exist (semantic: "redo what's there")
+        # Regenerate existing fields (semantic: "redo what's there")
+        # Exception: name always regenerates (cheap operation, improves naming)
         do_summary = summary_path.exists()
         do_equations = equations_path.exists()
         do_tags = bool(meta.get("tags"))
-        do_name = True  # name always exists
+        do_name = True
         do_tldr = tldr_path.exists()
         do_figures = figures_dir.exists() and any(figures_dir.iterdir())
     elif overwrite_fields:

@@ -57,6 +57,9 @@ def _is_local_pdf(value: str) -> bool:
 def _find_paper_by_source_url(source_url: str) -> Optional[str]:
     """Check if a paper with the given source_url already exists.
 
+    Normalizes URLs before comparison: lowercases host, strips trailing slashes
+    from path. Query params and fragments are ignored in the comparison.
+
     Returns the paper name if found, None otherwise.
     """
     from urllib.parse import urlparse
@@ -64,9 +67,9 @@ def _find_paper_by_source_url(source_url: str) -> Optional[str]:
     if not source_url:
         return None
 
-    # Normalize URL for comparison (strip trailing slashes, lowercase host)
-    parsed = urlparse(source_url.lower().rstrip("/"))
-    normalized = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+    # Normalize URL for comparison (lowercase host, strip trailing slashes from path)
+    parsed = urlparse(source_url.lower())
+    normalized = f"{parsed.scheme}://{parsed.netloc}{parsed.path.rstrip('/')}"
 
     for paper_dir in config.PAPERS_DIR.iterdir():
         if not paper_dir.is_dir():
@@ -78,11 +81,14 @@ def _find_paper_by_source_url(source_url: str) -> Optional[str]:
             meta = json.loads(meta_path.read_text())
             existing_url = meta.get("source_url") or ""
             if existing_url:
-                existing_parsed = urlparse(existing_url.lower().rstrip("/"))
-                existing_normalized = f"{existing_parsed.scheme}://{existing_parsed.netloc}{existing_parsed.path}"
+                existing_parsed = urlparse(existing_url.lower())
+                existing_normalized = f"{existing_parsed.scheme}://{existing_parsed.netloc}{existing_parsed.path.rstrip('/')}"
                 if normalized == existing_normalized:
                     return paper_dir.name
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError) as e:
+            from ..output import debug
+
+            debug("Skipping %s during duplicate check: %s", paper_dir.name, e)
             continue
     return None
 
@@ -233,15 +239,16 @@ def add(
         temp_pdf_path: Optional[Path] = None
         source_url: Optional[str] = None
         if _is_url(pdf):
-            # Check for source URL duplicates BEFORE downloading
-            existing = _find_paper_by_source_url(pdf)
-            if existing:
-                echo_error(
-                    f"Paper from this URL already exists: '{existing}'\n"
-                    f"  Source URL: {pdf}\n"
-                    f"Use `papi show {existing}` to view it, or --name to add as a separate entry."
-                )
-                raise SystemExit(1)
+            # Check for source URL duplicates BEFORE downloading (skip if --name provided)
+            if not name:
+                existing = _find_paper_by_source_url(pdf)
+                if existing:
+                    echo_error(
+                        f"Paper from this URL already exists: '{existing}'\n"
+                        f"  Source URL: {pdf}\n"
+                        f"Use `papi show {existing}` to view it, or --name to add as a separate entry."
+                    )
+                    raise SystemExit(1)
 
             echo_progress(f"Downloading PDF from {pdf}...")
             temp_pdf_path, error = download_pdf_from_url(pdf)

@@ -172,8 +172,24 @@ class TestExtractPdfText:
         # max_chars is approximate due to page boundaries and newline joins
         result = paper_mod._extract_pdf_text(pdf_path, max_chars=100)
         assert result is not None
-        # Should be close to max_chars (allow some slack for newlines)
-        assert len(result) < 200  # Much less than 5 pages * 500 chars
+        # Should be close to max_chars (allow slack for newlines between pages)
+        assert len(result) <= 115  # 100 + reasonable slack for newlines
+
+    def test_returns_none_for_empty_pdf(self, tmp_path):
+        """Should return None for PDFs with no extractable text (e.g., image-only)."""
+        pytest.importorskip("fitz")
+
+        import fitz
+
+        # Create PDF with blank page (no text)
+        pdf_path = tmp_path / "empty.pdf"
+        doc = fitz.open()
+        doc.new_page()  # Blank page with no text
+        doc.save(pdf_path)
+        doc.close()
+
+        result = paper_mod._extract_pdf_text(pdf_path)
+        assert result is None  # Empty string filtered to None
 
 
 class TestGenerateSimpleTldr:
