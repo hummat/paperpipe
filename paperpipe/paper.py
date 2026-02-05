@@ -617,6 +617,38 @@ def generate_auto_name(meta: dict, existing_names: set[str], use_llm: bool = Tru
     return name
 
 
+def _extract_pdf_text(pdf_path: Path, *, max_chars: int = 50000) -> Optional[str]:
+    """Extract text from PDF for use as LLM context.
+
+    Returns up to max_chars of text from the PDF, or None if extraction fails.
+    """
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        return None
+
+    try:
+        doc = fitz.open(pdf_path)
+        text_parts: list[str] = []
+        total_chars = 0
+
+        for page in doc:
+            page_text = str(page.get_text())
+            if total_chars + len(page_text) > max_chars:
+                # Take partial page to stay under limit
+                remaining = max_chars - total_chars
+                text_parts.append(page_text[:remaining])
+                break
+            text_parts.append(page_text)
+            total_chars += len(page_text)
+
+        doc.close()
+        text = "\n".join(text_parts).strip()
+        return text if text else None
+    except Exception:
+        return None
+
+
 def generate_llm_content(
     paper_dir: Path,
     meta: dict,
@@ -633,6 +665,16 @@ def generate_llm_content(
     Generate summary, equations.md, semantic tags, and tldr.md using LLM.
     Returns (summary, equations_md, additional_tags, tldr)
     """
+    # If no LaTeX source, try to extract text from PDF as fallback context
+    content_for_llm = tex_content
+    if not content_for_llm:
+        pdf_path = paper_dir / "paper.pdf"
+        if pdf_path.exists():
+            echo_progress("  Extracting text from PDF (no LaTeX source)...")
+            content_for_llm = _extract_pdf_text(pdf_path)
+            if content_for_llm:
+                echo_progress(f"  Extracted {len(content_for_llm) // 1000}k chars from PDF")
+
     if not _litellm_available():
         # Fallback: simple extraction without LLM
         summary = generate_simple_summary(meta, tex_content)
@@ -643,7 +685,7 @@ def generate_llm_content(
     try:
         return generate_with_litellm(
             meta,
-            tex_content,
+            content_for_llm,
             audit_reasons=audit_reasons,
             do_summary=do_summary,
             do_equations=do_equations,

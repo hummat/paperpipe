@@ -55,6 +55,60 @@ class TestGenerateLlmContent:
         assert "Test Paper" in tldr
 
 
+class TestExtractPdfText:
+    """Tests for _extract_pdf_text function."""
+
+    def test_returns_none_for_nonexistent_file(self, tmp_path):
+        """Should return None for files that don't exist."""
+        result = paper_mod._extract_pdf_text(tmp_path / "nonexistent.pdf")
+        assert result is None
+
+    def test_returns_none_for_invalid_pdf(self, tmp_path):
+        """Should return None for invalid PDF files."""
+        bad_pdf = tmp_path / "bad.pdf"
+        bad_pdf.write_text("not a pdf")
+        result = paper_mod._extract_pdf_text(bad_pdf)
+        assert result is None
+
+    def test_extracts_text_from_valid_pdf(self, tmp_path):
+        """Should extract text from a valid PDF (if fitz is available)."""
+        pytest.importorskip("fitz")
+
+        # Create a minimal valid PDF using fitz
+        import fitz
+
+        pdf_path = tmp_path / "test.pdf"
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((72, 72), "Hello World")
+        doc.save(pdf_path)
+        doc.close()
+
+        result = paper_mod._extract_pdf_text(pdf_path, max_chars=1000)
+        assert result is not None
+        assert "Hello" in result
+
+    def test_truncates_at_max_chars(self, tmp_path):
+        """Should truncate text at max_chars boundary."""
+        pytest.importorskip("fitz")
+
+        import fitz
+
+        pdf_path = tmp_path / "long.pdf"
+        doc = fitz.open()
+        for _ in range(5):
+            page = doc.new_page()
+            page.insert_text((72, 72), "X" * 500)
+        doc.save(pdf_path)
+        doc.close()
+
+        # max_chars is approximate due to page boundaries and newline joins
+        result = paper_mod._extract_pdf_text(pdf_path, max_chars=100)
+        assert result is not None
+        # Should be close to max_chars (allow some slack for newlines)
+        assert len(result) < 200  # Much less than 5 pages * 500 chars
+
+
 class TestGenerateSimpleTldr:
     """Tests for generate_simple_tldr function."""
 
