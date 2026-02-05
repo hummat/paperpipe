@@ -670,6 +670,7 @@ def generate_llm_content(
     """
     # If no LaTeX source, try to extract text from PDF as fallback context
     content_for_llm = tex_content
+    has_latex = tex_content is not None
     if not content_for_llm:
         pdf_path = paper_dir / "paper.pdf"
         if pdf_path.exists():
@@ -685,17 +686,24 @@ def generate_llm_content(
         tldr = generate_simple_tldr(meta)
         return summary, equations, [], tldr
 
+    # Only extract equations if we have actual LaTeX source (not PDF text)
+    effective_do_equations = do_equations and has_latex
+
     try:
-        return generate_with_litellm(
+        summary, equations, tags, tldr = generate_with_litellm(
             meta,
             content_for_llm,
             audit_reasons=audit_reasons,
             do_summary=do_summary,
-            do_equations=do_equations,
+            do_equations=effective_do_equations,
             do_tags=do_tags,
             do_tldr=do_tldr,
             model=model,
         )
+        # If no LaTeX source, ensure equations reflects that
+        if not has_latex and not equations:
+            equations = "No LaTeX source available."
+        return summary, equations, tags, tldr
     except ImportError as e:
         echo_warning(f"LiteLLM not installed; falling back to non-LLM generation ({e}).")
         debug("LiteLLM import failed:\n%s", traceback.format_exc())

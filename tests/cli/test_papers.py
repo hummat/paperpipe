@@ -2043,7 +2043,7 @@ class TestFindPaperBySourceUrl:
         assert result == "my-paper"
 
     def test_normalizes_case_in_host(self, temp_db: Path):
-        """Should match URLs with different host casing."""
+        """Should match URLs with different host casing but same path."""
         from paperpipe.cli.papers import _find_paper_by_source_url
 
         papers_dir = temp_db / "papers"
@@ -2054,6 +2054,24 @@ class TestFindPaperBySourceUrl:
 
         result = _find_paper_by_source_url("https://example.com/paper.pdf")
         assert result == "case-test"
+
+    def test_preserves_path_case(self, temp_db: Path):
+        """Should NOT match URLs with different path casing (paths are case-sensitive)."""
+        from paperpipe.cli.papers import _find_paper_by_source_url
+
+        papers_dir = temp_db / "papers"
+        (papers_dir / "path-case").mkdir(parents=True)
+        (papers_dir / "path-case" / "meta.json").write_text(
+            json.dumps({"title": "Test", "source_url": "https://s3.example.com/Bucket/Paper.pdf"})
+        )
+
+        # Different path case should NOT match
+        result = _find_paper_by_source_url("https://s3.example.com/bucket/paper.pdf")
+        assert result is None
+
+        # Same path case should match
+        result = _find_paper_by_source_url("https://S3.EXAMPLE.COM/Bucket/Paper.pdf")
+        assert result == "path-case"
 
     def test_handles_corrupt_meta_json(self, temp_db: Path):
         """Should skip papers with corrupt meta.json and continue searching."""

@@ -57,8 +57,9 @@ def _is_local_pdf(value: str) -> bool:
 def _find_paper_by_source_url(source_url: str) -> Optional[str]:
     """Check if a paper with the given source_url already exists.
 
-    Normalizes URLs before comparison: lowercases host, strips trailing slashes
-    from path. Query params and fragments are ignored in the comparison.
+    Normalizes URLs before comparison: lowercases scheme and host (but preserves
+    path case for case-sensitive hosts like S3), strips trailing slashes from path.
+    Query params and fragments are ignored in the comparison.
 
     Returns the paper name if found, None otherwise.
     """
@@ -67,9 +68,9 @@ def _find_paper_by_source_url(source_url: str) -> Optional[str]:
     if not source_url:
         return None
 
-    # Normalize URL for comparison (lowercase host, strip trailing slashes from path)
-    parsed = urlparse(source_url.lower())
-    normalized = f"{parsed.scheme}://{parsed.netloc}{parsed.path.rstrip('/')}"
+    # Normalize URL for comparison (lowercase scheme/host only, preserve path case)
+    parsed = urlparse(source_url)
+    normalized = f"{parsed.scheme.lower()}://{parsed.netloc.lower()}{parsed.path.rstrip('/')}"
 
     for paper_dir in config.PAPERS_DIR.iterdir():
         if not paper_dir.is_dir():
@@ -81,8 +82,8 @@ def _find_paper_by_source_url(source_url: str) -> Optional[str]:
             meta = json.loads(meta_path.read_text())
             existing_url = meta.get("source_url") or ""
             if existing_url:
-                existing_parsed = urlparse(existing_url.lower())
-                existing_normalized = f"{existing_parsed.scheme}://{existing_parsed.netloc}{existing_parsed.path.rstrip('/')}"
+                existing_parsed = urlparse(existing_url)
+                existing_normalized = f"{existing_parsed.scheme.lower()}://{existing_parsed.netloc.lower()}{existing_parsed.path.rstrip('/')}"
                 if normalized == existing_normalized:
                     return paper_dir.name
         except (json.JSONDecodeError, OSError) as e:
