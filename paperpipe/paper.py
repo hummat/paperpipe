@@ -1567,14 +1567,17 @@ def _regenerate_one_paper(
     tldr_path = paper_dir / "tldr.md"
     pdf_path = paper_dir / "paper.pdf"
 
+    figures_dir = paper_dir / "figures"
+
     # Determine what needs regeneration
     if overwrite_all:
-        do_summary = True
-        do_equations = True
-        do_tags = True
-        do_name = True
-        do_tldr = True
-        do_figures = True
+        # Only regenerate fields that already exist (semantic: "redo what's there")
+        do_summary = summary_path.exists()
+        do_equations = equations_path.exists()
+        do_tags = bool(meta.get("tags"))
+        do_name = True  # name always exists
+        do_tldr = tldr_path.exists()
+        do_figures = figures_dir.exists() and any(figures_dir.iterdir())
     elif overwrite_fields:
         do_summary = "summary" in overwrite_fields
         do_equations = "equations" in overwrite_fields
@@ -1628,6 +1631,7 @@ def _regenerate_one_paper(
                 equations_path = paper_dir / "equations.md"
                 tldr_path = paper_dir / "tldr.md"
                 meta_path = paper_dir / "meta.json"
+                pdf_path = paper_dir / "paper.pdf"
                 new_name = candidate
                 echo_progress(f"  Renamed: {name} → {candidate}")
 
