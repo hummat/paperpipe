@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+import tarfile
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -1007,6 +1010,98 @@ class TestDownloadSource:
 
         # No \begin{document}, so returns None
         assert result is None
+
+
+class TestDownloadSourceTempFileCleanup:
+    """Tests for temp file cleanup in download_source (Finding 2)."""
+
+    def test_temp_file_cleaned_up_on_tarfile_open_error(self, tmp_path, monkeypatch):
+        """Temp file should be cleaned up even when tarfile.open raises OSError."""
+        import requests
+
+        # Create content that will pass size checks but fail tarfile.open
+        bad_content = b"not a valid tar or gzip file at all" * 100
+
+        class MockResponse:
+            def __init__(self):
+                self.content = bad_content
+                self.status_code = 200
+                self.headers: dict[str, str] = {}
+
+            def raise_for_status(self):
+                pass
+
+        monkeypatch.setattr(requests, "get", lambda *_args, **_kwargs: MockResponse())
+
+        # Track temp files created
+        created_temps: list[Path] = []
+        original_named_temp = tempfile.NamedTemporaryFile
+
+        def tracking_temp(*args, **kwargs):
+            f = original_named_temp(*args, **kwargs)
+            created_temps.append(Path(f.name))
+            return f
+
+        monkeypatch.setattr(tempfile, "NamedTemporaryFile", tracking_temp)
+
+        # Force tarfile.open to raise OSError (not tarfile.ReadError, so it propagates)
+        monkeypatch.setattr(tarfile, "open", lambda *a, **kw: (_ for _ in ()).throw(OSError("disk error")))
+
+        paper_dir = tmp_path / "test-paper"
+        paper_dir.mkdir()
+
+        # OSError propagates, but the finally block should still clean up the temp file
+        with pytest.raises(OSError, match="disk error"):
+            paper_mod.download_source("1234.56789", paper_dir)
+
+        # The temp file should have been cleaned up by the finally block
+        assert len(created_temps) == 1
+        assert not created_temps[0].exists(), "Temp file was not cleaned up after OSError"
+
+
+class TestSetupDebugLogging:
+    """Tests for duplicate handler prevention in _setup_debug_logging (Finding 5)."""
+
+    def test_no_duplicate_handlers_on_repeated_calls(self):
+        """Calling _setup_debug_logging twice should not add duplicate handlers."""
+        from paperpipe.output import _debug_logger, _setup_debug_logging
+
+        # Count non-NullHandler handlers before
+        initial_count = sum(1 for h in _debug_logger.handlers if not isinstance(h, logging.NullHandler))
+
+        _setup_debug_logging()
+        after_first = sum(1 for h in _debug_logger.handlers if not isinstance(h, logging.NullHandler))
+
+        _setup_debug_logging()
+        after_second = sum(1 for h in _debug_logger.handlers if not isinstance(h, logging.NullHandler))
+
+        # Should have added exactly one handler, regardless of how many times called
+        assert after_first == max(initial_count, 1)
+        assert after_second == after_first
+
+    def test_replaces_stale_handler(self):
+        """A second call should replace the handler, allowing recovery from closed streams."""
+        import io
+
+        from paperpipe.output import _debug_logger, _setup_debug_logging
+
+        # Remove existing non-NullHandlers for a clean test
+        for h in _debug_logger.handlers[:]:
+            if not isinstance(h, logging.NullHandler):
+                _debug_logger.removeHandler(h)
+
+        # Simulate a stale handler pointing to a closed stream
+        closed_stream = io.StringIO()
+        closed_stream.close()
+        stale_handler = logging.StreamHandler(closed_stream)
+        _debug_logger.addHandler(stale_handler)
+
+        # _setup_debug_logging should replace the stale handler with a fresh one
+        _setup_debug_logging()
+
+        non_null = [h for h in _debug_logger.handlers if not isinstance(h, logging.NullHandler)]
+        assert len(non_null) == 1
+        assert non_null[0] is not stale_handler, "Stale handler was not replaced"
 
 
 class TestDownloadSourceSizeLimits:

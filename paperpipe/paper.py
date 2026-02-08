@@ -160,69 +160,72 @@ def download_source(arxiv_id: str, paper_dir: Path, *, extract_figures: bool = F
 
     tex_content = None
     try:
-        # Try to open as tar (most common)
-        with tarfile.open(tar_path) as tar:
-            tex_members = [
-                m for m in tar.getmembers() if m.isfile() and m.name.endswith(".tex") and m.size <= _MAX_TAR_MEMBER_SIZE
-            ]
-            if tex_members:
-                tex_by_name: dict[str, str] = {}
-                total_extracted = 0
-                for member in tex_members:
-                    if total_extracted + member.size > _MAX_TAR_TOTAL_SIZE:
-                        break
-                    extracted = tar.extractfile(member)
-                    if not extracted:
-                        continue
-                    content = extracted.read()
-                    total_extracted += len(content)
-                    tex_by_name[member.name] = content.decode("utf-8", errors="replace")
-
-                preferred_names = ("main.tex", "paper.tex")
-                preferred = [n for n in tex_by_name if Path(n).name in preferred_names]
-                if preferred:
-                    main_name = preferred[0]
-                else:
-                    document_files = [n for n, c in tex_by_name.items() if "\\begin{document}" in c]
-                    if document_files:
-                        main_name = max(document_files, key=lambda n: len(tex_by_name[n]))
-                    else:
-                        main_name = max(tex_by_name, key=lambda n: len(tex_by_name[n]))
-
-                main_content = tex_by_name[main_name]
-                combined_parts: list[str] = [main_content]
-                # Append other .tex files so equation extraction works even when main uses \input/\include.
-                for name in sorted(tex_by_name):
-                    if name == main_name:
-                        continue
-                    combined_parts.append(f"\n\n% --- file: {name} ---\n")
-                    combined_parts.append(tex_by_name[name])
-                tex_content = "".join(combined_parts)[:1_500_000]
-
-                # Extract figures if requested
-                if extract_figures and tex_content:
-                    _extract_figures_from_latex(tex_content, tar, paper_dir)
-    except tarfile.ReadError:
-        # Might be a single gzipped file or plain tex
-        import gzip
-
         try:
-            with gzip.open(tar_path, "rt", encoding="utf-8", errors="replace") as f:
-                tex_content = f.read()
-        except gzip.BadGzipFile as e:
-            echo_warning(f"Source archive for {arxiv_id} is not gzip/tar ({type(e).__name__}). Trying plain text.")
-            try:
-                tex_content = tar_path.read_text(errors="replace")
-            except OSError as read_error:
-                echo_warning(f"Could not read source as text for {arxiv_id}: {read_error}")
-        except OSError as e:
-            echo_warning(f"Failed to extract gzip source for {arxiv_id}: {e}")
-            try:
-                tex_content = tar_path.read_text(errors="replace")
-            except OSError as read_error:
-                echo_warning(f"Could not read source as text for {arxiv_id}: {read_error}")
+            # Try to open as tar (most common)
+            with tarfile.open(tar_path) as tar:
+                tex_members = [
+                    m
+                    for m in tar.getmembers()
+                    if m.isfile() and m.name.endswith(".tex") and m.size <= _MAX_TAR_MEMBER_SIZE
+                ]
+                if tex_members:
+                    tex_by_name: dict[str, str] = {}
+                    total_extracted = 0
+                    for member in tex_members:
+                        if total_extracted + member.size > _MAX_TAR_TOTAL_SIZE:
+                            break
+                        extracted = tar.extractfile(member)
+                        if not extracted:
+                            continue
+                        content = extracted.read()
+                        total_extracted += len(content)
+                        tex_by_name[member.name] = content.decode("utf-8", errors="replace")
 
-    tar_path.unlink()
+                    preferred_names = ("main.tex", "paper.tex")
+                    preferred = [n for n in tex_by_name if Path(n).name in preferred_names]
+                    if preferred:
+                        main_name = preferred[0]
+                    else:
+                        document_files = [n for n, c in tex_by_name.items() if "\\begin{document}" in c]
+                        if document_files:
+                            main_name = max(document_files, key=lambda n: len(tex_by_name[n]))
+                        else:
+                            main_name = max(tex_by_name, key=lambda n: len(tex_by_name[n]))
+
+                    main_content = tex_by_name[main_name]
+                    combined_parts: list[str] = [main_content]
+                    # Append other .tex files so equation extraction works even when main uses \input/\include.
+                    for name in sorted(tex_by_name):
+                        if name == main_name:
+                            continue
+                        combined_parts.append(f"\n\n% --- file: {name} ---\n")
+                        combined_parts.append(tex_by_name[name])
+                    tex_content = "".join(combined_parts)[:1_500_000]
+
+                    # Extract figures if requested
+                    if extract_figures and tex_content:
+                        _extract_figures_from_latex(tex_content, tar, paper_dir)
+        except tarfile.ReadError:
+            # Might be a single gzipped file or plain tex
+            import gzip
+
+            try:
+                with gzip.open(tar_path, "rt", encoding="utf-8", errors="replace") as f:
+                    tex_content = f.read()
+            except gzip.BadGzipFile as e:
+                echo_warning(f"Source archive for {arxiv_id} is not gzip/tar ({type(e).__name__}). Trying plain text.")
+                try:
+                    tex_content = tar_path.read_text(errors="replace")
+                except OSError as read_error:
+                    echo_warning(f"Could not read source as text for {arxiv_id}: {read_error}")
+            except OSError as e:
+                echo_warning(f"Failed to extract gzip source for {arxiv_id}: {e}")
+                try:
+                    tex_content = tar_path.read_text(errors="replace")
+                except OSError as read_error:
+                    echo_warning(f"Could not read source as text for {arxiv_id}: {read_error}")
+    finally:
+        tar_path.unlink(missing_ok=True)
 
     if tex_content and "\\begin{document}" in tex_content:
         (paper_dir / "source.tex").write_text(tex_content)
@@ -310,9 +313,24 @@ def _extract_figures_from_latex(tex_content: str, tar: tarfile.TarFile, paper_di
     # Common image extensions supported by LaTeX (pdflatex, xelatex, lualatex)
     image_exts = {".png", ".jpg", ".jpeg", ".pdf", ".eps", ".ps", ".gif", ".bmp"}
 
+    # Build O(1) lookup indexes from a single getmembers() call
+    full_index: dict[str, tarfile.TarInfo] = {}  # normalized full path → member
+    basename_index: dict[str, list[tarfile.TarInfo]] = {}  # basename → [members]
+    for member in tar.getmembers():
+        if not member.isfile():
+            continue
+        if member.size > _MAX_TAR_MEMBER_SIZE:
+            continue
+        normalized = member.name.replace("\\", "/")
+        full_index[normalized] = member
+        bname = Path(normalized).name
+        basename_index.setdefault(bname, []).append(member)
+
     figures_dir = paper_dir / "figures"
     extracted_count = 0
     total_extracted_size = 0
+    used_dest_names: set[str] = set()
+    extracted_members: set[str] = set()  # track source members already extracted
 
     for ref in matches:
         # LaTeX allows omitting file extension, so we need to try with and without
@@ -331,52 +349,72 @@ def _extract_figures_from_latex(tex_content: str, tar: tarfile.TarFile, paper_di
             # Normalize path (LaTeX may use / or relative paths)
             candidate_path = candidate.replace("\\", "/")
 
-            # Try to find matching member (with or without leading path components)
-            found = False
-            for member in tar.getmembers():
-                if not member.isfile():
-                    continue
-                if member.size > _MAX_TAR_MEMBER_SIZE:
-                    continue
+            # O(1) lookup: try exact match first, then basename fallback
+            member = full_index.get(candidate_path)
+            if member is None:
+                # Check basename index, filter by suffix match
+                bname = Path(candidate_path).name
+                for m in basename_index.get(bname, []):
+                    mn = m.name.replace("\\", "/")
+                    if mn == candidate_path or mn.endswith("/" + candidate_path):
+                        member = m
+                        break
 
-                member_name = member.name.replace("\\", "/")
-                # Check if member path ends with candidate or matches exactly
-                if member_name == candidate_path or member_name.endswith("/" + candidate_path):
-                    if total_extracted_size + member.size > _MAX_TAR_TOTAL_SIZE:
-                        echo_warning("  Tar extraction total size limit reached")
-                        return extracted_count
+            if member is None:
+                continue
 
-                    # Extract the file
-                    if not figures_dir.exists():
-                        try:
-                            figures_dir.mkdir(parents=True)
-                        except (PermissionError, OSError) as e:
-                            echo_warning(f"  Cannot create figures directory: {e}")
-                            return extracted_count
-
-                    try:
-                        file_obj = tar.extractfile(member)
-                        if file_obj:
-                            # Use basename to avoid directory structure
-                            dest_name = Path(member_name).name
-                            dest_path = figures_dir / dest_name
-
-                            # Write file
-                            data = file_obj.read()
-                            total_extracted_size += len(data)
-                            dest_path.write_bytes(data)
-                            extracted_count += 1
-                            found = True
-                            break
-                    except (tarfile.TarError, KeyError) as e:
-                        echo_warning(f"  Corrupted tarball member '{member_name}': {e}")
-                        continue
-                    except (OSError, MemoryError) as e:
-                        echo_warning(f"  Failed to extract figure '{Path(member_name).name}': {e}")
-                        continue
-
-            if found:
+            # Skip if this tar member was already extracted (duplicate \includegraphics ref)
+            member_key = member.name.replace("\\", "/")
+            if member_key in extracted_members:
                 break
+
+            if total_extracted_size + member.size > _MAX_TAR_TOTAL_SIZE:
+                echo_warning("  Tar extraction total size limit reached")
+                return extracted_count
+
+            # Extract the file
+            if not figures_dir.exists():
+                try:
+                    figures_dir.mkdir(parents=True)
+                except (PermissionError, OSError) as e:
+                    echo_warning(f"  Cannot create figures directory: {e}")
+                    return extracted_count
+
+            try:
+                file_obj = tar.extractfile(member)
+                if file_obj:
+                    dest_name = Path(member_key).name
+
+                    # Handle basename collisions (e.g. figs/plot.png vs results/plot.png)
+                    if dest_name in used_dest_names:
+                        parent = Path(member_key).parent.name
+                        if parent and parent != ".":
+                            dest_name = f"{parent}_{dest_name}"
+                        # Re-check after prefixing; fall back to numeric suffix
+                        if dest_name in used_dest_names:
+                            stem = Path(dest_name).stem
+                            suffix = Path(dest_name).suffix
+                            counter = 2
+                            while f"{stem}_{counter}{suffix}" in used_dest_names:
+                                counter += 1
+                            dest_name = f"{stem}_{counter}{suffix}"
+
+                    dest_path = figures_dir / dest_name
+
+                    # Write file
+                    data = file_obj.read()
+                    total_extracted_size += len(data)
+                    dest_path.write_bytes(data)
+                    extracted_count += 1
+                    used_dest_names.add(dest_name)
+                    extracted_members.add(member_key)
+                    break
+            except (tarfile.TarError, KeyError) as e:
+                echo_warning(f"  Corrupted tarball member '{member.name}': {e}")
+                continue
+            except (OSError, MemoryError) as e:
+                echo_warning(f"  Failed to extract figure '{Path(member.name).name}': {e}")
+                continue
 
     if extracted_count > 0:
         echo_progress(f"  Extracted {extracted_count} figure(s) from LaTeX source")

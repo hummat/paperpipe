@@ -82,8 +82,7 @@ only-include = [
     "ROADMAP.md",
     "LICENSE",
     "AGENT_INTEGRATION.md",
-    "skill",
-    "prompts",
+    "skills",
 ]
 
 [tool.hatch.build.targets.sdist]
@@ -94,8 +93,7 @@ only-include = [
     "ROADMAP.md",
     "LICENSE",
     "AGENT_INTEGRATION.md",
-    "skill",
-    "prompts",
+    "skills",
 ]
 
 [tool.pytest.ini_options]
