@@ -14,6 +14,8 @@ _debug_logger.addHandler(logging.NullHandler())
 
 def _setup_debug_logging() -> None:
     """Enable debug logging to stderr."""
+    if any(not isinstance(h, logging.NullHandler) for h in _debug_logger.handlers):
+        return
     _debug_logger.setLevel(logging.DEBUG)
     handler = logging.StreamHandler(sys.stderr)
     handler.setLevel(logging.DEBUG)

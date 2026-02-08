@@ -72,6 +72,9 @@ def _find_paper_by_source_url(source_url: str) -> Optional[str]:
     parsed = urlparse(source_url)
     normalized = f"{parsed.scheme.lower()}://{parsed.netloc.lower()}{parsed.path.rstrip('/')}"
 
+    if not config.PAPERS_DIR.is_dir():
+        return None
+
     for paper_dir in config.PAPERS_DIR.iterdir():
         if not paper_dir.is_dir():
             continue
