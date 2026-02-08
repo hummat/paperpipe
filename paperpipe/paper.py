@@ -142,8 +142,12 @@ def download_source(arxiv_id: str, paper_dir: Path, *, extract_figures: bool = F
 
     # Check download size
     content_length = response.headers.get("Content-Length")
-    if content_length and int(content_length) > _MAX_DOWNLOAD_SIZE:
-        echo_warning(f"Source archive for {arxiv_id} too large ({int(content_length)} bytes). Skipping.")
+    try:
+        content_length_int = int(content_length) if content_length else None
+    except (ValueError, TypeError):
+        content_length_int = None
+    if content_length_int is not None and content_length_int > _MAX_DOWNLOAD_SIZE:
+        echo_warning(f"Source archive for {arxiv_id} too large ({content_length_int} bytes). Skipping.")
         return None
     if len(response.content) > _MAX_DOWNLOAD_SIZE:
         echo_warning(f"Source archive for {arxiv_id} too large ({len(response.content)} bytes). Skipping.")

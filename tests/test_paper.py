@@ -1031,6 +1031,29 @@ class TestDownloadSourceSizeLimits:
         result = paperpipe.download_source("1234.56789", paper_dir)
         assert result is None
 
+    def test_malformed_content_length_ignored(self, tmp_path, monkeypatch):
+        """Malformed Content-Length header should not crash; download proceeds normally."""
+        from unittest.mock import MagicMock
+
+        import requests
+
+        # Monkeypatch to small limit so the body size check triggers
+        monkeypatch.setattr(paper_mod, "_MAX_DOWNLOAD_SIZE", 100)
+
+        mock_response = MagicMock()
+        mock_response.headers = {"Content-Length": "invalid"}
+        mock_response.content = b"x" * 200  # exceeds monkeypatched limit
+        mock_response.raise_for_status = MagicMock()
+
+        monkeypatch.setattr(requests, "get", lambda url, timeout: mock_response)
+
+        paper_dir = tmp_path / "test-paper"
+        paper_dir.mkdir()
+
+        # Should not raise ValueError; falls through to body size check
+        result = paperpipe.download_source("1234.56789", paper_dir)
+        assert result is None
+
     def test_oversized_content_rejected(self, tmp_path, monkeypatch):
         """Actual content exceeding limit should cause download to be skipped."""
         from unittest.mock import MagicMock

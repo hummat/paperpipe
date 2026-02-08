@@ -165,11 +165,16 @@ def _safe_zlib_decompress(data: bytes, *, max_size: int = _MAX_ZLIB_DECOMPRESS_S
     total = 0
     block_size = 65536
     for i in range(0, len(data), block_size):
-        chunk = dobj.decompress(data[i : i + block_size])
-        total += len(chunk)
-        if total > max_size:
-            raise ValueError(f"Decompressed data exceeds {max_size} byte limit")
-        chunks.append(chunk)
+        dobj.decompress(b"", 0)  # no-op; ensures unconsumed_tail is drained below
+        buf = data[i : i + block_size]
+        while buf:
+            remaining_budget = max_size - total + 1  # +1 to detect overflow
+            chunk = dobj.decompress(buf, max_length=remaining_budget)
+            total += len(chunk)
+            if total > max_size:
+                raise ValueError(f"Decompressed data exceeds {max_size} byte limit")
+            chunks.append(chunk)
+            buf = dobj.unconsumed_tail
     remaining = dobj.flush()
     total += len(remaining)
     if total > max_size:
@@ -241,7 +246,7 @@ def _write_index_metadata(index_root: Path, index_name: str, embedding_model: st
     Creates paperpipe_meta.json with embedding model, timestamp, and version.
     Callers should wrap in try/except to ensure index operations succeed regardless of metadata write failures.
     """
-    _validate_index_name(index_name)
+    index_name = _validate_index_name(index_name)
     try:
         from importlib.metadata import PackageNotFoundError
         from importlib.metadata import version as get_version
@@ -483,7 +488,7 @@ def _register_tools() -> None:
         """Return basic status info about the PaperQA2 index (no heavy imports)."""
         embedding_model = (embedding_model or "").strip() or _default_embedding_model()
         index_root = Path(index_dir).expanduser() if index_dir else _default_index_root()
-        index_name = (index_name or "").strip() or _default_index_name(embedding_model)
+        index_name = _validate_index_name((index_name or "").strip() or _default_index_name(embedding_model))
         index_path = index_root / index_name
         files_zip = index_path / "files.zip"
         mapping = _load_files_zip_map(files_zip) if files_zip.exists() else None

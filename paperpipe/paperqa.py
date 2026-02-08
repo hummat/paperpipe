@@ -63,14 +63,19 @@ def _safe_zlib_decompress(data: bytes, *, max_size: int = _MAX_ZLIB_DECOMPRESS_S
     dobj = zlib.decompressobj()
     chunks: list[bytes] = []
     total = 0
-    # Feed data in 64 KB blocks to limit peak memory before aborting
+    # Feed compressed data in 64 KB blocks; cap decompressed output via max_length
     block_size = 65536
     for i in range(0, len(data), block_size):
-        chunk = dobj.decompress(data[i : i + block_size])
-        total += len(chunk)
-        if total > max_size:
-            raise ValueError(f"Decompressed data exceeds {max_size} byte limit")
-        chunks.append(chunk)
+        dobj.decompress(b"", 0)  # no-op; ensures unconsumed_tail is drained below
+        buf = data[i : i + block_size]
+        while buf:
+            remaining_budget = max_size - total + 1  # +1 to detect overflow
+            chunk = dobj.decompress(buf, max_length=remaining_budget)
+            total += len(chunk)
+            if total > max_size:
+                raise ValueError(f"Decompressed data exceeds {max_size} byte limit")
+            chunks.append(chunk)
+            buf = dobj.unconsumed_tail
     # Flush remaining data
     remaining = dobj.flush()
     total += len(remaining)
