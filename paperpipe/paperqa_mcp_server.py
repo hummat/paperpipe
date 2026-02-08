@@ -30,9 +30,11 @@ Requires Python 3.11+ (paper-qa requirement).
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import os
+import pickle
 import sys
 import zlib
 from pathlib import Path
@@ -122,17 +124,90 @@ def _default_index_name(embedding_model: str) -> str:
     return _index_name_for_embedding(embedding_model)
 
 
+_SAFE_PICKLE_BUILTINS = frozenset({"dict", "str", "list", "tuple", "set", "frozenset", "int", "float", "bool", "bytes"})
+
+
+class _RestrictedUnpickler(pickle.Unpickler):
+    """Unpickler that only allows basic Python builtins (no arbitrary code execution)."""
+
+    def find_class(self, module: str, name: str) -> Any:
+        if module == "builtins" and name in _SAFE_PICKLE_BUILTINS:
+            return (
+                getattr(__builtins__ if isinstance(__builtins__, dict) else __builtins__, name, None)
+                or {
+                    "dict": dict,
+                    "str": str,
+                    "list": list,
+                    "tuple": tuple,
+                    "set": set,
+                    "frozenset": frozenset,
+                    "int": int,
+                    "float": float,
+                    "bool": bool,
+                    "bytes": bytes,
+                }[name]
+            )
+        raise pickle.UnpicklingError(f"Restricted: {module}.{name}")
+
+
+def _safe_unpickle(data: bytes) -> Any:
+    """Deserialize pickle data using a restricted unpickler (blocks arbitrary code execution)."""
+    return _RestrictedUnpickler(io.BytesIO(data)).load()
+
+
+_MAX_ZLIB_DECOMPRESS_SIZE = 100 * 1024 * 1024  # 100 MB
+
+
+def _safe_zlib_decompress(data: bytes, *, max_size: int = _MAX_ZLIB_DECOMPRESS_SIZE) -> bytes:
+    """Decompress zlib data with a size limit to prevent decompression bombs."""
+    dobj = zlib.decompressobj()
+    chunks: list[bytes] = []
+    total = 0
+    block_size = 65536
+    for i in range(0, len(data), block_size):
+        dobj.decompress(b"", 0)  # no-op; ensures unconsumed_tail is drained below
+        buf = data[i : i + block_size]
+        while buf:
+            remaining_budget = max_size - total + 1  # +1 to detect overflow
+            chunk = dobj.decompress(buf, max_length=remaining_budget)
+            total += len(chunk)
+            if total > max_size:
+                raise ValueError(f"Decompressed data exceeds {max_size} byte limit")
+            chunks.append(chunk)
+            buf = dobj.unconsumed_tail
+    remaining = dobj.flush()
+    total += len(remaining)
+    if total > max_size:
+        raise ValueError(f"Decompressed data exceeds {max_size} byte limit")
+    chunks.append(remaining)
+    return b"".join(chunks)
+
+
+def _validate_index_name(index_name: str) -> str:
+    """Validate and return a safe index name (rejects path traversal attempts)."""
+    name = (index_name or "").strip()
+    if not name:
+        raise ValueError("index_name must be non-empty")
+    if "\x00" in name:
+        raise ValueError("index_name must not contain null bytes")
+    if "/" in name or "\\" in name:
+        raise ValueError("index_name must not contain path separators")
+    if ".." in name:
+        raise ValueError("index_name must not contain '..' components")
+    if all(c == "." for c in name):
+        raise ValueError("index_name must not be only dots")
+    return name
+
+
 def _index_meta_exists(index_root: Path, index_name: str) -> bool:
-    return (index_root / index_name / "index" / "meta.json").exists()
+    return (index_root / _validate_index_name(index_name) / "index" / "meta.json").exists()
 
 
 def _load_files_zip_map(files_zip: Path) -> dict[str, str] | None:
     """Load PaperQA2's index file map (zlib-compressed pickle)."""
     try:
-        import pickle
-
-        raw = zlib.decompress(files_zip.read_bytes())
-        obj = pickle.loads(raw)  # noqa: S301 - PaperQA2 format
+        raw = _safe_zlib_decompress(files_zip.read_bytes())
+        obj = _safe_unpickle(raw)
     except Exception:
         return None
     if not isinstance(obj, dict):
@@ -150,7 +225,7 @@ def _load_embedding_from_metadata(index_root: Path, index_name: str) -> str | No
 
     Returns None if file doesn't exist or is invalid.
     """
-    meta_path = index_root / index_name / "paperpipe_meta.json"
+    meta_path = index_root / _validate_index_name(index_name) / "paperpipe_meta.json"
     if not meta_path.exists():
         return None
     try:
@@ -171,6 +246,7 @@ def _write_index_metadata(index_root: Path, index_name: str, embedding_model: st
     Creates paperpipe_meta.json with embedding model, timestamp, and version.
     Callers should wrap in try/except to ensure index operations succeed regardless of metadata write failures.
     """
+    index_name = _validate_index_name(index_name)
     try:
         from importlib.metadata import PackageNotFoundError
         from importlib.metadata import version as get_version
@@ -412,7 +488,7 @@ def _register_tools() -> None:
         """Return basic status info about the PaperQA2 index (no heavy imports)."""
         embedding_model = (embedding_model or "").strip() or _default_embedding_model()
         index_root = Path(index_dir).expanduser() if index_dir else _default_index_root()
-        index_name = (index_name or "").strip() or _default_index_name(embedding_model)
+        index_name = _validate_index_name((index_name or "").strip() or _default_index_name(embedding_model))
         index_path = index_root / index_name
         files_zip = index_path / "files.zip"
         mapping = _load_files_zip_map(files_zip) if files_zip.exists() else None

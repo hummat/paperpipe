@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pickle
+import zlib
+
 import pytest
 
 import paperpipe
@@ -84,3 +87,135 @@ class TestFirstLine:
 
     def test_single_line(self):
         assert paperqa._first_line("just one line") == "just one line"
+
+
+class TestSafeUnpickle:
+    """Tests for _safe_unpickle (Fix #1: restricted pickle deserialization)."""
+
+    def test_allows_valid_dict(self):
+        data = pickle.dumps({"key": "value", "num": 42})
+        result = paperqa._safe_unpickle(data)
+        assert result == {"key": "value", "num": 42}
+
+    def test_allows_empty_dict(self):
+        data = pickle.dumps({})
+        result = paperqa._safe_unpickle(data)
+        assert result == {}
+
+    def test_rejects_os_system(self):
+        # Build a payload using reduce that references os.system
+        import os as _os
+
+        class _OsSystem:
+            def __reduce__(self):
+                return (_os.system, ("echo pwned",))
+
+        payload = pickle.dumps(_OsSystem())
+        with pytest.raises(pickle.UnpicklingError, match="Restricted"):
+            paperqa._safe_unpickle(payload)
+
+    def test_rejects_subprocess(self):
+        # Build a pickle payload that tries to import subprocess.call
+        class Evil:
+            def __reduce__(self):
+                import subprocess
+
+                return (subprocess.call, (["echo", "pwned"],))
+
+        payload = pickle.dumps(Evil())
+        with pytest.raises(pickle.UnpicklingError, match="Restricted"):
+            paperqa._safe_unpickle(payload)
+
+    def test_integration_with_load_index_files_map(self, tmp_path):
+        """Integration: _paperqa_load_index_files_map uses safe unpickle."""
+        mapping = {"file1.pdf": "ok", "file2.pdf": "ERROR"}
+        compressed = zlib.compress(pickle.dumps(mapping))
+        files_zip = tmp_path / "test_index" / "files.zip"
+        files_zip.parent.mkdir(parents=True)
+        files_zip.write_bytes(compressed)
+        result = paperqa._paperqa_load_index_files_map(files_zip)
+        assert result == mapping
+
+
+class TestValidateIndexName:
+    """Tests for _validate_index_name (Fix #2: path traversal prevention)."""
+
+    def test_valid_name(self):
+        assert paperqa._validate_index_name("paperpipe_text-embedding-3-small") == "paperpipe_text-embedding-3-small"
+
+    def test_rejects_empty(self):
+        with pytest.raises(ValueError, match="non-empty"):
+            paperqa._validate_index_name("")
+
+    def test_rejects_dot_dot(self):
+        with pytest.raises(ValueError, match="\\.\\."):
+            paperqa._validate_index_name("..secret")
+
+    def test_rejects_slash(self):
+        with pytest.raises(ValueError, match="path separator"):
+            paperqa._validate_index_name("foo/bar")
+
+    def test_rejects_backslash(self):
+        with pytest.raises(ValueError, match="path separator"):
+            paperqa._validate_index_name("foo\\bar")
+
+    def test_rejects_null_byte(self):
+        with pytest.raises(ValueError, match="null"):
+            paperqa._validate_index_name("foo\x00bar")
+
+
+class TestFindCrashingFileSecurity:
+    """Tests for _paperqa_find_crashing_file boundary checks (Fix #3)."""
+
+    def test_absolute_outside_rejected(self, tmp_path):
+        paper_dir = tmp_path / "papers"
+        paper_dir.mkdir()
+        outside = tmp_path / "secret.txt"
+        outside.write_text("secret")
+        result = paperqa._paperqa_find_crashing_file(paper_directory=paper_dir, crashing_doc=str(outside))
+        assert result is None
+
+    def test_absolute_inside_allowed(self, tmp_path):
+        paper_dir = tmp_path / "papers"
+        paper_dir.mkdir()
+        inside = paper_dir / "paper.pdf"
+        inside.write_text("pdf")
+        result = paperqa._paperqa_find_crashing_file(paper_directory=paper_dir, crashing_doc=str(inside))
+        assert result is not None
+
+    def test_dotdot_traversal_rejected(self, tmp_path):
+        paper_dir = tmp_path / "papers"
+        paper_dir.mkdir()
+        outside = tmp_path / "secret.txt"
+        outside.write_text("secret")
+        result = paperqa._paperqa_find_crashing_file(paper_directory=paper_dir, crashing_doc="../secret.txt")
+        assert result is None
+
+    def test_relative_inside_allowed(self, tmp_path):
+        paper_dir = tmp_path / "papers"
+        paper_dir.mkdir()
+        (paper_dir / "test.pdf").write_text("pdf")
+        result = paperqa._paperqa_find_crashing_file(paper_directory=paper_dir, crashing_doc="test.pdf")
+        assert result is not None
+
+
+class TestSafeZlibDecompress:
+    """Tests for _safe_zlib_decompress (Fix #5a: bounded decompression)."""
+
+    def test_normal_data(self):
+        original = b"hello world" * 100
+        compressed = zlib.compress(original)
+        result = paperqa._safe_zlib_decompress(compressed)
+        assert result == original
+
+    def test_oversized_rejection(self):
+        # Create data larger than a 1KB limit
+        original = b"x" * 2048
+        compressed = zlib.compress(original)
+        with pytest.raises(ValueError, match="exceeds"):
+            paperqa._safe_zlib_decompress(compressed, max_size=1024)
+
+    def test_empty_data(self):
+        compressed = zlib.compress(b"")
+        result = paperqa._safe_zlib_decompress(compressed)
+        assert result == b""

@@ -381,6 +381,7 @@ class TestFigureExtractionIntegration:
             def __init__(self):
                 self.content = tar_bytes
                 self.status_code = 200
+                self.headers: dict[str, str] = {}
 
             def raise_for_status(self):
                 pass
@@ -420,6 +421,7 @@ class TestFigureExtractionIntegration:
             def __init__(self):
                 self.content = tar_bytes
                 self.status_code = 200
+                self.headers: dict[str, str] = {}
 
             def raise_for_status(self):
                 pass
