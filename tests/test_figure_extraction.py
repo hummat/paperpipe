@@ -192,11 +192,10 @@ class TestExtractFiguresFromLatex:
         assert not (paper_dir / "figures" / "missing.png").exists()
 
     def test_handles_duplicate_figure_names_from_different_dirs(self, tmp_path):
-        """Test that figures from different directories with same name overwrite each other.
+        """Test that figures from different directories with same basename get distinct names.
 
-        This is a known limitation: figures are flattened to basename, so
-        figures/plot.png and results/plot.png both become plot.png.
-        The last one processed wins. This test documents the behavior.
+        When figs/plot.png and results/plot.png both extract to figures/,
+        the second is prefixed with its parent dir name to avoid collision.
         """
         tar_buffer = io.BytesIO()
         with tarfile.open(fileobj=tar_buffer, mode="w:gz") as tar:
@@ -225,13 +224,13 @@ class TestExtractFiguresFromLatex:
         with tarfile.open(fileobj=tar_buffer, mode="r:gz") as tar:
             count = paper_mod._extract_figures_from_latex(tex_content, tar, paper_dir)
 
-        # Both references are found, but they overwrite each other
-        # so only 1 file exists (the second one processed)
-        assert count == 2  # Count says 2 were "extracted"
-        assert (paper_dir / "figures" / "plot.png").exists()
-        # Only one file exists (second one overwrote first)
+        assert count == 2
         figure_files = list((paper_dir / "figures").iterdir())
-        assert len(figure_files) == 1
+        assert len(figure_files) == 2, f"Expected 2 distinct files, got {[f.name for f in figure_files]}"
+        # Both files should exist with distinct contents
+        contents = {f.name: f.read_bytes() for f in figure_files}
+        assert any(b"first_image_data" in v for v in contents.values())
+        assert any(b"second_image_data" in v for v in contents.values())
 
     def test_handles_tarball_with_directory_prefix(self, tmp_path):
         """Test extraction when tarball has directory prefix (real arXiv behavior)."""

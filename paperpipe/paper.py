@@ -313,9 +313,23 @@ def _extract_figures_from_latex(tex_content: str, tar: tarfile.TarFile, paper_di
     # Common image extensions supported by LaTeX (pdflatex, xelatex, lualatex)
     image_exts = {".png", ".jpg", ".jpeg", ".pdf", ".eps", ".ps", ".gif", ".bmp"}
 
+    # Build O(1) lookup indexes from a single getmembers() call
+    full_index: dict[str, tarfile.TarInfo] = {}  # normalized full path → member
+    basename_index: dict[str, list[tarfile.TarInfo]] = {}  # basename → [members]
+    for member in tar.getmembers():
+        if not member.isfile():
+            continue
+        if member.size > _MAX_TAR_MEMBER_SIZE:
+            continue
+        normalized = member.name.replace("\\", "/")
+        full_index[normalized] = member
+        bname = Path(normalized).name
+        basename_index.setdefault(bname, []).append(member)
+
     figures_dir = paper_dir / "figures"
     extracted_count = 0
     total_extracted_size = 0
+    used_dest_names: set[str] = set()
 
     for ref in matches:
         # LaTeX allows omitting file extension, so we need to try with and without
@@ -334,52 +348,67 @@ def _extract_figures_from_latex(tex_content: str, tar: tarfile.TarFile, paper_di
             # Normalize path (LaTeX may use / or relative paths)
             candidate_path = candidate.replace("\\", "/")
 
-            # Try to find matching member (with or without leading path components)
-            found = False
-            for member in tar.getmembers():
-                if not member.isfile():
-                    continue
-                if member.size > _MAX_TAR_MEMBER_SIZE:
-                    continue
+            # O(1) lookup: try exact match first, then basename fallback
+            member = full_index.get(candidate_path)
+            if member is None:
+                # Check basename index, filter by suffix match
+                bname = Path(candidate_path).name
+                for m in basename_index.get(bname, []):
+                    mn = m.name.replace("\\", "/")
+                    if mn == candidate_path or mn.endswith("/" + candidate_path):
+                        member = m
+                        break
 
-                member_name = member.name.replace("\\", "/")
-                # Check if member path ends with candidate or matches exactly
-                if member_name == candidate_path or member_name.endswith("/" + candidate_path):
-                    if total_extracted_size + member.size > _MAX_TAR_TOTAL_SIZE:
-                        echo_warning("  Tar extraction total size limit reached")
-                        return extracted_count
+            if member is None:
+                continue
 
-                    # Extract the file
-                    if not figures_dir.exists():
-                        try:
-                            figures_dir.mkdir(parents=True)
-                        except (PermissionError, OSError) as e:
-                            echo_warning(f"  Cannot create figures directory: {e}")
-                            return extracted_count
+            if total_extracted_size + member.size > _MAX_TAR_TOTAL_SIZE:
+                echo_warning("  Tar extraction total size limit reached")
+                return extracted_count
 
-                    try:
-                        file_obj = tar.extractfile(member)
-                        if file_obj:
-                            # Use basename to avoid directory structure
-                            dest_name = Path(member_name).name
-                            dest_path = figures_dir / dest_name
+            # Extract the file
+            if not figures_dir.exists():
+                try:
+                    figures_dir.mkdir(parents=True)
+                except (PermissionError, OSError) as e:
+                    echo_warning(f"  Cannot create figures directory: {e}")
+                    return extracted_count
 
-                            # Write file
-                            data = file_obj.read()
-                            total_extracted_size += len(data)
-                            dest_path.write_bytes(data)
-                            extracted_count += 1
-                            found = True
-                            break
-                    except (tarfile.TarError, KeyError) as e:
-                        echo_warning(f"  Corrupted tarball member '{member_name}': {e}")
-                        continue
-                    except (OSError, MemoryError) as e:
-                        echo_warning(f"  Failed to extract figure '{Path(member_name).name}': {e}")
-                        continue
+            try:
+                file_obj = tar.extractfile(member)
+                if file_obj:
+                    member_name = member.name.replace("\\", "/")
+                    dest_name = Path(member_name).name
 
-            if found:
-                break
+                    # Handle basename collisions (e.g. figs/plot.png vs results/plot.png)
+                    if dest_name in used_dest_names:
+                        parent = Path(member_name).parent.name
+                        if parent and parent != ".":
+                            dest_name = f"{parent}_{dest_name}"
+                        else:
+                            # Numeric suffix fallback
+                            stem = Path(dest_name).stem
+                            suffix = Path(dest_name).suffix
+                            counter = 2
+                            while f"{stem}_{counter}{suffix}" in used_dest_names:
+                                counter += 1
+                            dest_name = f"{stem}_{counter}{suffix}"
+
+                    dest_path = figures_dir / dest_name
+
+                    # Write file
+                    data = file_obj.read()
+                    total_extracted_size += len(data)
+                    dest_path.write_bytes(data)
+                    extracted_count += 1
+                    used_dest_names.add(dest_name)
+                    break
+            except (tarfile.TarError, KeyError) as e:
+                echo_warning(f"  Corrupted tarball member '{member.name}': {e}")
+                continue
+            except (OSError, MemoryError) as e:
+                echo_warning(f"  Failed to extract figure '{Path(member.name).name}': {e}")
+                continue
 
     if extracted_count > 0:
         echo_progress(f"  Extracted {extracted_count} figure(s) from LaTeX source")
