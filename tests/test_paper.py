@@ -1079,6 +1079,30 @@ class TestSetupDebugLogging:
         assert after_first == max(initial_count, 1)
         assert after_second == after_first
 
+    def test_replaces_stale_handler(self):
+        """A second call should replace the handler, allowing recovery from closed streams."""
+        import io
+
+        from paperpipe.output import _debug_logger, _setup_debug_logging
+
+        # Remove existing non-NullHandlers for a clean test
+        for h in _debug_logger.handlers[:]:
+            if not isinstance(h, logging.NullHandler):
+                _debug_logger.removeHandler(h)
+
+        # Simulate a stale handler pointing to a closed stream
+        closed_stream = io.StringIO()
+        closed_stream.close()
+        stale_handler = logging.StreamHandler(closed_stream)
+        _debug_logger.addHandler(stale_handler)
+
+        # _setup_debug_logging should replace the stale handler with a fresh one
+        _setup_debug_logging()
+
+        non_null = [h for h in _debug_logger.handlers if not isinstance(h, logging.NullHandler)]
+        assert len(non_null) == 1
+        assert non_null[0] is not stale_handler, "Stale handler was not replaced"
+
 
 class TestDownloadSourceSizeLimits:
     """Tests for download size limits (Fix #5b: bounded download size)."""

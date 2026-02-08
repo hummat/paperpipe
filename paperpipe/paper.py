@@ -330,6 +330,7 @@ def _extract_figures_from_latex(tex_content: str, tar: tarfile.TarFile, paper_di
     extracted_count = 0
     total_extracted_size = 0
     used_dest_names: set[str] = set()
+    extracted_members: set[str] = set()  # track source members already extracted
 
     for ref in matches:
         # LaTeX allows omitting file extension, so we need to try with and without
@@ -362,6 +363,11 @@ def _extract_figures_from_latex(tex_content: str, tar: tarfile.TarFile, paper_di
             if member is None:
                 continue
 
+            # Skip if this tar member was already extracted (duplicate \includegraphics ref)
+            member_key = member.name.replace("\\", "/")
+            if member_key in extracted_members:
+                break
+
             if total_extracted_size + member.size > _MAX_TAR_TOTAL_SIZE:
                 echo_warning("  Tar extraction total size limit reached")
                 return extracted_count
@@ -377,16 +383,15 @@ def _extract_figures_from_latex(tex_content: str, tar: tarfile.TarFile, paper_di
             try:
                 file_obj = tar.extractfile(member)
                 if file_obj:
-                    member_name = member.name.replace("\\", "/")
-                    dest_name = Path(member_name).name
+                    dest_name = Path(member_key).name
 
                     # Handle basename collisions (e.g. figs/plot.png vs results/plot.png)
                     if dest_name in used_dest_names:
-                        parent = Path(member_name).parent.name
+                        parent = Path(member_key).parent.name
                         if parent and parent != ".":
                             dest_name = f"{parent}_{dest_name}"
-                        else:
-                            # Numeric suffix fallback
+                        # Re-check after prefixing; fall back to numeric suffix
+                        if dest_name in used_dest_names:
                             stem = Path(dest_name).stem
                             suffix = Path(dest_name).suffix
                             counter = 2
@@ -402,6 +407,7 @@ def _extract_figures_from_latex(tex_content: str, tar: tarfile.TarFile, paper_di
                     dest_path.write_bytes(data)
                     extracted_count += 1
                     used_dest_names.add(dest_name)
+                    extracted_members.add(member_key)
                     break
             except (tarfile.TarError, KeyError) as e:
                 echo_warning(f"  Corrupted tarball member '{member.name}': {e}")
