@@ -14,7 +14,7 @@ from conftest import MockPopen
 import paperpipe
 import paperpipe.config as config
 import paperpipe.paperqa as paperqa
-from paperpipe.leann import FileEntry, LeannManifest
+from paperpipe.leann import FileEntry, LeannManifest, _redact_cmd
 
 # Import the CLI module explicitly (avoid resolving to the package's cli function).
 cli_mod = import_module("paperpipe.cli")
@@ -722,3 +722,37 @@ class TestLeannIncrementalUpdate:
         assert added == 0
         assert unchanged == 1
         assert errors == 0
+
+
+class TestRedactCmd:
+    """Tests for _redact_cmd (Fix #4: API key leakage in logs)."""
+
+    def test_redacts_api_key(self):
+        cmd = ["leann", "ask", "papers", "query", "--api-key", "sk-secret-123"]
+        result = _redact_cmd(cmd)
+        assert "sk-secret-123" not in result
+        assert "***" in result
+
+    def test_redacts_embedding_api_key(self):
+        cmd = ["leann", "build", "papers", "--embedding-api-key", "sk-embed-456"]
+        result = _redact_cmd(cmd)
+        assert "sk-embed-456" not in result
+        assert "***" in result
+
+    def test_no_false_redaction(self):
+        cmd = ["leann", "ask", "papers", "query", "--model", "gpt-4o"]
+        result = _redact_cmd(cmd)
+        assert "gpt-4o" in result
+        assert "***" not in result
+
+    def test_key_at_end(self):
+        """Flag at end of list with no value should not crash."""
+        cmd = ["leann", "ask", "--api-key"]
+        result = _redact_cmd(cmd)
+        assert "--api-key" in result
+
+    def test_redacts_equals_form(self):
+        cmd = ["leann", "ask", "--api-key=sk-secret"]
+        result = _redact_cmd(cmd)
+        assert "sk-secret" not in result
+        assert "--api-key=***" in result

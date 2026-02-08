@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import os
 import pickle
 import re
@@ -21,6 +22,79 @@ def _pillow_available() -> bool:
     import importlib.util
 
     return importlib.util.find_spec("PIL") is not None
+
+
+_SAFE_PICKLE_BUILTINS = frozenset({"dict", "str", "list", "tuple", "set", "frozenset", "int", "float", "bool", "bytes"})
+
+
+class _RestrictedUnpickler(pickle.Unpickler):
+    """Unpickler that only allows basic Python builtins (no arbitrary code execution)."""
+
+    def find_class(self, module: str, name: str) -> Any:
+        if module == "builtins" and name in _SAFE_PICKLE_BUILTINS:
+            return (
+                getattr(__builtins__ if isinstance(__builtins__, dict) else __builtins__, name, None)
+                or {
+                    "dict": dict,
+                    "str": str,
+                    "list": list,
+                    "tuple": tuple,
+                    "set": set,
+                    "frozenset": frozenset,
+                    "int": int,
+                    "float": float,
+                    "bool": bool,
+                    "bytes": bytes,
+                }[name]
+            )
+        raise pickle.UnpicklingError(f"Restricted: {module}.{name}")
+
+
+def _safe_unpickle(data: bytes) -> Any:
+    """Deserialize pickle data using a restricted unpickler (blocks arbitrary code execution)."""
+    return _RestrictedUnpickler(io.BytesIO(data)).load()
+
+
+_MAX_ZLIB_DECOMPRESS_SIZE = 100 * 1024 * 1024  # 100 MB
+
+
+def _safe_zlib_decompress(data: bytes, *, max_size: int = _MAX_ZLIB_DECOMPRESS_SIZE) -> bytes:
+    """Decompress zlib data with a size limit to prevent decompression bombs."""
+    dobj = zlib.decompressobj()
+    chunks: list[bytes] = []
+    total = 0
+    # Feed data in 64 KB blocks to limit peak memory before aborting
+    block_size = 65536
+    for i in range(0, len(data), block_size):
+        chunk = dobj.decompress(data[i : i + block_size])
+        total += len(chunk)
+        if total > max_size:
+            raise ValueError(f"Decompressed data exceeds {max_size} byte limit")
+        chunks.append(chunk)
+    # Flush remaining data
+    remaining = dobj.flush()
+    total += len(remaining)
+    if total > max_size:
+        raise ValueError(f"Decompressed data exceeds {max_size} byte limit")
+    chunks.append(remaining)
+    return b"".join(chunks)
+
+
+def _validate_index_name(index_name: str) -> str:
+    """Validate and return a safe index name (rejects path traversal attempts)."""
+    name = (index_name or "").strip()
+    if not name:
+        raise ValueError("index_name must be non-empty")
+    if "\x00" in name:
+        raise ValueError("index_name must not contain null bytes")
+    if "/" in name or "\\" in name:
+        raise ValueError("index_name must not contain path separators")
+    if ".." in name:
+        raise ValueError("index_name must not contain '..' components")
+    # Also reject pure dots
+    if all(c == "." for c in name):
+        raise ValueError("index_name must not be only dots")
+    return name
 
 
 def _refresh_pqa_pdf_staging_dir(*, staging_dir: Path, exclude_names: Optional[set[str]] = None) -> int:
@@ -138,17 +212,29 @@ def _paperqa_find_crashing_file(*, paper_directory: Path, crashing_doc: str) -> 
     if not doc:
         return None
 
+    resolved_parent = paper_directory.resolve()
+
+    def _within_parent(p: Path) -> Optional[Path]:
+        """Return resolved path if it's within paper_directory, else None."""
+        try:
+            rp = p.resolve()
+            if rp.is_relative_to(resolved_parent) and rp.exists():
+                return rp
+        except (OSError, ValueError):
+            pass
+        return None
+
     doc_path = Path(doc)
     if doc_path.is_absolute():
-        return doc_path if doc_path.exists() else None
+        return _within_parent(doc_path)
 
     if ".." in doc_path.parts:
         doc_path = Path(doc_path.name)
 
     # Try the path as-is (relative to the paper directory).
-    candidate = paper_directory / doc_path
-    if candidate.exists():
-        return candidate
+    result = _within_parent(paper_directory / doc_path)
+    if result is not None:
+        return result
 
     # Try matching by file name/stem (common when pqa prints just "foo.pdf" or "foo").
     name = doc_path.name
@@ -159,7 +245,9 @@ def _paperqa_find_crashing_file(*, paper_directory: Path, crashing_doc: str) -> 
     try:
         for f in paper_directory.iterdir():
             if f.name == name or f.stem == expected_stem:
-                return f
+                checked = _within_parent(f)
+                if checked is not None:
+                    return checked
     except OSError:
         pass
 
@@ -167,7 +255,9 @@ def _paperqa_find_crashing_file(*, paper_directory: Path, crashing_doc: str) -> 
     try:
         for f in paper_directory.rglob(name):
             if f.name == name:
-                return f
+                checked = _within_parent(f)
+                if checked is not None:
+                    return checked
     except OSError:
         pass
 
@@ -175,13 +265,13 @@ def _paperqa_find_crashing_file(*, paper_directory: Path, crashing_doc: str) -> 
 
 
 def _paperqa_index_files_path(*, index_directory: Path, index_name: str) -> Path:
-    return Path(index_directory) / index_name / "files.zip"
+    return Path(index_directory) / _validate_index_name(index_name) / "files.zip"
 
 
 def _paperqa_load_index_files_map(path: Path) -> Optional[dict[str, str]]:
     try:
-        raw = zlib.decompress(path.read_bytes())
-        obj = pickle.loads(raw)
+        raw = _safe_zlib_decompress(path.read_bytes())
+        obj = _safe_unpickle(raw)
     except Exception:
         return None
     if not isinstance(obj, dict):

@@ -41,6 +41,10 @@ from .core import (
 from .output import debug, echo_error, echo_progress, echo_success, echo_warning
 from .search import _maybe_update_search_index
 
+_MAX_DOWNLOAD_SIZE = 500 * 1024 * 1024  # 500 MB
+_MAX_TAR_MEMBER_SIZE = 100 * 1024 * 1024  # 100 MB
+_MAX_TAR_TOTAL_SIZE = 500 * 1024 * 1024  # 500 MB
+
 
 def fetch_arxiv_metadata(arxiv_id: str) -> dict:
     """Fetch paper metadata from arXiv API."""
@@ -136,6 +140,15 @@ def download_source(arxiv_id: str, paper_dir: Path, *, extract_figures: bool = F
         echo_warning(f"Could not download source for {arxiv_id}: {e}")
         return None
 
+    # Check download size
+    content_length = response.headers.get("Content-Length")
+    if content_length and int(content_length) > _MAX_DOWNLOAD_SIZE:
+        echo_warning(f"Source archive for {arxiv_id} too large ({int(content_length)} bytes). Skipping.")
+        return None
+    if len(response.content) > _MAX_DOWNLOAD_SIZE:
+        echo_warning(f"Source archive for {arxiv_id} too large ({len(response.content)} bytes). Skipping.")
+        return None
+
     # Save and extract tarball
     with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as f:
         f.write(response.content)
@@ -145,14 +158,21 @@ def download_source(arxiv_id: str, paper_dir: Path, *, extract_figures: bool = F
     try:
         # Try to open as tar (most common)
         with tarfile.open(tar_path) as tar:
-            tex_members = [m for m in tar.getmembers() if m.isfile() and m.name.endswith(".tex")]
+            tex_members = [
+                m for m in tar.getmembers() if m.isfile() and m.name.endswith(".tex") and m.size <= _MAX_TAR_MEMBER_SIZE
+            ]
             if tex_members:
                 tex_by_name: dict[str, str] = {}
+                total_extracted = 0
                 for member in tex_members:
+                    if total_extracted + member.size > _MAX_TAR_TOTAL_SIZE:
+                        break
                     extracted = tar.extractfile(member)
                     if not extracted:
                         continue
-                    tex_by_name[member.name] = extracted.read().decode("utf-8", errors="replace")
+                    content = extracted.read()
+                    total_extracted += len(content)
+                    tex_by_name[member.name] = content.decode("utf-8", errors="replace")
 
                 preferred_names = ("main.tex", "paper.tex")
                 preferred = [n for n in tex_by_name if Path(n).name in preferred_names]
@@ -288,6 +308,7 @@ def _extract_figures_from_latex(tex_content: str, tar: tarfile.TarFile, paper_di
 
     figures_dir = paper_dir / "figures"
     extracted_count = 0
+    total_extracted_size = 0
 
     for ref in matches:
         # LaTeX allows omitting file extension, so we need to try with and without
@@ -311,10 +332,16 @@ def _extract_figures_from_latex(tex_content: str, tar: tarfile.TarFile, paper_di
             for member in tar.getmembers():
                 if not member.isfile():
                     continue
+                if member.size > _MAX_TAR_MEMBER_SIZE:
+                    continue
 
                 member_name = member.name.replace("\\", "/")
                 # Check if member path ends with candidate or matches exactly
                 if member_name == candidate_path or member_name.endswith("/" + candidate_path):
+                    if total_extracted_size + member.size > _MAX_TAR_TOTAL_SIZE:
+                        echo_warning("  Tar extraction total size limit reached")
+                        return extracted_count
+
                     # Extract the file
                     if not figures_dir.exists():
                         try:
@@ -331,7 +358,9 @@ def _extract_figures_from_latex(tex_content: str, tar: tarfile.TarFile, paper_di
                             dest_path = figures_dir / dest_name
 
                             # Write file
-                            dest_path.write_bytes(file_obj.read())
+                            data = file_obj.read()
+                            total_extracted_size += len(data)
+                            dest_path.write_bytes(data)
                             extracted_count += 1
                             found = True
                             break

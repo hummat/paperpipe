@@ -25,6 +25,7 @@ from .config import (
     default_leann_llm_provider,
 )
 from .output import debug, echo_error, echo_progress, echo_warning
+from .paperqa import _validate_index_name
 
 # -----------------------------------------------------------------------------
 # Manifest types and I/O for incremental indexing
@@ -69,7 +70,7 @@ class IndexDelta:
 
 def _leann_manifest_path(index_name: str) -> Path:
     """Path to paperpipe's incremental indexing manifest."""
-    return config.PAPER_DB / ".leann" / "indexes" / index_name / "paperpipe_manifest.json"
+    return config.PAPER_DB / ".leann" / "indexes" / _validate_index_name(index_name) / "paperpipe_manifest.json"
 
 
 def _load_leann_manifest(index_name: str) -> Optional[LeannManifest]:
@@ -250,7 +251,7 @@ def _leann_incremental_update(
     except ImportError as e:
         raise IncrementalUpdateError(f"LEANN Python API not available: {e}") from e
 
-    index_dir = config.PAPER_DB / ".leann" / "indexes" / index_name
+    index_dir = config.PAPER_DB / ".leann" / "indexes" / _validate_index_name(index_name)
     index_path = index_dir / "documents.leann"
 
     index_file = index_dir / f"{index_path.stem}.index"
@@ -436,6 +437,26 @@ def _leann_incremental_update(
     return added, delta.unchanged_count, errors
 
 
+_REDACT_FLAGS = {"--api-key", "--embedding-api-key"}
+
+
+def _redact_cmd(cmd: list[str]) -> str:
+    """Return a shell-safe string representation of cmd with API keys redacted."""
+    redacted = list(cmd)
+    i = 0
+    while i < len(redacted):
+        if redacted[i] in _REDACT_FLAGS and i + 1 < len(redacted):
+            redacted[i + 1] = "***"
+            i += 2
+        elif any(redacted[i].startswith(f"{flag}=") for flag in _REDACT_FLAGS):
+            flag = redacted[i].split("=", 1)[0]
+            redacted[i] = f"{flag}=***"
+            i += 1
+        else:
+            i += 1
+    return shlex.join(redacted)
+
+
 def _extract_arg_value(args: list[str], flag: str) -> Optional[str]:
     """Extract the value for a CLI flag from args list."""
     for i, arg in enumerate(args):
@@ -452,7 +473,7 @@ def _extract_arg_value(args: list[str], flag: str) -> Optional[str]:
 
 
 def _leann_index_meta_path(index_name: str) -> Path:
-    return config.PAPER_DB / ".leann" / "indexes" / index_name / "documents.leann.meta.json"
+    return config.PAPER_DB / ".leann" / "indexes" / _validate_index_name(index_name) / "documents.leann.meta.json"
 
 
 def _load_leann_backend_name(index_name: str) -> Optional[str]:
@@ -598,11 +619,11 @@ def _leann_build_index(
     embedding_mode_for_meta = embedding_mode_override or default_leann_embedding_mode()
 
     cmd.extend(extra_args)
-    debug("Running LEANN: %s", shlex.join(cmd))
+    debug("Running LEANN: %s", _redact_cmd(cmd))
     proc = subprocess.run(cmd, cwd=config.PAPER_DB)
     if proc.returncode != 0:
         echo_error(f"LEANN command failed (exit code {proc.returncode})")
-        echo_error(f"Command: {shlex.join(cmd)}")
+        echo_error(f"Command: {_redact_cmd(cmd)}")
         raise SystemExit(proc.returncode)
 
     # Write metadata on success
@@ -704,7 +725,7 @@ def _ask_leann(
         cmd.extend(["--thinking-budget", thinking_budget])
 
     cmd.extend(extra_args)
-    debug("Running LEANN: %s", shlex.join(cmd))
+    debug("Running LEANN: %s", _redact_cmd(cmd))
 
     if interactive:
         proc = subprocess.run(cmd, cwd=config.PAPER_DB)

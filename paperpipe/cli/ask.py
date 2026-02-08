@@ -729,7 +729,9 @@ def ask(
                         # Only remove files from paperpipe's managed staging directory.
                         # Never delete from a user-provided paper directory.
                         managed_staging_dir = (config.PAPER_DB / ".pqa_papers").expanduser()
-                        if paper_dir.resolve() == managed_staging_dir.resolve():
+                        if paper_dir.resolve() == managed_staging_dir.resolve() and f.resolve().is_relative_to(
+                            managed_staging_dir.resolve()
+                        ):
                             try:
                                 f.unlink()
                                 echo_warning(f"Removed '{crashing_doc}' from PaperQA2 staging to prevent re-indexing.")
