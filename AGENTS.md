@@ -7,13 +7,11 @@ For agents USING paperpipe in other repos, see `AGENT_INTEGRATION.md` (or run `p
 ## Conventions
 
 Read relevant `docs/agent/` files before proceeding:
-- `workflow.md` — **read before starting any feature** (issues with labels, branching, PRs)
+- `workflow.md` — **read before creating issues, PRs, or branches** (templates, labels, naming)
 - `code_conventions.md` — **read before writing code** (style, typing, minimal diffs)
 - `architecture.md` — read before adding modules/restructuring
 - `testing_patterns.md` — read before writing tests
 - `releases.md` — read before releasing
-
-**REQUIRED: Read `docs/agent/workflow.md` before implementing, updating, fixing, or changing anything.**
 
 ---
 

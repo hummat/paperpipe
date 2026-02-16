@@ -1,6 +1,6 @@
 # Feature Workflow
 
-**Read this file before starting any feature or non-trivial change.**
+**Read this file before creating issues, PRs, or branches.**
 
 ## New Features
 
@@ -23,82 +23,24 @@ Skip issue for typos, small fixes, docs-only changes. Branch + PR is still recom
 
 ## Templates
 
-- **Issues**: Use `.github/ISSUE_TEMPLATE/` templates (bug_report.yml, feature_request.yml)
-- **PRs**: Use `.github/PULL_REQUEST_TEMPLATE.md` — fill out Summary, Changes, Type, Testing, Checklist
-- **Contributing**: See `.github/CONTRIBUTING.md` for dev setup and code style
+- **Issues**: `.github/ISSUE_TEMPLATE/` (bug_report.yml, feature_request.yml)
+- **PRs**: `.github/PULL_REQUEST_TEMPLATE.md`
+- **Contributing**: `.github/CONTRIBUTING.md`
 
 ## Creating Issues via CLI/API (for agents)
 
 GitHub issue templates are a UI feature — neither `gh` CLI nor GitHub API/MCP supports creating issues from templates directly. When creating issues programmatically:
 
 1. **Read the template** in `.github/ISSUE_TEMPLATE/` to see required fields
-2. **Structure the body** to match the template sections (use markdown headers)
-3. **Add labels** that the template would auto-apply (e.g., `bug` for bug_report.yml)
-
-Example for bug_report.yml:
-```markdown
-## Description
-[Clear description of the bug]
-
-## Steps to Reproduce
-1. ...
-2. ...
-
-## Command Used
-\`\`\`bash
-papi ...
-\`\`\`
-
-## Installation Method
-[uv tool install / pip install / From source]
-
-## Feature Area
-[Paper fetching / RAG / Agent integration / etc.]
-
-## Python Version
-[e.g., 3.12]
-
-## Operating System
-[e.g., Linux, macOS, Windows]
-
-## Error Logs
-\`\`\`
-[paste logs here]
-\`\`\`
-
-## Checklist
-- [x] I have searched existing issues
-- [x] I have tried with the latest version
-```
+2. **Structure the body** to match the template sections (use markdown headers matching each template field)
+3. **Add labels** that the template would auto-apply (e.g., `bug` for bug_report.yml, `enhancement` for feature_request.yml)
 
 ## Creating PRs via CLI/API (for agents)
 
-Unlike issues, `gh pr create` supports `--template` to use `.github/PULL_REQUEST_TEMPLATE.md`. However, if you pass `--body`, it overrides the template. The GitHub API/MCP also doesn't support templates.
+`gh pr create --body` overrides the template. When creating PRs programmatically:
 
-When creating PRs programmatically, structure the body to match `.github/PULL_REQUEST_TEMPLATE.md`:
-
-```markdown
-## Summary
-[Brief description]
-
-Closes: #[issue number]
-
-## Changes
-- [Change 1]
-- [Change 2]
-
-## Type of Change
-- [x] Bug fix / New feature / etc.
-
-## Testing
-- [x] Ran `make check` (or equivalent)
-- [x] Added/updated tests
-- [x] Tested CLI manually
-
-## Checklist
-- [x] Code follows existing style
-- [x] Documentation updated if needed
-```
+1. **Read** `.github/PULL_REQUEST_TEMPLATE.md` to see required sections
+2. **Structure the body** to match the template (use the same markdown headers)
 
 ## Title Conventions
 
