@@ -6,6 +6,39 @@ on:
   pull_request:
 
 jobs:
+  commit-lint:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate conventional commits
+        run: |
+          pattern='^(feat|fix|docs|refactor|perf|test|chore|ci|revert|style|build)(\([a-z0-9._-]+\))?!?: .+'
+          base=${{ github.event.pull_request.base.sha }}
+          head=${{ github.event.pull_request.head.sha }}
+          bad=0
+          while IFS= read -r sha; do
+            msg=$(git log -1 --format='%s' "$sha")
+            # Skip merge commits and git-generated reverts.
+            if [[ "$msg" =~ ^Merge\  ]] || [[ "$msg" =~ ^Revert\ \" ]]; then
+              continue
+            fi
+            if ! [[ "$msg" =~ $pattern ]]; then
+              echo "::error::Bad commit message: $msg ($sha)"
+              bad=1
+            fi
+          done < <(git rev-list "$base".."$head")
+          if [[ "$bad" -eq 1 ]]; then
+            echo ""
+            echo "Expected format: type(scope): description"
+            echo "Allowed types: feat fix docs refactor perf test chore ci revert style build"
+            exit 1
+          fi
+
   test:
     runs-on: ubuntu-latest
     steps:

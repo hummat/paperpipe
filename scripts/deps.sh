@@ -3,7 +3,9 @@ set -euo pipefail
 
 if command -v uv >/dev/null 2>&1; then
   uv sync --group dev
-  exit 0
+else
+  python -m pip install -e ".[dev]"
 fi
 
-python -m pip install -e ".[dev]"
+# Use tracked hooks directory so hooks are version-controlled.
+git config core.hooksPath scripts/hooks

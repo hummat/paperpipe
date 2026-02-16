@@ -118,6 +118,13 @@ type(scope): short description
 - `docs(agent): add MCP server setup guide`
 - `refactor: split cli.py into submodules`
 
+## Commit Validation
+
+Commit messages must follow conventional commits (see `docs/agent/releases.md`).
+
+- **Locally**: A `commit-msg` hook rejects non-conforming messages. Auto-installed by `make deps`.
+- **CI**: The `commit-lint` job validates all PR commits. If it fails, fix the offending commit with `git rebase -i` and amend the message.
+
 ## Labels
 
 Defined in `.github/labels.yml`, synced automatically via `sync-labels.yml` workflow.

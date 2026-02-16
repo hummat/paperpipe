@@ -69,8 +69,16 @@ refactor(index): Simplify embedding pipeline
 feat!: Remove legacy PDF parser
 ```
 
+## Commit Validation
+
+Conventional commit format is enforced at two levels:
+
+- **Local hook** (`scripts/hooks/commit-msg`) — rejects non-conforming messages instantly. Auto-installed by `make deps` (via `scripts/deps.sh`).
+- **CI check** (`commit-lint` job in `.github/workflows/ci.yml`) — validates all PR commits. Safety net for contributors who bypass the local hook.
+
 ## Key Files
 
 - `cliff.toml` — git-cliff changelog config
 - `scripts/release.sh` — main automation
+- `scripts/hooks/commit-msg` — local commit validation
 - `.github/workflows/publish.yml` — PyPI workflow
