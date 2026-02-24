@@ -10,7 +10,7 @@ Usage:
 
 Notes:
   - VERSION is optional; if provided, it must match pyproject.toml.
-  - Requires: git, python.
+  - Requires: git, uv.
   - Runs: make check, make build, creates/pushes tag. CI handles GitHub release.
 EOF
   exit 0
@@ -31,7 +31,7 @@ require_clean_git() {
 }
 
 project_version() {
-  python - <<'PY'
+  uv run python - <<'PY'
 from __future__ import annotations
 
 import pathlib
@@ -49,7 +49,7 @@ PY
 
 
 require_cmd git
-require_cmd python
+require_cmd uv
 
 require_clean_git
 
