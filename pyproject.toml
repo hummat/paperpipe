@@ -7,7 +7,7 @@ name = "paperpipe"
 version = "1.8.2"
 description = "Unified paper database for coding agents + PaperQA2"
 readme = "README.md"
-license = { file = "LICENSE" }
+license = "MIT"
 requires-python = ">=3.10"
 authors = [{ name = "Matthias Humt" }]
 keywords = ["arxiv", "papers", "research", "llm", "coding-agent", "paperqa"]
@@ -15,7 +15,6 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
