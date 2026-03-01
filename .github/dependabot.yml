@@ -9,6 +9,9 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
     groups:
       all-actions:
         patterns:
