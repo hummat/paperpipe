@@ -62,6 +62,15 @@ class MockPopenProcess:
         self._stdout_lines = stdout.splitlines(keepends=True) if stdout else []
         self.stdout = iter(self._stdout_lines)
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+
+    def kill(self):
+        pass
+
     def wait(self) -> int:
         return self._returncode
 

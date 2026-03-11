@@ -211,12 +211,12 @@ from ..output import debug, echo_error, echo_progress, echo_warning
     show_default=False,
     help="LEANN thinking budget for supported models.",
 )
-@click.option("--leann-interactive", is_flag=True, help="Run `leann ask --interactive` (terminal UI).")
 @click.option(
     "--leann-no-auto-index",
     is_flag=True,
     help="Disable auto-build of the LEANN index when missing.",
 )
+@click.option("--leann-interactive", is_flag=True, help="Run `leann ask --interactive` (terminal UI).")
 @click.pass_context
 def ask(
     ctx,
@@ -250,8 +250,8 @@ def ask(
     leann_no_recompute: bool,
     leann_pruning_strategy: Optional[str],
     leann_thinking_budget: Optional[str],
-    leann_interactive: bool,
     leann_no_auto_index: bool,
+    leann_interactive: bool,
 ):
     """
     Query papers using PaperQA2 (default) or LEANN.
@@ -262,6 +262,16 @@ def ask(
     backend_norm = (backend or "pqa").strip().lower()
     output_format_norm = (output_format or "text").strip().lower()
     if backend_norm == "leann":
+        unsupported_leann_args = {
+            "--leann-filter": "--leann-filter is unavailable because the installed LEANN CLI does not support --filter.",
+            "--leann-grep": "--leann-grep is unavailable because the installed LEANN CLI does not support --use-grep.",
+            "--filter": "Installed LEANN CLI does not support --filter; do not pass it through.",
+            "--use-grep": "Installed LEANN CLI does not support --use-grep; do not pass it through.",
+        }
+        for arg in ctx.args:
+            option = arg.split("=", 1)[0]
+            if option in unsupported_leann_args:
+                raise click.UsageError(unsupported_leann_args[option])
         leann_index = _effective_leann_index_name(ctx=ctx, param_name="leann_index", raw_index_name=leann_index)
         if output_format_norm != "text":
             raise click.UsageError("--format evidence-blocks is only supported with --backend pqa.")
