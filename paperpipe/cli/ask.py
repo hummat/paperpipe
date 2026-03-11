@@ -211,6 +211,17 @@ from ..output import debug, echo_error, echo_progress, echo_warning
     show_default=False,
     help="LEANN thinking budget for supported models.",
 )
+@click.option(
+    "--leann-filter",
+    default=None,
+    show_default=False,
+    help="Metadata filter for LEANN retrieval (e.g. 'paper_name == \"lora\"').",
+)
+@click.option(
+    "--leann-grep",
+    is_flag=True,
+    help="Use LEANN's grep search for hybrid vector + exact-match retrieval.",
+)
 @click.option("--leann-interactive", is_flag=True, help="Run `leann ask --interactive` (terminal UI).")
 @click.option(
     "--leann-no-auto-index",
@@ -250,6 +261,8 @@ def ask(
     leann_no_recompute: bool,
     leann_pruning_strategy: Optional[str],
     leann_thinking_budget: Optional[str],
+    leann_filter: Optional[str],
+    leann_grep: bool,
     leann_interactive: bool,
     leann_no_auto_index: bool,
 ):
@@ -292,6 +305,8 @@ def ask(
             recompute_embeddings=not leann_no_recompute,
             pruning_strategy=leann_pruning_strategy,
             thinking_budget=leann_thinking_budget,
+            leann_filter=leann_filter,
+            leann_grep=leann_grep,
             interactive=leann_interactive,
             extra_args=list(ctx.args),
         )

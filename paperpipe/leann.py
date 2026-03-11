@@ -672,6 +672,8 @@ def _ask_leann(
     recompute_embeddings: bool,
     pruning_strategy: Optional[str],
     thinking_budget: Optional[str],
+    leann_filter: Optional[str],
+    leann_grep: bool,
     interactive: bool,
     extra_args: list[str],
 ) -> None:
@@ -723,6 +725,10 @@ def _ask_leann(
         cmd.extend(["--pruning-strategy", pruning_strategy])
     if thinking_budget:
         cmd.extend(["--thinking-budget", thinking_budget])
+    if leann_filter:
+        cmd.extend(["--filter", leann_filter])
+    if leann_grep:
+        cmd.append("--use-grep")
 
     cmd.extend(extra_args)
     debug("Running LEANN: %s", _redact_cmd(cmd))
