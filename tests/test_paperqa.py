@@ -219,3 +219,95 @@ class TestSafeZlibDecompress:
         compressed = zlib.compress(b"")
         result = paperqa._safe_zlib_decompress(compressed)
         assert result == b""
+
+
+class TestPqaFailureAnalysis:
+    def test_extracts_last_crashing_doc(self) -> None:
+        captured_output = [
+            "New file to index: first.pdf...\n",
+            "New file to index: second.pdf...\n",
+        ]
+        assert paperqa._pqa_extract_crashing_doc(captured_output) == "second.pdf"
+
+    def test_classifies_missing_dependency(self) -> None:
+        analysis = paperqa._pqa_analyze_failure(
+            captured_output=[
+                "Traceback (most recent call last):\n",
+                "ModuleNotFoundError: No module named 'pymupdf4llm'\n",
+            ],
+            has_custom_settings=False,
+        )
+        assert analysis.kind == "missing_dependency"
+        assert analysis.missing_module == "pymupdf4llm"
+
+    def test_classifies_bad_pdf(self) -> None:
+        analysis = paperqa._pqa_analyze_failure(
+            captured_output=[
+                "New file to index: broken.pdf...\n",
+                "Traceback (most recent call last):\n",
+                "pypdf.errors.PdfReadError: EOF marker not found\n",
+            ],
+            has_custom_settings=False,
+        )
+        assert analysis.kind == "bad_pdf"
+        assert analysis.crashing_doc == "broken.pdf"
+
+    def test_classifies_custom_settings_validation_error(self) -> None:
+        analysis = paperqa._pqa_analyze_failure(
+            captured_output=[
+                "Traceback (most recent call last):\n",
+                "pydantic_core._pydantic_core.ValidationError: 1 validation error for Settings\n",
+            ],
+            has_custom_settings=True,
+        )
+        assert analysis.kind == "config_error"
+
+    def test_validation_error_without_custom_settings_is_not_config_error(self) -> None:
+        analysis = paperqa._pqa_analyze_failure(
+            captured_output=[
+                "Traceback (most recent call last):\n",
+                "pydantic_core._pydantic_core.ValidationError: 1 validation error for Settings\n",
+            ],
+            has_custom_settings=False,
+        )
+        assert analysis.kind == "crash"
+
+    def test_classifies_crash_on_bare_traceback(self) -> None:
+        analysis = paperqa._pqa_analyze_failure(
+            captured_output=[
+                "New file to index: problem.pdf...\n",
+                "Traceback (most recent call last):\n",
+                "RuntimeError: something unexpected\n",
+            ],
+            has_custom_settings=False,
+        )
+        assert analysis.kind == "crash"
+        assert analysis.crashing_doc == "problem.pdf"
+
+    def test_classifies_generic_failure_without_traceback(self) -> None:
+        analysis = paperqa._pqa_analyze_failure(
+            captured_output=["pqa exited with some random output\n"],
+            has_custom_settings=False,
+        )
+        assert analysis.kind == "generic_failure"
+        assert analysis.crashing_doc is None
+
+    def test_missing_dependency_wins_over_bad_pdf_marker(self) -> None:
+        analysis = paperqa._pqa_analyze_failure(
+            captured_output=[
+                "Traceback (most recent call last):\n",
+                "pypdf.errors.PdfReadError: EOF marker not found\n",
+                "ModuleNotFoundError: No module named 'fitz'\n",
+            ],
+            has_custom_settings=True,
+        )
+        assert analysis.kind == "missing_dependency"
+        assert analysis.missing_module == "fitz"
+
+    def test_empty_captured_output_returns_generic_failure(self) -> None:
+        analysis = paperqa._pqa_analyze_failure(
+            captured_output=[],
+            has_custom_settings=False,
+        )
+        assert analysis.kind == "generic_failure"
+        assert analysis.crashing_doc is None

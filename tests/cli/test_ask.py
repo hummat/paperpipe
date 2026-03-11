@@ -623,6 +623,78 @@ class TestAskCommand:
 
 
 class TestAskErrorHandling:
+    def test_ask_bad_pdf_failure_reports_recovery_guidance_and_exit_code_one(
+        self, temp_db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: True)
+
+        (temp_db / "papers" / "bad-paper").mkdir(parents=True)
+        (temp_db / "papers" / "bad-paper" / "paper.pdf").write_bytes(b"%PDF-1.4\n% fake\n")
+
+        mock_popen = MockPopen(
+            returncode=1,
+            stdout=(
+                "New file to index: bad-paper.pdf...\n"
+                "Traceback (most recent call last):\n"
+                "pypdf.errors.PdfReadError: EOF marker not found\n"
+            ),
+        )
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+
+        runner = pytest.importorskip("click.testing").CliRunner()
+        result = runner.invoke(cli_mod.cli, ["ask", "query", "--pqa-embedding", "my-embed"])
+
+        assert result.exit_code == 1
+        assert "bad-paper" in result.output
+        assert "Replace or repair the PDF" in result.output
+        assert "--pqa-retry-failed" in result.output
+
+    def test_ask_missing_dependency_failure_exits_two_with_install_hint(
+        self, temp_db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: True)
+
+        mock_popen = MockPopen(
+            returncode=1,
+            stdout=("Traceback (most recent call last):\nModuleNotFoundError: No module named 'pymupdf4llm'\n"),
+        )
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+
+        runner = pytest.importorskip("click.testing").CliRunner()
+        result = runner.invoke(cli_mod.cli, ["ask", "query"])
+
+        assert result.exit_code == 2
+        assert "missing Python dependency" in result.output
+        assert "pymupdf4llm" in result.output
+        assert "pip install 'paperpipe[paperqa]'" in result.output
+
+    def test_ask_custom_settings_validation_failure_exits_two_with_settings_hint(
+        self, temp_db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: True)
+
+        mock_popen = MockPopen(
+            returncode=1,
+            stdout=(
+                "Traceback (most recent call last):\n"
+                "pydantic_core._pydantic_core.ValidationError: 1 validation error for Settings\n"
+                "answer_length\n"
+                "  Field required\n"
+            ),
+        )
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+
+        runner = pytest.importorskip("click.testing").CliRunner()
+        result = runner.invoke(cli_mod.cli, ["ask", "query", "-s", "broken-settings"])
+
+        assert result.exit_code == 2
+        assert "PaperQA2 settings/config look invalid" in result.output
+        assert "--settings default" in result.output
+        assert "~/.config/pqa/settings" in result.output
+
     def test_ask_excludes_failed_files_from_staging(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
         monkeypatch.setattr(paperqa, "_pillow_available", lambda: True)

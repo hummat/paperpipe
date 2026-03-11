@@ -10,7 +10,7 @@ import shutil
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, Sequence, cast
+from typing import Any, Literal, Optional, Sequence, cast
 
 import click
 
@@ -369,6 +369,17 @@ class _ModelProbeResult:
     error: Optional[str] = None
 
 
+_PqaFailureKind = Literal["missing_dependency", "config_error", "bad_pdf", "crash", "generic_failure"]
+
+
+@dataclass(frozen=True)
+class _PqaFailureAnalysis:
+    kind: _PqaFailureKind
+    crashing_doc: Optional[str] = None
+    matched_line: Optional[str] = None
+    missing_module: Optional[str] = None
+
+
 def _first_line(text: str) -> str:
     return (text or "").splitlines()[0].strip()
 
@@ -384,6 +395,72 @@ def _probe_hint(kind: str, model: str, error_line: str) -> Optional[str]:
     if kind == "completion" and model.startswith("voyage/") and "does not support parameters" in low:
         return "Voyage is typically embedding-only; probe it under --kind embedding"
     return None
+
+
+_PQA_CRASHING_DOC_RE = re.compile(r"New file to index:\s*(\S+)")
+_PQA_MISSING_MODULE_RE = re.compile(r"(?:ModuleNotFoundError|ImportError):\s+No module named ['\"]([^'\"]+)['\"]")
+_PQA_BAD_PDF_MARKERS: tuple[str, ...] = (
+    "pdfreaderror",
+    "eof marker not found",
+    "file has not been decrypted",
+    "incorrect password",
+    "malformed pdf",
+    "could not read malformed pdf file",
+    "no /root object",
+    "stream has ended unexpectedly",
+    "surrogate",
+    "text extraction",
+    "no extractable text",
+    "scan-only",
+    "encrypted pdf",
+)
+_PQA_CONFIG_MARKERS: tuple[str, ...] = (
+    "validation error for settings",
+    "validationerror",
+    "error loading settings",
+    "error parsing settings",
+)
+
+
+def _pqa_extract_crashing_doc(captured_output: Sequence[str]) -> Optional[str]:
+    crashing_doc: Optional[str] = None
+    for line in captured_output:
+        match = _PQA_CRASHING_DOC_RE.search(line)
+        if match:
+            crashing_doc = match.group(1).rstrip(".")
+    return crashing_doc
+
+
+def _pqa_analyze_failure(*, captured_output: Sequence[str], has_custom_settings: bool) -> _PqaFailureAnalysis:
+    lines = [line.rstrip("\n") for line in captured_output if line.strip()]
+    crashing_doc = _pqa_extract_crashing_doc(captured_output)
+
+    for line in reversed(lines):
+        match = _PQA_MISSING_MODULE_RE.search(line)
+        if match:
+            return _PqaFailureAnalysis(
+                kind="missing_dependency",
+                crashing_doc=crashing_doc,
+                matched_line=line,
+                missing_module=match.group(1),
+            )
+
+    if has_custom_settings:
+        for line in reversed(lines):
+            lowered = line.lower()
+            if any(marker in lowered for marker in _PQA_CONFIG_MARKERS):
+                return _PqaFailureAnalysis(kind="config_error", crashing_doc=crashing_doc, matched_line=line)
+
+    for line in reversed(lines):
+        lowered = line.lower()
+        if any(marker in lowered for marker in _PQA_BAD_PDF_MARKERS):
+            return _PqaFailureAnalysis(kind="bad_pdf", crashing_doc=crashing_doc, matched_line=line)
+
+    for line in reversed(lines):
+        if "traceback (most recent call last):" in line.lower():
+            return _PqaFailureAnalysis(kind="crash", crashing_doc=crashing_doc, matched_line=line)
+
+    return _PqaFailureAnalysis(kind="generic_failure", crashing_doc=crashing_doc)
 
 
 _PQA_NOISY_STREAM_PATTERNS: tuple[re.Pattern[str], ...] = (

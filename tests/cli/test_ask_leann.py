@@ -40,18 +40,14 @@ class TestAskLeannCommand:
 
     def test_ask_rejects_removed_leann_grep_alias(self):
         runner = pytest.importorskip("click.testing").CliRunner()
-        result = runner.invoke(
-            cli_mod.cli, ["ask", "query", "--backend", "leann", "--leann-grep"]
-        )
+        result = runner.invoke(cli_mod.cli, ["ask", "query", "--backend", "leann", "--leann-grep"])
 
         assert result.exit_code != 0
         assert "--leann-grep is unavailable" in result.output
 
     def test_ask_rejects_unsupported_use_grep_passthrough(self):
         runner = pytest.importorskip("click.testing").CliRunner()
-        result = runner.invoke(
-            cli_mod.cli, ["ask", "query", "--backend", "leann", "--", "--use-grep"]
-        )
+        result = runner.invoke(cli_mod.cli, ["ask", "query", "--backend", "leann", "--", "--use-grep"])
 
         assert result.exit_code != 0
         assert "does not support --use-grep" in result.output

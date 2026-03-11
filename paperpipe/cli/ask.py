@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -711,18 +710,27 @@ def ask(
         if not raw_output:
             paperqa._pqa_print_filtered_output_on_failure(captured_output=captured_output)
 
-        # Try to identify the crashing document from pqa's output
-        # pqa prints "New file to index: <filename>..." before processing each file
-        crashing_doc: Optional[str] = None
-        for line in captured_output:
-            if "New file to index:" in line:
-                # Extract filename: "New file to index: nmr.pdf..."
-                match = re.search(r"New file to index:\s*(\S+)", line)
-                if match:
-                    crashing_doc = match.group(1).rstrip(".")
+        failure = paperqa._pqa_analyze_failure(
+            captured_output=captured_output,
+            has_custom_settings=has_settings_flag,
+        )
+        debug("Failure analysis: kind=%s matched_line=%r", failure.kind, failure.matched_line)
 
-        # If we identified the crashing document, mark only that one as ERROR
-        if crashing_doc and index_dir_raw and index_name_raw:
+        if failure.kind == "missing_dependency":
+            echo_error("PaperQA2 is missing Python dependency support.")
+            if failure.missing_module:
+                echo_error(f"Missing module: {failure.missing_module}")
+            echo_error("Install with: pip install 'paperpipe[paperqa]'")
+            raise SystemExit(2)
+
+        if failure.kind == "config_error":
+            echo_error("PaperQA2 settings/config look invalid.")
+            echo_error("Retry with --settings default, or fix/remove the custom config under ~/.config/pqa/settings.")
+            raise SystemExit(2)
+
+        # If we identified a likely document-scoped crash, mark only that one as ERROR.
+        crashing_doc = failure.crashing_doc
+        if failure.kind in {"bad_pdf", "crash"} and crashing_doc and index_dir_raw and index_name_raw:
             paper_dir = (
                 paperqa._paperqa_effective_paper_directory(cmd, base_dir=config.PAPERS_DIR)
                 or (config.PAPER_DB / ".pqa_papers").expanduser()
@@ -745,17 +753,30 @@ def ask(
                             try:
                                 f.unlink()
                                 echo_warning(f"Removed '{crashing_doc}' from PaperQA2 staging to prevent re-indexing.")
-                            except OSError:
+                            except OSError as exc:
+                                debug("Failed to unlink %s: %s", f, exc)
                                 echo_warning(f"Marked '{crashing_doc}' as ERROR to skip on retry.")
                         else:
                             echo_warning(f"Marked '{crashing_doc}' as ERROR to skip on retry.")
 
+        failed_docs: list[str] = []
         # Show helpful error message
         if index_dir_raw and index_name_raw:
             mapping = paperqa._paperqa_load_index_files_map(
                 paperqa._paperqa_index_files_path(index_directory=Path(index_dir_raw), index_name=index_name_raw)
             )
             failed_docs = sorted([k for k, v in (mapping or {}).items() if v == "ERROR"])
+            if failure.kind == "bad_pdf":
+                paper_names = sorted({Path(f).stem for f in failed_docs}) if failed_docs else []
+                if paper_names:
+                    echo_warning(f"PaperQA2 hit a PDF parsing failure while indexing: {', '.join(paper_names[:5])}")
+                elif crashing_doc:
+                    echo_warning(f"PaperQA2 hit a PDF parsing failure while indexing: {Path(crashing_doc).stem}")
+                else:
+                    echo_warning("PaperQA2 hit a PDF parsing failure while indexing.")
+                echo_warning("Replace or repair the PDF, then retry with --pqa-retry-failed or --pqa-rebuild-index.")
+                echo_warning("If the paper is unusable, remove it with: papi remove <name>")
+                raise SystemExit(1)
             if failed_docs:
                 echo_warning(f"PaperQA2 failed. {len(failed_docs)} document(s) excluded from indexing.")
                 echo_warning("This can happen with PDFs that have text extraction issues (e.g., surrogate characters).")
@@ -767,6 +788,14 @@ def ask(
                 if len(failed_docs) <= 5:
                     echo_warning(f"Failed documents: {', '.join(Path(f).stem for f in failed_docs)}")
                 raise SystemExit(1)
+        if failure.kind == "bad_pdf":
+            if crashing_doc:
+                echo_warning(f"PaperQA2 hit a PDF parsing failure while indexing: {Path(crashing_doc).stem}")
+            else:
+                echo_warning("PaperQA2 hit a PDF parsing failure while indexing.")
+            echo_warning("Replace or repair the PDF, then retry with --pqa-retry-failed or --pqa-rebuild-index.")
+            echo_warning("If the paper is unusable, remove it with: papi remove <name>")
+            raise SystemExit(1)
         # Generic failure message if we can't determine the cause
         echo_error("PaperQA2 failed. Re-run with --pqa-raw or 'papi -v ask ...' for full output.")
         raise SystemExit(returncode)
