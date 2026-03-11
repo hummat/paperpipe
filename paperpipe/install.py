@@ -40,7 +40,7 @@ def _install_skill(*, targets: tuple[str, ...], force: bool, copy: bool = False)
 
     target_dirs = {
         "claude": Path.home() / ".claude" / "skills",
-        "codex": Path.home() / ".agents" / "skills",
+        "codex": Path.home() / ".codex" / "skills",
         "gemini": Path.home() / ".gemini" / "skills",
     }
 
@@ -444,12 +444,8 @@ def _uninstall_skill(*, targets: tuple[str, ...], force: bool) -> None:
 
     target_dirs = {
         "claude": Path.home() / ".claude" / "skills",
-        "codex": Path.home() / ".agents" / "skills",
-        "gemini": Path.home() / ".gemini" / "skills",
-    }
-    # Legacy paths to also clean up during uninstall
-    _legacy_dirs = {
         "codex": Path.home() / ".codex" / "skills",
+        "gemini": Path.home() / ".gemini" / "skills",
     }
 
     removed = 0
@@ -489,22 +485,6 @@ def _uninstall_skill(*, targets: tuple[str, ...], force: bool) -> None:
 
             echo_warning(f"{target}: {dest} exists but does not point to this install (use --force to remove)")
             skipped += 1
-
-        # Also clean up legacy install paths (e.g. ~/.codex/skills → ~/.agents/skills migration)
-        legacy_dir = _legacy_dirs.get(target)
-        if legacy_dir and legacy_dir != skills_dir:
-            for skill_name in skill_names:
-                dest = legacy_dir / skill_name
-                if not dest.exists() and not dest.is_symlink():
-                    continue
-                if dest.is_symlink() or dest.is_file():
-                    dest.unlink()
-                elif dest.is_dir():
-                    shutil.rmtree(dest)
-                else:
-                    dest.unlink(missing_ok=True)
-                target_removed += 1
-                echo(f"{target}: cleaned up legacy {dest}")
 
         if target_removed:
             echo_success(f"{target}: removed {target_removed} skill(s) from {skills_dir}")

@@ -26,19 +26,19 @@ class TestInstallSkillCommand:
         assert result.exit_code == 0, result.output
 
         # Check main papi skill
-        dest = tmp_path / ".agents" / "skills" / "papi"
+        dest = tmp_path / ".codex" / "skills" / "papi"
         assert dest.is_symlink()
         assert dest.resolve() == (REPO_ROOT / "skills" / "papi").resolve()
 
         # Check specialized skills exist
         for skill_name in ["papi-ask", "papi-verify", "papi-compare", "papi-ground", "papi-curate", "papi-init"]:
-            skill_dest = tmp_path / ".agents" / "skills" / skill_name
+            skill_dest = tmp_path / ".codex" / "skills" / skill_name
             assert skill_dest.is_symlink(), f"{skill_name} should be installed"
             assert skill_dest.resolve() == (REPO_ROOT / "skills" / skill_name).resolve()
 
     def test_install_skill_existing_dest_requires_force(self, temp_db: Path, tmp_path: Path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path))
-        dest = tmp_path / ".agents" / "skills" / "papi"
+        dest = tmp_path / ".codex" / "skills" / "papi"
         dest.mkdir(parents=True)
 
         runner = pytest.importorskip("click.testing").CliRunner()
@@ -48,7 +48,7 @@ class TestInstallSkillCommand:
 
     def test_install_skill_force_overwrites_existing_file(self, temp_db: Path, tmp_path: Path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path))
-        dest = tmp_path / ".agents" / "skills" / "papi"
+        dest = tmp_path / ".codex" / "skills" / "papi"
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text("not a symlink")
 
@@ -76,7 +76,7 @@ class TestInstallSkillCommand:
         result = runner.invoke(cli_mod.cli, ["install", "skill", "--codex", "--copy"])
         assert result.exit_code == 0, result.output
 
-        dest = tmp_path / ".agents" / "skills" / "papi"
+        dest = tmp_path / ".codex" / "skills" / "papi"
         assert dest.exists()
         assert not dest.is_symlink()
         assert (dest / "SKILL.md").exists()
@@ -294,7 +294,7 @@ class TestUninstallSkillCommand:
         result = runner.invoke(cli_mod.cli, ["install", "skill", "--codex"])
         assert result.exit_code == 0, result.output
 
-        dest = tmp_path / ".agents" / "skills" / "papi"
+        dest = tmp_path / ".codex" / "skills" / "papi"
         assert dest.is_symlink()
 
         result2 = runner.invoke(cli_mod.cli, ["uninstall", "skill", "--codex"])
@@ -303,7 +303,7 @@ class TestUninstallSkillCommand:
 
     def test_uninstall_skill_mismatch_requires_force(self, temp_db: Path, tmp_path: Path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path))
-        dest = tmp_path / ".agents" / "skills" / "papi"
+        dest = tmp_path / ".codex" / "skills" / "papi"
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text("not a symlink")
 
@@ -312,19 +312,6 @@ class TestUninstallSkillCommand:
         assert result.exit_code == 1
         assert "use --force" in result.output.lower()
 
-    def test_uninstall_skill_cleans_legacy_codex_path(self, temp_db: Path, tmp_path: Path, monkeypatch):
-        monkeypatch.setenv("HOME", str(tmp_path))
-
-        # Simulate a legacy install at ~/.codex/skills/
-        legacy_dest = tmp_path / ".codex" / "skills" / "papi"
-        legacy_dest.mkdir(parents=True)
-        (legacy_dest / "SKILL.md").write_text("legacy")
-
-        runner = pytest.importorskip("click.testing").CliRunner()
-        result = runner.invoke(cli_mod.cli, ["uninstall", "skill", "--codex"])
-        assert result.exit_code == 0, result.output
-        assert not legacy_dest.exists(), "legacy ~/.codex/skills/papi should be cleaned up"
-        assert "legacy" in result.output.lower()
 
 
 class TestUninstallPromptsCommand:
