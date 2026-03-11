@@ -51,8 +51,8 @@ This repo implements methods from scientific papers. Papers are managed via `pap
 
 | Tool | Speed | Output | Best For |
 |------|-------|--------|----------|
-| `leann_search(index, query, top_k)` | Fast | Snippets + file paths | Exploration, finding which paper to dig into |
-| `retrieve_chunks(query, index, k)` | Slower | Chunks + formal citations | Verification, citing specific claims |
+| `leann_search(index_name, query, top_k)` | Fast | Snippets + file paths | Exploration, finding which paper to dig into |
+| `retrieve_chunks(query, index_name, k)` | Slower | Chunks + formal citations | Verification, citing specific claims |
 | `papi ask "..."` | Slowest | Synthesized answer | Cross-paper questions, "what does literature say" |
 
 - Check indexes: `leann_list()` or `list_pqa_indexes()`

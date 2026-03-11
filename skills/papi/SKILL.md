@@ -1,7 +1,6 @@
 ---
 name: papi
-description: CLI reference for paperpipe (papi). Use BEFORE MCP RAG tools. For listing, searching, showing, adding papers.
-allowed-tools: Read, Bash, Glob, Grep
+description: This skill should be used when the user wants to interact with their paper database — listing papers, searching content, showing paper details, adding papers, or exporting context. Matches queries like "search papers for X", "add this arXiv paper", "show equations from paper Y", "what papers do I have". Prefer CLI over MCP RAG tools for direct lookups.
 ---
 
 # Paper Reference Assistant (CLI)
@@ -67,11 +66,11 @@ papi notes {name}                     # open/print implementation notes
 
 | Tool | Speed | Output | Best For |
 |------|-------|--------|----------|
-| `leann_search(index, query, top_k)` | Fast | Snippets + file paths | Exploration, finding which paper to dig into |
-| `retrieve_chunks(query, index, k)` | Slower | Chunks + formal citations | Verification, citing specific claims |
+| `leann_search(index_name, query, top_k)` | Fast | Snippets + file paths | Exploration, finding which paper to dig into |
+| `retrieve_chunks(query, index_name, k)` | Slower | Chunks + formal citations | Verification, citing specific claims |
 | `papi ask "..."` | Slowest | Synthesized answer | Cross-paper questions, "what does literature say" |
 
-- Check indexes: `leann_list()` or `list_pqa_indexes()`
+- Check available indexes: `leann_list()` or `list_pqa_indexes()`
 - Embedding priority: Voyage AI → Google/Gemini → OpenAI → Ollama
 
 ## Adding Papers
@@ -87,17 +86,9 @@ papi add --from-file papers.bib       # bulk import
 
 ## Per-Paper Files
 
-Located at `{db}/papers/{name}/`:
-
-| File | Best For |
-|------|----------|
-| `equations.md` | Code verification |
-| `summary.md` | Understanding approach |
-| `source.tex` | Exact definitions |
-| `notes.md` | Implementation gotchas |
-| `figures/` | Architecture diagrams, plots |
+Located at `{db}/papers/{name}/`: `equations.md`, `summary.md`, `source.tex`, `notes.md`, `paper.pdf`, `figures/`.
 
 If agent can't read `~/.paperpipe/`, export to repo: `papi export <papers...> --level equations --to ./paper-context/`
 Use `--figures` to include extracted figures in export.
 
-See `commands.md` for full reference.
+See `references/commands.md` for full command reference and per-file details.
