@@ -313,7 +313,6 @@ class TestUninstallSkillCommand:
         assert "use --force" in result.output.lower()
 
 
-
 class TestUninstallPromptsCommand:
     """Prompts are deprecated - these tests verify deprecation behavior."""
 

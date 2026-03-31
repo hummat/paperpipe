@@ -700,3 +700,150 @@ CATEGORY_TAGS = {
     "physics.comp-ph": "computational-physics",
     "math.NA": "numerical-analysis",
 }
+
+
+def get_all_tags(index: dict) -> list[str]:
+    """Return all unique tags from the index, sorted by frequency (most common first)."""
+    counts: dict[str, int] = {}
+    for info in index.values():
+        for tag in info.get("tags", []):
+            counts[tag] = counts.get(tag, 0) + 1
+    return sorted(counts, key=lambda t: -counts[t])
+
+
+def _segments_match(a: str, b: str) -> bool:
+    """Check if two tag segments are similar enough to be considered the same.
+
+    Handles exact matches and prefix-based matches for plurals/truncation
+    (e.g. "learning"/"learn", "transformers"/"transformer").
+    Requires the shorter segment to cover at least 75% of the longer one
+    to avoid false positives like "mult"/"multiscatter".
+    """
+    if a == b:
+        return True
+    if len(a) >= 4 and len(b) >= 4:
+        short, long = (a, b) if len(a) <= len(b) else (b, a)
+        if long.startswith(short) and len(short) / len(long) >= 0.5:
+            return True
+    return False
+
+
+def _tag_similarity(a: str, b: str) -> float:
+    """Similarity between two normalized tags, 0.0 to 1.0.
+
+    Uses two strategies:
+    - Whole-tag prefix matching (catches truncation: "point-cloud"/"point-clouds")
+    - Segment-based Jaccard with fuzzy segment matching (catches reordering and
+      partial overlap: "graph-neural-network"/"neural-network-graph")
+    """
+    if a == b:
+        return 1.0
+
+    # Whole-tag prefix match
+    short, long = (a, b) if len(a) <= len(b) else (b, a)
+    if len(short) >= 5 and long.startswith(short):
+        return len(short) / len(long)
+
+    # Segment-based Jaccard with fuzzy matching
+    segs_a = set(a.split("-"))
+    segs_b = set(b.split("-"))
+
+    exact = segs_a & segs_b
+    remaining_a = list(segs_a - exact)
+    remaining_b = list(segs_b - exact)
+
+    # Match remaining segments fuzzily (greedy, one-to-one)
+    fuzzy = 0
+    used_b: set[int] = set()
+    for sa in remaining_a:
+        for j, sb in enumerate(remaining_b):
+            if j not in used_b and _segments_match(sa, sb):
+                fuzzy += 1
+                used_b.add(j)
+                break
+
+    matched = len(exact) + fuzzy
+    union = len(segs_a | segs_b)
+    return matched / union if union > 0 else 0.0
+
+
+def _classify_tag_match(a: str, b: str) -> str:
+    """Classify the relationship between two similar tags.
+
+    Returns one of:
+    - "duplicate": likely the same concept (plural, truncation, reordering)
+    - "specialization": one tag is a subtype of the other (extra qualifying segments)
+    - "related": structurally similar but semantically distinct
+    """
+    if a == b:
+        return "duplicate"
+
+    # Whole-tag prefix with small length difference → duplicate (plural/truncation)
+    short, long = (a, b) if len(a) <= len(b) else (b, a)
+    if len(short) >= 5 and long.startswith(short):
+        # "transformer"/"transformers" (diff=1), "point-cloud"/"point-clouds" (diff=1)
+        if len(long) - len(short) <= 2:
+            return "duplicate"
+        # "neural-radi"/"neural-radiance-fields" — truncation artifact
+        return "duplicate" if len(short) < 8 else "specialization"
+
+    segs_a = set(a.split("-"))
+    segs_b = set(b.split("-"))
+
+    # Fuzzy-match all segments to find matched/unmatched
+    exact = segs_a & segs_b
+    remaining_a = list(segs_a - exact)
+    remaining_b = list(segs_b - exact)
+
+    fuzzy_matched_a: set[str] = set()
+    fuzzy_matched_b: set[str] = set()
+    for sa in remaining_a:
+        for sb in remaining_b:
+            if sb not in fuzzy_matched_b and _segments_match(sa, sb):
+                fuzzy_matched_a.add(sa)
+                fuzzy_matched_b.add(sb)
+                break
+
+    unmatched_a = set(remaining_a) - fuzzy_matched_a
+    unmatched_b = set(remaining_b) - fuzzy_matched_b
+
+    # Same segments (exact + fuzzy), possibly reordered → duplicate
+    if not unmatched_a and not unmatched_b:
+        return "duplicate"
+
+    # One side has no unmatched segments → it's fully contained in the other → specialization
+    if not unmatched_a or not unmatched_b:
+        return "specialization"
+
+    # Both sides have unmatched segments → different qualifying terms → related
+    return "related"
+
+
+def find_similar_tags(
+    tag: str,
+    existing: list[str],
+    threshold: float = 0.5,
+) -> list[tuple[str, float, str]]:
+    """Find existing tags similar to *tag* above *threshold*.
+
+    Returns list of (existing_tag, similarity, match_type) sorted by descending
+    similarity.  *match_type* is one of "duplicate", "specialization", "related".
+    """
+    hits: list[tuple[str, float, str]] = []
+    for et in existing:
+        if et == tag:
+            continue
+        sim = _tag_similarity(tag, et)
+        if sim >= threshold:
+            kind = _classify_tag_match(tag, et)
+            hits.append((et, sim, kind))
+    return sorted(hits, key=lambda x: -x[1])
+
+
+def is_junk_tag(tag: str) -> bool:
+    """Return True if *tag* looks like a truncation artifact or generation failure."""
+    if len(tag) <= 1:
+        return True
+    if tag.endswith("-"):
+        return True
+    return False

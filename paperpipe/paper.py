@@ -22,6 +22,7 @@ from .config import (
     _prepare_ollama_env,
     default_llm_model,
     default_llm_temperature,
+    get_all_tags,
     normalize_tags,
 )
 from .core import (
@@ -740,6 +741,7 @@ def generate_llm_content(
     do_tags: bool = True,
     do_tldr: bool = True,
     model: Optional[str] = None,
+    existing_tags: Optional[list[str]] = None,
 ) -> tuple[str, str, list[str], str]:
     """
     Generate summary, equations.md, semantic tags, and tldr.md using LLM.
@@ -776,6 +778,7 @@ def generate_llm_content(
             do_tags=do_tags,
             do_tldr=do_tldr,
             model=model,
+            existing_tags=existing_tags,
         )
         # If no LaTeX source, ensure equations reflects that
         if not has_latex and not equations:
@@ -1129,6 +1132,7 @@ def generate_with_litellm(
     do_tags: bool = True,
     do_tldr: bool = True,
     model: Optional[str] = None,
+    existing_tags: Optional[list[str]] = None,
 ) -> tuple[str, str, list[str], str]:
     """Generate summary, equations, tags, and tldr using LiteLLM.
 
@@ -1246,11 +1250,18 @@ LaTeX source:
 
     additional_tags = []
     if do_tags:
-        # Generate semantic tags
+        # Generate semantic tags, preferring existing tags for consistency
+        existing_hint = ""
+        if existing_tags:
+            existing_hint = (
+                "\nPrefer tags from this list when applicable. "
+                "Only create a new tag if no existing tag captures a key concept.\n"
+                f"Existing tags: {', '.join(existing_tags[:80])}\n"
+            )
         tag_prompt = f"""Suggest 3-5 technical tags for this paper (lowercase, hyphenated).
 Focus on methods, domains, techniques.
 Return ONLY tags, one per line.
-
+{existing_hint}
 Title: {title}
 Abstract: {abstract[:800]}"""
 
@@ -1411,7 +1422,13 @@ def _add_single_paper(
         if tldr:
             tldr_content = generate_simple_tldr(meta)
     else:
-        summary, equations, llm_tags, llm_tldr = generate_llm_content(paper_dir, meta, tex_content, model=llm_model)
+        summary, equations, llm_tags, llm_tldr = generate_llm_content(
+            paper_dir,
+            meta,
+            tex_content,
+            model=llm_model,
+            existing_tags=get_all_tags(index),
+        )
         if tldr:
             tldr_content = llm_tldr
 
@@ -1592,7 +1609,12 @@ def _add_local_pdf(
             tldr_content = generate_simple_tldr(meta)
     else:
         summary, equations, llm_tags, llm_tldr = generate_llm_content(
-            paper_dir, meta, None, do_tldr=tldr, model=llm_model
+            paper_dir,
+            meta,
+            None,
+            do_tldr=tldr,
+            model=llm_model,
+            existing_tags=get_all_tags(index),
         )
         if tldr:
             tldr_content = llm_tldr
@@ -1691,7 +1713,13 @@ def _update_existing_paper(
         if tldr:
             tldr_content = generate_simple_tldr(meta)
     else:
-        summary, equations, llm_tags, llm_tldr = generate_llm_content(paper_dir, meta, tex_content, model=llm_model)
+        summary, equations, llm_tags, llm_tldr = generate_llm_content(
+            paper_dir,
+            meta,
+            tex_content,
+            model=llm_model,
+            existing_tags=get_all_tags(index),
+        )
         if tldr:
             tldr_content = llm_tldr
 
@@ -1860,6 +1888,7 @@ def _regenerate_one_paper(
                 do_tags=do_tags,
                 do_tldr=do_tldr,
                 model=llm_model,
+                existing_tags=get_all_tags(index),
             )
             if do_summary:
                 summary = llm_summary

@@ -588,6 +588,66 @@ class TestTagsCommand:
         assert "cv: 1" in result.output
         assert "nlp: 1" in result.output
 
+    def test_tags_audit_finds_similar(self, temp_db: Path):
+        paperpipe.save_index(
+            {
+                "p1": {"arxiv_id": "1", "title": "P1", "tags": ["transformer", "machine-learning"]},
+                "p2": {"arxiv_id": "2", "title": "P2", "tags": ["transformers", "deep-learning"]},
+            }
+        )
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["tags", "--audit"])
+        assert result.exit_code == 0
+        assert "Duplicates" in result.output
+        assert "papi tags --merge" in result.output
+
+    def test_tags_audit_no_clusters(self, temp_db: Path):
+        paperpipe.save_index(
+            {
+                "p1": {"arxiv_id": "1", "title": "P1", "tags": ["ml"]},
+                "p2": {"arxiv_id": "2", "title": "P2", "tags": ["cv"]},
+            }
+        )
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["tags", "--audit"])
+        assert result.exit_code == 0
+        assert "No similar tags" in result.output
+
+    def test_tags_merge(self, temp_db: Path):
+        paperpipe.save_index(
+            {
+                "p1": {"arxiv_id": "1", "title": "P1", "tags": ["transformers", "ml"]},
+                "p2": {"arxiv_id": "2", "title": "P2", "tags": ["transformers"]},
+                "p3": {"arxiv_id": "3", "title": "P3", "tags": ["ml"]},
+            }
+        )
+        # Create meta.json for affected papers
+        for name in ["p1", "p2"]:
+            d = paperpipe.config.PAPERS_DIR / name
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "meta.json").write_text(
+                json.dumps({"tags": ["transformers", "ml"] if name == "p1" else ["transformers"]})
+            )
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["tags", "--merge", "transformers", "transformer"])
+        assert result.exit_code == 0
+        assert "2 paper(s)" in result.output
+
+        # Verify index was updated
+        index = paperpipe.load_index()
+        assert "transformer" in index["p1"]["tags"]
+        assert "transformers" not in index["p1"]["tags"]
+        assert "transformer" in index["p2"]["tags"]
+        # p3 unaffected
+        assert index["p3"]["tags"] == ["ml"]
+
+    def test_tags_merge_same_tag(self, temp_db: Path):
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["tags", "--merge", "ml", "ml"])
+        assert result.exit_code == 0
+        assert "identical" in result.output.lower()
+
 
 class TestCliBasics:
     """Basic CLI tests (help, verbose, quiet flags)."""

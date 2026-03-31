@@ -8,11 +8,12 @@ from typing import Optional
 import click
 
 from .. import config
-from ..config import default_search_mode
+from ..config import default_search_mode, find_similar_tags, is_junk_tag, normalize_tags
 from ..core import (
     _fuzzy_text_score,
     _read_text_limited,
     load_index,
+    save_index,
 )
 from ..search import (
     _collect_grep_matches,
@@ -389,14 +390,194 @@ def search(
 
 
 @click.command()
-def tags():
-    """List all tags in the database."""
-    index = load_index()
-    all_tags: dict[str, int] = {}
+@click.option("--audit", is_flag=True, help="Find clusters of similar tags and suggest merges.")
+@click.option(
+    "--merge",
+    nargs=2,
+    metavar="OLD NEW",
+    help="Replace OLD tag with NEW across all papers.",
+)
+@click.option("--delete", "delete_tag", metavar="TAG", help="Remove TAG from all papers.")
+@click.option(
+    "--threshold",
+    type=float,
+    default=0.5,
+    show_default=True,
+    help="Similarity threshold for --audit (0.0-1.0).",
+)
+def tags(audit: bool, merge: Optional[tuple[str, str]], delete_tag: Optional[str], threshold: float) -> None:
+    """List all tags in the database.
 
+    With --audit, find clusters of similar tags and print suggested merge commands.
+    With --merge OLD NEW, replace OLD with NEW across all papers.
+    With --delete TAG, remove TAG from all papers.
+    """
+    index = load_index()
+
+    if merge:
+        _merge_tags(index, old_tag=merge[0], new_tag=merge[1])
+        return
+
+    if delete_tag:
+        _delete_tag(index, tag=delete_tag)
+        return
+
+    all_tags: dict[str, int] = {}
     for info in index.values():
         for tag in info.get("tags", []):
             all_tags[tag] = all_tags.get(tag, 0) + 1
 
+    if audit:
+        _audit_tags(all_tags, threshold=threshold)
+        return
+
     for tag, count in sorted(all_tags.items(), key=lambda x: -x[1]):
         click.echo(f"{tag}: {count}")
+
+
+def _audit_tags(tag_counts: dict[str, int], *, threshold: float) -> None:
+    """Find and display clusters of similar tags, classified by match type."""
+    tag_list = sorted(tag_counts, key=lambda t: -tag_counts[t])
+
+    # Phase 1: flag junk tags (truncation artifacts, generation failures)
+    junk = [t for t in tag_list if is_junk_tag(t)]
+    if junk:
+        click.echo("Junk tags (truncation artifacts — consider deleting):\n")
+        for tag in junk:
+            click.echo(f"  {tag} ({tag_counts[tag]})")
+        click.echo()
+
+    # Phase 2: find clusters, classified by match type
+    non_junk = [t for t in tag_list if not is_junk_tag(t)]
+    seen: set[str] = set()
+    # Each cluster entry: (tag, count, match_type)
+    clusters: list[list[tuple[str, int, str]]] = []
+
+    for tag in non_junk:
+        if tag in seen:
+            continue
+        similar = find_similar_tags(tag, [t for t in non_junk if t not in seen and t != tag], threshold=threshold)
+        if not similar:
+            continue
+        cluster: list[tuple[str, int, str]] = [(tag, tag_counts[tag], "canonical")]
+        for sim_tag, _score, kind in similar:
+            cluster.append((sim_tag, tag_counts[sim_tag], kind))
+            seen.add(sim_tag)
+        seen.add(tag)
+        clusters.append(cluster)
+
+    # Separate by whether any entry is a true duplicate
+    dup_clusters = [c for c in clusters if any(k == "duplicate" for _, _, k in c[1:])]
+    spec_clusters = [c for c in clusters if c not in dup_clusters]
+
+    found_anything = bool(junk) or bool(dup_clusters) or bool(spec_clusters)
+
+    if dup_clusters:
+        click.echo(f"Duplicates ({len(dup_clusters)} cluster(s) — safe to merge):\n")
+        for cluster in dup_clusters:
+            cluster.sort(key=lambda x: -x[1])
+            canonical = cluster[0][0]
+            click.echo(f"  {canonical} ({cluster[0][1]})")
+            for tag, count, kind in cluster[1:]:
+                label = "dup" if kind == "duplicate" else kind[:4]
+                click.echo(f"    ~ {tag} ({count}) [{label}]")
+                if kind == "duplicate":
+                    click.echo(f"      papi tags --merge {tag} {canonical}")
+            click.echo()
+
+    if spec_clusters:
+        click.echo(f"Related ({len(spec_clusters)} cluster(s) — review before merging):\n")
+        for cluster in spec_clusters:
+            cluster.sort(key=lambda x: -x[1])
+            canonical = cluster[0][0]
+            click.echo(f"  {canonical} ({cluster[0][1]})")
+            for tag, count, kind in cluster[1:]:
+                click.echo(f"    ~ {tag} ({count}) [{kind[:4]}]")
+            click.echo()
+
+    if not found_anything:
+        click.echo("No similar tags found.")
+
+
+def _merge_tags(index: dict, *, old_tag: str, new_tag: str) -> None:
+    """Replace *old_tag* with *new_tag* across all papers."""
+    from ..search import _maybe_update_search_index
+
+    old_tag = old_tag.strip().lower()
+    new_tag = new_tag.strip().lower()
+
+    if old_tag == new_tag:
+        click.echo("Tags are identical, nothing to do.")
+        return
+
+    # Collect affected papers
+    affected: list[str] = []
+    for name, info in index.items():
+        if old_tag in info.get("tags", []):
+            affected.append(name)
+
+    if not affected:
+        click.echo(f"No papers have tag '{old_tag}'.")
+        return
+
+    click.echo(f"Merging '{old_tag}' → '{new_tag}' across {len(affected)} paper(s)...")
+
+    for name in affected:
+        paper_dir = config.PAPERS_DIR / name
+        meta_path = paper_dir / "meta.json"
+
+        # Update meta.json
+        if meta_path.exists():
+            import json
+
+            meta = json.loads(meta_path.read_text())
+            raw_tags: list[str] = meta.get("tags", [])
+            updated = [new_tag if t == old_tag else t for t in raw_tags]
+            meta["tags"] = normalize_tags(updated)
+            meta_path.write_text(json.dumps(meta, indent=2))
+
+        # Update index entry
+        raw_idx_tags: list[str] = index[name].get("tags", [])
+        updated_idx = [new_tag if t == old_tag else t for t in raw_idx_tags]
+        index[name]["tags"] = normalize_tags(updated_idx)
+
+        # Update search index
+        _maybe_update_search_index(name=name)
+
+    save_index(index)
+    click.echo(f"Done. Merged '{old_tag}' → '{new_tag}' in {len(affected)} paper(s).")
+
+
+def _delete_tag(index: dict, *, tag: str) -> None:
+    """Remove *tag* from all papers."""
+    from ..search import _maybe_update_search_index
+
+    tag = tag.strip().lower()
+
+    affected: list[str] = []
+    for name, info in index.items():
+        if tag in info.get("tags", []):
+            affected.append(name)
+
+    if not affected:
+        click.echo(f"No papers have tag '{tag}'.")
+        return
+
+    click.echo(f"Deleting '{tag}' from {len(affected)} paper(s)...")
+
+    for name in affected:
+        paper_dir = config.PAPERS_DIR / name
+        meta_path = paper_dir / "meta.json"
+
+        if meta_path.exists():
+            import json
+
+            meta = json.loads(meta_path.read_text())
+            meta["tags"] = [t for t in meta.get("tags", []) if t != tag]
+            meta_path.write_text(json.dumps(meta, indent=2))
+
+        index[name]["tags"] = [t for t in index[name].get("tags", []) if t != tag]
+        _maybe_update_search_index(name=name)
+
+    save_index(index)
+    click.echo(f"Done. Deleted '{tag}' from {len(affected)} paper(s).")

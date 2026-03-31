@@ -385,6 +385,124 @@ class TestOllamaHelpers:
         assert config._ollama_reachability_error(api_base="http://localhost:11434") is None
 
 
+class TestTagSimilarity:
+    def test_identical_tags(self) -> None:
+        assert config._tag_similarity("machine-learning", "machine-learning") == 1.0
+
+    def test_prefix_match(self) -> None:
+        # "transformer" is prefix of "transformers"
+        sim = config._tag_similarity("transformer", "transformers")
+        assert sim > 0.9
+
+    def test_prefix_match_whole_tag(self) -> None:
+        # "point-cloud" is prefix of "point-clouds"
+        sim = config._tag_similarity("point-cloud", "point-clouds")
+        assert sim > 0.9
+
+    def test_segment_reordering(self) -> None:
+        # Same segments, different order
+        sim = config._tag_similarity("graph-neural-network", "neural-network-graph")
+        assert sim == 1.0
+
+    def test_partial_segment_overlap(self) -> None:
+        # "3d-reconstruction" vs "3d-scene-reconstruction": 2/3 overlap
+        sim = config._tag_similarity("3d-reconstruction", "3d-scene-reconstruction")
+        assert 0.5 <= sim < 1.0
+
+    def test_unrelated_tags(self) -> None:
+        sim = config._tag_similarity("computer-vision", "natural-language-processing")
+        assert sim < 0.3
+
+    def test_short_tags_no_false_prefix(self) -> None:
+        # Tags shorter than 5 chars should not match via prefix
+        sim = config._tag_similarity("ml", "mlp")
+        assert sim < 0.5
+
+    def test_segment_fuzzy_match_plural(self) -> None:
+        # "neural-networks" vs "neural-network": segment "networks"/"network" match
+        sim = config._tag_similarity("neural-networks", "neural-network")
+        assert sim > 0.8
+
+
+class TestClassifyTagMatch:
+    def test_plural_is_duplicate(self) -> None:
+        assert config._classify_tag_match("transformer", "transformers") == "duplicate"
+
+    def test_reordering_is_duplicate(self) -> None:
+        assert config._classify_tag_match("graph-neural-network", "neural-network-graph") == "duplicate"
+
+    def test_subset_is_specialization(self) -> None:
+        # All segments of "deep-learning" appear in "bayesian-deep-learning"
+        assert config._classify_tag_match("deep-learning", "bayesian-deep-learning") == "specialization"
+
+    def test_different_qualifiers_is_related(self) -> None:
+        # "single" vs "multi" — both sides have unmatched segments
+        assert config._classify_tag_match("single-view-reconstruction", "multi-view-reconstruction") == "related"
+
+    def test_truncation_artifact_is_specialization(self) -> None:
+        # "neural-radi" has fewer segments than "neural-radiance-fields" — classified
+        # as specialization.  The junk tag detector handles truly broken tags.
+        assert config._classify_tag_match("neural-radi", "neural-radiance-fields") == "specialization"
+
+    def test_whole_tag_truncation_is_duplicate(self) -> None:
+        # When the whole tag string is a prefix (not segment-level), it's a duplicate
+        assert config._classify_tag_match("point-cloud", "point-clouds") == "duplicate"
+
+
+class TestFindSimilarTags:
+    def test_finds_similar_with_kind(self) -> None:
+        existing = ["machine-learning", "deep-learning", "computer-vision", "transformers"]
+        hits = config.find_similar_tags("transformer", existing)
+        assert any(tag == "transformers" and kind == "duplicate" for tag, _score, kind in hits)
+
+    def test_no_false_positives(self) -> None:
+        existing = ["computer-vision", "robotics", "nlp"]
+        hits = config.find_similar_tags("machine-learning", existing)
+        assert len(hits) == 0
+
+    def test_threshold_controls_sensitivity(self) -> None:
+        existing = ["3d-scene-reconstruction"]
+        hits_low = config.find_similar_tags("3d-reconstruction", existing, threshold=0.3)
+        hits_high = config.find_similar_tags("3d-reconstruction", existing, threshold=0.9)
+        assert len(hits_low) >= len(hits_high)
+
+    def test_excludes_exact_match(self) -> None:
+        existing = ["ml", "cv", "nlp"]
+        hits = config.find_similar_tags("ml", existing)
+        assert all(tag != "ml" for tag, _score, _kind in hits)
+
+
+class TestJunkTags:
+    def test_single_char_is_junk(self) -> None:
+        assert config.is_junk_tag("d")
+
+    def test_trailing_dash_is_junk(self) -> None:
+        assert config.is_junk_tag("neural-")
+
+    def test_short_acronyms_not_junk(self) -> None:
+        assert not config.is_junk_tag("ml")
+        assert not config.is_junk_tag("nlp")
+        assert not config.is_junk_tag("pbr")
+
+    def test_normal_tag_not_junk(self) -> None:
+        assert not config.is_junk_tag("machine-learning")
+
+
+class TestGetAllTags:
+    def test_empty_index(self) -> None:
+        assert config.get_all_tags({}) == []
+
+    def test_sorted_by_frequency(self) -> None:
+        index = {
+            "p1": {"tags": ["ml", "cv"]},
+            "p2": {"tags": ["ml", "nlp"]},
+            "p3": {"tags": ["ml"]},
+        }
+        result = config.get_all_tags(index)
+        assert result[0] == "ml"  # most frequent
+        assert set(result) == {"ml", "cv", "nlp"}
+
+
 class TestModelIdHelpers:
     def test_split_model_id_edge_cases(self) -> None:
         assert config._split_model_id("") == (None, "")
