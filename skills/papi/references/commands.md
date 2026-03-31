@@ -7,7 +7,7 @@
 | `papi path` | Print database location |
 | `papi docs` | Print agent integration snippet |
 | `papi list [--tag TAG]` | List papers (optionally filtered) |
-| `papi tags` | List all tags with counts |
+| `papi tags` | List all tags with counts (`--audit`, `--merge OLD NEW`, `--delete TAG`) |
 | `papi search "query"` | Ranked search (BM25 if `search.db` exists) |
 | `papi search "query" -p paper1,paper2` | Search within specific papers |
 | `papi search --rg QUERY` | Literal text match via ripgrep (NOT regex by default) |

@@ -119,7 +119,7 @@ pip install -e ".[all]"
 | `papi remove <papers...>` | Remove papers |
 | `papi ask "question"` | Cross-paper RAG query (requires PaperQA2 or LEANN) |
 | `papi index` | Build/update the retrieval index |
-| `papi tags` | List all tags |
+| `papi tags` | List all tags (`--audit` to find duplicates, `--merge OLD NEW`, `--delete TAG`) |
 | `papi path` | Print database location |
 | `papi docs` | Print agent integration snippet (for CLAUDE.md/AGENTS.md) |
 | `papi rebuild-index` | Rebuild index.json from on-disk paper directories (recovery) |
@@ -678,12 +678,15 @@ papi models --verbose          # show underlying provider errors
 
 Papers are auto-tagged from:
 1. arXiv categories (cs.CV → computer-vision)
-2. LLM-generated semantic tags
+2. LLM-generated semantic tags (biased toward existing tags for consistency)
 3. Your `--tags` flag
 
 ```bash
 papi add 1706.03762 --tags my-project,priority
 papi list --tag attention
+papi tags --audit               # find duplicate/similar tags
+papi tags --merge old-tag new-tag  # rename a tag across all papers
+papi tags --delete junk-tag     # remove a tag from all papers
 ```
 
 ## Non-arXiv papers
