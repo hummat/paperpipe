@@ -27,3 +27,5 @@ CLAUDE.md
 GEMINI.md
 QWEN.md
 *.backup
+
+.claude/settings.local.json
