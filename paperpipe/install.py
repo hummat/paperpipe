@@ -16,6 +16,47 @@ from .config import default_pqa_embedding_model
 from .output import echo, echo_error, echo_success, echo_warning
 
 
+_DEPRECATED_CODEX_PROMPT_NAMES = (
+    "compare-papers.md",
+    "curate-paper-note.md",
+    "ground-with-paper.md",
+    "papi-init.md",
+    "papi.md",
+    "verify-with-paper.md",
+)
+
+
+def _cleanup_legacy_codex_skill_links(skill_dirs: list[Path]) -> int:
+    """Remove old Codex skill symlinks from ~/.codex/skills left by legacy installs."""
+    legacy_dir = Path.home() / ".codex" / "skills"
+    removed = 0
+    for skill_source_dir in skill_dirs:
+        legacy_path = legacy_dir / skill_source_dir.name
+        if not legacy_path.is_symlink():
+            continue
+        try:
+            if legacy_path.resolve() == skill_source_dir.resolve():
+                legacy_path.unlink()
+                removed += 1
+        except OSError:
+            # Broken legacy symlink with the same known name; safe to remove.
+            legacy_path.unlink()
+            removed += 1
+    return removed
+
+
+def _cleanup_deprecated_codex_prompts() -> int:
+    """Remove known deprecated Codex prompt symlinks left by older paperpipe installs."""
+    prompts_dir = Path.home() / ".codex" / "prompts"
+    removed = 0
+    for prompt_name in _DEPRECATED_CODEX_PROMPT_NAMES:
+        prompt_path = prompts_dir / prompt_name
+        if prompt_path.is_symlink():
+            prompt_path.unlink()
+            removed += 1
+    return removed
+
+
 def _install_skill(*, targets: tuple[str, ...], force: bool, copy: bool = False) -> None:
     # Find the skills directory relative to this module
     module_dir = Path(__file__).resolve().parent
@@ -40,7 +81,7 @@ def _install_skill(*, targets: tuple[str, ...], force: bool, copy: bool = False)
 
     target_dirs = {
         "claude": Path.home() / ".claude" / "skills",
-        "codex": Path.home() / ".codex" / "skills",
+        "codex": Path.home() / ".agents" / "skills",
         "gemini": Path.home() / ".gemini" / "skills",
     }
 
@@ -88,6 +129,19 @@ def _install_skill(*, targets: tuple[str, ...], force: bool, copy: bool = False)
 
         mode = "copied" if copy else "linked"
         echo_success(f"{target}: {mode} {len(skill_dirs)} skill(s) to {skills_dir}")
+        if target == "codex":
+            removed_legacy_skills = _cleanup_legacy_codex_skill_links(skill_dirs)
+            if removed_legacy_skills:
+                echo_success(
+                    f"codex: removed {removed_legacy_skills} legacy skill symlink(s) from "
+                    f"{Path.home() / '.codex' / 'skills'}"
+                )
+            removed_prompts = _cleanup_deprecated_codex_prompts()
+            if removed_prompts:
+                echo_success(
+                    f"codex: removed {removed_prompts} deprecated prompt symlink(s) from "
+                    f"{Path.home() / '.codex' / 'prompts'}"
+                )
 
         if target == "gemini" and not gemini_warned:
             settings_path = Path.home() / ".gemini" / "settings.json"
@@ -443,9 +497,9 @@ def _uninstall_skill(*, targets: tuple[str, ...], force: bool) -> None:
     uninstall_targets = set(targets) if targets else {"claude", "codex", "gemini"}
 
     target_dirs = {
-        "claude": Path.home() / ".claude" / "skills",
-        "codex": Path.home() / ".codex" / "skills",
-        "gemini": Path.home() / ".gemini" / "skills",
+        "claude": (Path.home() / ".claude" / "skills",),
+        "codex": (Path.home() / ".agents" / "skills", Path.home() / ".codex" / "skills"),
+        "gemini": (Path.home() / ".gemini" / "skills",),
     }
 
     removed = 0
@@ -453,41 +507,40 @@ def _uninstall_skill(*, targets: tuple[str, ...], force: bool) -> None:
     for target in sorted(uninstall_targets):
         if target not in target_dirs:
             raise click.UsageError(f"Unknown uninstall target: {target}")
-        skills_dir = target_dirs[target]
-
         target_removed = 0
-        for skill_name in skill_names:
-            dest = skills_dir / skill_name
-            skill_source = skills_source / skill_name if skills_source.exists() else None
+        for skills_dir in target_dirs[target]:
+            for skill_name in skill_names:
+                dest = skills_dir / skill_name
+                skill_source = skills_source / skill_name if skills_source.exists() else None
 
-            if not dest.exists() and not dest.is_symlink():
-                continue
+                if not dest.exists() and not dest.is_symlink():
+                    continue
 
-            if (
-                dest.is_symlink()
-                and skill_source
-                and skill_source.exists()
-                and dest.resolve() == skill_source.resolve()
-            ):
-                dest.unlink()
-                target_removed += 1
-                continue
-
-            if force:
-                if dest.is_symlink() or dest.is_file():
+                if (
+                    dest.is_symlink()
+                    and skill_source
+                    and skill_source.exists()
+                    and dest.resolve() == skill_source.resolve()
+                ):
                     dest.unlink()
-                elif dest.is_dir():
-                    shutil.rmtree(dest)
-                else:
-                    dest.unlink(missing_ok=True)
-                target_removed += 1
-                continue
+                    target_removed += 1
+                    continue
 
-            echo_warning(f"{target}: {dest} exists but does not point to this install (use --force to remove)")
-            skipped += 1
+                if force:
+                    if dest.is_symlink() or dest.is_file():
+                        dest.unlink()
+                    elif dest.is_dir():
+                        shutil.rmtree(dest)
+                    else:
+                        dest.unlink(missing_ok=True)
+                    target_removed += 1
+                    continue
+
+                echo_warning(f"{target}: {dest} exists but does not point to this install (use --force to remove)")
+                skipped += 1
 
         if target_removed:
-            echo_success(f"{target}: removed {target_removed} skill(s) from {skills_dir}")
+            echo_success(f"{target}: removed {target_removed} skill(s)")
             removed += target_removed
         else:
             echo(f"{target}: no papi skills installed")
