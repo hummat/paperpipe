@@ -15,7 +15,6 @@ import click
 from .config import default_pqa_embedding_model
 from .output import echo, echo_error, echo_success, echo_warning
 
-
 _DEPRECATED_CODEX_PROMPT_NAMES = (
     "compare-papers.md",
     "curate-paper-note.md",
