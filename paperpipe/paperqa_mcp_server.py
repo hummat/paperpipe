@@ -283,11 +283,13 @@ def _write_leann_metadata(index_name: str, embedding_mode: str, embedding_model:
 
     from datetime import datetime, timezone
 
-    if (pp := _paperpipe_module()) is None:
+    try:
+        from paperpipe import config
+    except ImportError:
         logger.warning("Cannot write LEANN metadata: paperpipe module not available")
         return
 
-    index_dir = pp.PAPER_DB / ".leann" / "indexes" / index_name
+    index_dir = config.PAPER_DB / ".leann" / "indexes" / index_name
     metadata = {
         "embedding_mode": embedding_mode,
         "embedding_model": embedding_model,

@@ -603,6 +603,41 @@ class TestLeannIndexDelta:
 class TestLeannIncrementalUpdate:
     """Tests for incremental update functionality."""
 
+    def test_leann_pdf_text_sanitizers_clean_surrogates_before_chunking(self) -> None:
+        from paperpipe.leann import _install_leann_pdf_text_sanitizers
+
+        class FakeDoc:
+            def __init__(self) -> None:
+                self.text = "reader \ud835 text"
+                self.metadata = {"source": "meta \ud835"}
+
+            def get_content(self) -> str:
+                return self.text
+
+        class FakeReader:
+            def load_data(self) -> list[FakeDoc]:
+                return [FakeDoc()]
+
+        def bad_pymupdf(_path: str) -> str:
+            return "bad \ud835\udc4f text"
+
+        def bad_pdfplumber(_path: str) -> str:
+            return "also \ud835 bad"
+
+        leann_cli_module = types.SimpleNamespace(
+            extract_pdf_text_with_pymupdf=bad_pymupdf,
+            extract_pdf_text_with_pdfplumber=bad_pdfplumber,
+            SimpleDirectoryReader=FakeReader,
+        )
+
+        _install_leann_pdf_text_sanitizers(leann_cli_module)
+
+        assert leann_cli_module.extract_pdf_text_with_pymupdf("paper.pdf").encode("utf-8")
+        assert leann_cli_module.extract_pdf_text_with_pdfplumber("paper.pdf").encode("utf-8")
+        doc = FakeReader().load_data()[0]
+        assert doc.get_content().encode("utf-8")
+        assert doc.metadata["source"].encode("utf-8")
+
     def test_incremental_update_error_no_manifest(self, temp_db: Path) -> None:
         from paperpipe.leann import IncrementalUpdateError, _leann_incremental_update
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import shutil
 import subprocess
@@ -36,6 +37,7 @@ LEANN_DEFAULT_GRAPH_DEGREE = 32
 LEANN_DEFAULT_BUILD_COMPLEXITY = 64
 LEANN_DEFAULT_NUM_THREADS = 1
 LEANN_DEFAULT_RECOMPUTE = True
+_INVALID_UNICODE_RE = re.compile(r"[\x00\uD800-\uDFFF]")
 
 
 class FileEntry(TypedDict):
@@ -187,6 +189,65 @@ class IncrementalUpdateError(Exception):
     """Raised when incremental update fails and a full rebuild is needed."""
 
     pass
+
+
+def _sanitize_leann_text(text: str) -> str:
+    """Remove Unicode code points that cannot be written to UTF-8 index files."""
+    return _INVALID_UNICODE_RE.sub("\ufffd", text)
+
+
+def _sanitize_leann_document(doc: Any) -> Any:
+    """Clean text/metadata on a llama_index document-like object in place."""
+    try:
+        text = doc.get_content()
+    except AttributeError:
+        text = getattr(doc, "text", None)
+    if isinstance(text, str):
+        cleaned = _sanitize_leann_text(text)
+        try:
+            from llama_index.core.schema import MediaResource
+
+            doc.text_resource = MediaResource(text=cleaned)
+        except ImportError:
+            if hasattr(doc, "text"):
+                doc.text = cleaned
+
+    metadata = getattr(doc, "metadata", None)
+    if isinstance(metadata, dict):
+        for key, value in list(metadata.items()):
+            if isinstance(value, str):
+                metadata[key] = _sanitize_leann_text(value)
+    return doc
+
+
+def _install_leann_pdf_text_sanitizers(leann_cli_module: Any) -> None:
+    """Patch LEANN's loaders so llama_index never sees invalid Unicode."""
+    for attr in ("extract_pdf_text_with_pymupdf", "extract_pdf_text_with_pdfplumber"):
+        extractor = getattr(leann_cli_module, attr, None)
+        if not callable(extractor) or getattr(extractor, "_paperpipe_sanitized", False):
+            continue
+
+        def sanitized_extractor(file_path: str, *args: Any, _extractor: Any = extractor, **kwargs: Any) -> Any:
+            text = _extractor(file_path, *args, **kwargs)
+            if isinstance(text, str):
+                return _sanitize_leann_text(text)
+            return text
+
+        setattr(sanitized_extractor, "_paperpipe_sanitized", True)
+        setattr(leann_cli_module, attr, sanitized_extractor)
+
+    reader_cls = getattr(leann_cli_module, "SimpleDirectoryReader", None)
+    load_data = getattr(reader_cls, "load_data", None)
+    if callable(load_data) and not getattr(load_data, "_paperpipe_sanitized", False):
+
+        def sanitized_load_data(self: Any, *args: Any, _load_data: Any = load_data, **kwargs: Any) -> Any:
+            docs = _load_data(self, *args, **kwargs)
+            if isinstance(docs, list):
+                return [_sanitize_leann_document(doc) for doc in docs]
+            return docs
+
+        setattr(sanitized_load_data, "_paperpipe_sanitized", True)
+        setattr(reader_cls, "load_data", sanitized_load_data)
 
 
 def _leann_incremental_update(
@@ -352,12 +413,13 @@ def _leann_incremental_update(
 
     if use_add_text:
         try:
-            from leann.cli import LeannCLI
+            import leann.cli as leann_cli_module
             from llama_index.core.node_parser import SentenceSplitter
         except Exception as e:
             raise IncrementalUpdateError(f"LEANN chunking helpers unavailable: {e}") from e
 
-        leann_cli = LeannCLI()
+        _install_leann_pdf_text_sanitizers(leann_cli_module)
+        leann_cli = leann_cli_module.LeannCLI()
         effective_doc_chunk_size = doc_chunk_size or leann_cli.node_parser.chunk_size
         effective_doc_chunk_overlap = doc_chunk_overlap or leann_cli.node_parser.chunk_overlap
         if effective_doc_chunk_overlap >= effective_doc_chunk_size:
@@ -392,11 +454,8 @@ def _leann_incremental_update(
                         metadata["id"] = f"{pdf.resolve()}::{i}"
                     # Sanitize text: PDF extractors can produce lone surrogates
                     # (e.g. \ud835 from math symbols) that are invalid in UTF-8.
-                    text = chunk.get("text", "").encode("utf-8", errors="replace").decode("utf-8")
-                    metadata = {
-                        k: v.encode("utf-8", errors="replace").decode("utf-8") if isinstance(v, str) else v
-                        for k, v in metadata.items()
-                    }
+                    text = _sanitize_leann_text(chunk.get("text", ""))
+                    metadata = {k: _sanitize_leann_text(v) if isinstance(v, str) else v for k, v in metadata.items()}
                     builder.add_text(text, metadata=metadata)
                 manifest["files"][str(pdf.resolve())] = {
                     "mtime": pdf.stat().st_mtime,
