@@ -11,6 +11,13 @@ import paperpipe
 import paperpipe.paper as paper_mod
 
 
+@pytest.fixture(autouse=True)
+def reset_arxiv_client_cache(monkeypatch):
+    monkeypatch.setattr(paper_mod, "_ARXIV_CLIENT", None, raising=False)
+    monkeypatch.setattr(paper_mod, "_ARXIV_LAST_REQUEST_MONOTONIC", None, raising=False)
+    monkeypatch.setattr(paper_mod, "_ARXIV_MIN_INTERVAL_SECONDS", 0.0, raising=False)
+
+
 class TestGenerateLlmContent:
     """Tests for generate_llm_content fallback behavior."""
 
@@ -590,6 +597,47 @@ class TestGenerateSimpleSummary:
 class TestFetchArxivMetadata:
     """Unit tests for fetch_arxiv_metadata with mocked arxiv library."""
 
+    def test_reuses_arxiv_client_across_api_calls(self, tmp_path, monkeypatch):
+        """Repeated arXiv API calls should share one client so its rate limiter applies."""
+        from datetime import datetime
+        from unittest.mock import MagicMock
+
+        import arxiv
+
+        metadata_paper = MagicMock()
+        metadata_paper.title = "Attention Is All You Need"
+        metadata_paper.authors = []
+        metadata_paper.summary = "Abstract"
+        metadata_paper.primary_category = "cs.CL"
+        metadata_paper.categories = ["cs.CL"]
+        metadata_paper.published = datetime(2017, 6, 12)
+        metadata_paper.updated = datetime(2017, 6, 12)
+        metadata_paper.doi = None
+        metadata_paper.journal_ref = None
+        metadata_paper.pdf_url = "https://arxiv.org/pdf/1706.03762"
+
+        pdf_path = tmp_path / "paper.pdf"
+        pdf_paper = MagicMock()
+        pdf_paper.download_pdf = lambda filename: Path(filename).write_bytes(b"%PDF")
+
+        papers = iter([metadata_paper, pdf_paper])
+        client_instances = []
+
+        class FakeClient:
+            def __init__(self):
+                client_instances.append(self)
+
+            def results(self, _search):
+                return iter([next(papers)])
+
+        monkeypatch.setattr(arxiv, "Search", lambda id_list: MagicMock())
+        monkeypatch.setattr(arxiv, "Client", FakeClient)
+
+        paperpipe.fetch_arxiv_metadata("1706.03762")
+        paperpipe.download_pdf("1706.03762", pdf_path)
+
+        assert len(client_instances) == 1
+
     def test_extracts_metadata_from_arxiv_result(self, monkeypatch):
         """Test that metadata is correctly extracted from arxiv API response."""
         from datetime import datetime
@@ -687,6 +735,34 @@ class TestDownloadPdf:
         assert result is True
         assert dest.exists()
         assert dest.read_bytes() == pdf_content
+
+    def test_waits_before_direct_pdf_download_after_api_lookup(self, tmp_path, monkeypatch):
+        """The direct PDF fetch should share pacing with the preceding arXiv API lookup."""
+        import time
+        from unittest.mock import MagicMock
+
+        import arxiv
+
+        monkeypatch.setattr(paper_mod, "_ARXIV_MIN_INTERVAL_SECONDS", 3.0, raising=False)
+        sleeps = []
+        times = iter([100.0, 101.0])
+        monkeypatch.setattr(time, "monotonic", lambda: next(times))
+        monkeypatch.setattr(time, "sleep", lambda seconds: sleeps.append(seconds))
+
+        dest = tmp_path / "paper.pdf"
+        mock_paper = MagicMock()
+        mock_paper.download_pdf = lambda filename: Path(filename).write_bytes(b"%PDF")
+
+        mock_client = MagicMock()
+        mock_client.results.return_value = iter([mock_paper])
+
+        monkeypatch.setattr(arxiv, "Search", lambda id_list: MagicMock())
+        monkeypatch.setattr(arxiv, "Client", lambda: mock_client)
+
+        result = paperpipe.download_pdf("1706.03762", dest)
+
+        assert result is True
+        assert sleeps == [2.0]
 
     def test_returns_false_when_download_fails(self, tmp_path, monkeypatch):
         """Test that download_pdf returns False when file isn't created."""
@@ -818,6 +894,33 @@ class TestSearchArxivByTitle:
 
 class TestDownloadSource:
     """Unit tests for download_source with mocked requests."""
+
+    def test_waits_before_source_download_when_recent_arxiv_request_exists(self, tmp_path, monkeypatch):
+        """The source archive fetch should share arXiv-domain pacing."""
+        import time
+        from unittest.mock import MagicMock
+
+        import requests
+
+        monkeypatch.setattr(paper_mod, "_ARXIV_MIN_INTERVAL_SECONDS", 3.0, raising=False)
+        monkeypatch.setattr(paper_mod, "_ARXIV_LAST_REQUEST_MONOTONIC", 100.0, raising=False)
+        sleeps = []
+        monkeypatch.setattr(time, "monotonic", lambda: 101.0)
+        monkeypatch.setattr(time, "sleep", lambda seconds: sleeps.append(seconds))
+
+        mock_response = MagicMock()
+        mock_response.content = b"plain text"
+        mock_response.raise_for_status = MagicMock()
+
+        monkeypatch.setattr(requests, "get", lambda url, timeout: mock_response)
+
+        paper_dir = tmp_path / "test-paper"
+        paper_dir.mkdir()
+
+        result = paperpipe.download_source("1706.03762", paper_dir)
+
+        assert result is None
+        assert sleeps == [2.0]
 
     def test_extracts_tex_from_tarball(self, tmp_path, monkeypatch):
         """Test extraction of .tex files from a tarball."""
@@ -1010,6 +1113,65 @@ class TestDownloadSource:
 
         # No \begin{document}, so returns None
         assert result is None
+
+
+class TestDownloadPdfFromUrl:
+    """Unit tests for direct PDF URL downloads."""
+
+    def test_waits_for_arxiv_pdf_urls(self, monkeypatch):
+        """Direct arXiv PDF URLs should share arXiv-domain pacing."""
+        import time
+        from unittest.mock import MagicMock
+
+        import requests
+
+        monkeypatch.setattr(paper_mod, "_ARXIV_MIN_INTERVAL_SECONDS", 3.0, raising=False)
+        monkeypatch.setattr(paper_mod, "_ARXIV_LAST_REQUEST_MONOTONIC", 100.0, raising=False)
+        sleeps = []
+        monkeypatch.setattr(time, "monotonic", lambda: 101.0)
+        monkeypatch.setattr(time, "sleep", lambda seconds: sleeps.append(seconds))
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.iter_content.return_value = [b"%PDF"]
+        monkeypatch.setattr(requests, "get", lambda url, timeout, stream: mock_response)
+
+        temp_path, error = paper_mod.download_pdf_from_url("https://arxiv.org/pdf/1706.03762")
+
+        try:
+            assert error is None
+            assert temp_path is not None
+            assert sleeps == [2.0]
+        finally:
+            if temp_path:
+                temp_path.unlink(missing_ok=True)
+
+    def test_does_not_wait_for_non_arxiv_pdf_urls(self, monkeypatch):
+        """Non-arXiv PDF URLs should not use the arXiv-domain limiter."""
+        import time
+        from unittest.mock import MagicMock
+
+        import requests
+
+        monkeypatch.setattr(paper_mod, "_ARXIV_MIN_INTERVAL_SECONDS", 3.0, raising=False)
+        monkeypatch.setattr(paper_mod, "_ARXIV_LAST_REQUEST_MONOTONIC", 100.0, raising=False)
+        sleeps = []
+        monkeypatch.setattr(time, "sleep", lambda seconds: sleeps.append(seconds))
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.iter_content.return_value = [b"%PDF"]
+        monkeypatch.setattr(requests, "get", lambda url, timeout, stream: mock_response)
+
+        temp_path, error = paper_mod.download_pdf_from_url("https://example.com/paper.pdf")
+
+        try:
+            assert error is None
+            assert temp_path is not None
+            assert sleeps == []
+        finally:
+            if temp_path:
+                temp_path.unlink(missing_ok=True)
 
 
 class TestDownloadSourceTempFileCleanup:

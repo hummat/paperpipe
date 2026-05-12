@@ -8,10 +8,13 @@ import re
 import shutil
 import tarfile
 import tempfile
+import threading
+import time
 import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 import click
 
@@ -45,6 +48,41 @@ from .search import _maybe_update_search_index
 _MAX_DOWNLOAD_SIZE = 500 * 1024 * 1024  # 500 MB
 _MAX_TAR_MEMBER_SIZE = 100 * 1024 * 1024  # 100 MB
 _MAX_TAR_TOTAL_SIZE = 500 * 1024 * 1024  # 500 MB
+_ARXIV_MIN_INTERVAL_SECONDS = 3.0
+_ARXIV_CLIENT: Any | None = None
+_ARXIV_LAST_REQUEST_MONOTONIC: float | None = None
+_ARXIV_RATE_LOCK = threading.Lock()
+
+
+def _get_arxiv_client() -> Any:
+    """Return the process-wide arXiv client so library pacing applies across calls."""
+    global _ARXIV_CLIENT
+
+    if _ARXIV_CLIENT is None:
+        import arxiv
+
+        _ARXIV_CLIENT = arxiv.Client()
+    return _ARXIV_CLIENT
+
+
+def _wait_for_arxiv_request() -> None:
+    """Apply process-wide pacing for arXiv API and content requests."""
+    global _ARXIV_LAST_REQUEST_MONOTONIC
+
+    with _ARXIV_RATE_LOCK:
+        now = time.monotonic()
+        if _ARXIV_LAST_REQUEST_MONOTONIC is not None:
+            elapsed = now - _ARXIV_LAST_REQUEST_MONOTONIC
+            sleep_seconds = _ARXIV_MIN_INTERVAL_SECONDS - elapsed
+            if sleep_seconds > 0:
+                time.sleep(sleep_seconds)
+                now += sleep_seconds
+        _ARXIV_LAST_REQUEST_MONOTONIC = now
+
+
+def _is_arxiv_url(url: str) -> bool:
+    hostname = urlparse(url).hostname
+    return hostname is not None and (hostname == "arxiv.org" or hostname.endswith(".arxiv.org"))
 
 
 def fetch_arxiv_metadata(arxiv_id: str) -> dict:
@@ -52,7 +90,8 @@ def fetch_arxiv_metadata(arxiv_id: str) -> dict:
     import arxiv
 
     search = arxiv.Search(id_list=[arxiv_id])
-    paper = next(arxiv.Client().results(search))
+    _wait_for_arxiv_request()
+    paper = next(_get_arxiv_client().results(search))
 
     return {
         "arxiv_id": arxiv_id,
@@ -92,7 +131,8 @@ def search_arxiv_by_title(query: str, *, max_results: int = 5) -> list[dict]:
     results = []
     query_lower = query.lower()
 
-    for paper in arxiv.Client().results(search):
+    _wait_for_arxiv_request()
+    for paper in _get_arxiv_client().results(search):
         arxiv_id = paper.entry_id.split("/abs/")[-1]
         arxiv_id = arxiv_base_id(arxiv_id)  # Strip version suffix
 
@@ -115,7 +155,9 @@ def download_pdf(arxiv_id: str, dest: Path) -> bool:
     import arxiv
 
     search = arxiv.Search(id_list=[arxiv_id])
-    paper = next(arxiv.Client().results(search))
+    _wait_for_arxiv_request()
+    paper = next(_get_arxiv_client().results(search))
+    _wait_for_arxiv_request()
     paper.download_pdf(filename=str(dest))
     return dest.exists()
 
@@ -127,6 +169,7 @@ def download_source(arxiv_id: str, paper_dir: Path, *, extract_figures: bool = F
     source_url = f"https://arxiv.org/e-print/{arxiv_id}"
 
     try:
+        _wait_for_arxiv_request()
         response = requests.get(source_url, timeout=30)
         response.raise_for_status()
     except requests.Timeout:
@@ -243,6 +286,8 @@ def download_pdf_from_url(url: str, *, timeout: int = 60) -> tuple[Optional[Path
     import requests
 
     try:
+        if _is_arxiv_url(url):
+            _wait_for_arxiv_request()
         response = requests.get(url, timeout=timeout, stream=True)
         response.raise_for_status()
     except requests.Timeout:
