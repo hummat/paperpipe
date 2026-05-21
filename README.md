@@ -741,7 +741,7 @@ make check                            # format + lint + typecheck + test
 <details markdown="1">
 <summary>Release (maintainers)</summary>
 
-This repo publishes to PyPI when a GitHub Release is published (see `.github/workflows/publish.yml`).
+This repo publishes to PyPI from release tags, with a manual workflow fallback (see `.github/workflows/publish.yml`).
 
 ```bash
 # Bump version in pyproject.toml, then:

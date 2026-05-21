@@ -1,8 +1,10 @@
 name: Publish to PyPI
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "v[0-9]+.*"
+  workflow_dispatch:
 
 jobs:
   build:

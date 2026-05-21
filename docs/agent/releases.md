@@ -14,7 +14,7 @@ make release                 # uses pyproject.toml version
 make release VERSION=1.2.0   # explicit version
 ```
 
-Runs checks → builds → tags → creates GitHub release → triggers PyPI publish.
+Runs checks → builds → tags. The tag push triggers the GitHub release workflow and PyPI publish workflow.
 
 ## Changelog Generation
 
@@ -81,4 +81,4 @@ Conventional commit format is enforced at two levels:
 - `cliff.toml` — git-cliff changelog config
 - `scripts/release.sh` — main automation
 - `scripts/hooks/commit-msg` — local commit validation
-- `.github/workflows/publish.yml` — PyPI workflow
+- `.github/workflows/publish.yml` — PyPI workflow, triggered by release tags and manually via workflow dispatch

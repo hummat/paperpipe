@@ -11,7 +11,7 @@ Usage:
 Notes:
   - VERSION is optional; if provided, it must match pyproject.toml.
   - Requires: git, uv.
-  - Runs: make check, make build, creates/pushes tag. CI handles GitHub release.
+  - Runs: make check, make build, creates/pushes tag. CI handles GitHub release and PyPI publishing.
 EOF
   exit 0
 fi
@@ -80,4 +80,4 @@ echo "Pushing commit + tag..."
 git push
 git push origin "$TAG"
 
-echo "Done. Tag push will trigger release.yml -> publish.yml workflows."
+echo "Done. Tag push will trigger release.yml and publish.yml workflows."
