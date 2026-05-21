@@ -12,6 +12,7 @@ import threading
 import time
 import traceback
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse
@@ -49,6 +50,8 @@ _MAX_DOWNLOAD_SIZE = 500 * 1024 * 1024  # 500 MB
 _MAX_TAR_MEMBER_SIZE = 100 * 1024 * 1024  # 100 MB
 _MAX_TAR_TOTAL_SIZE = 500 * 1024 * 1024  # 500 MB
 _ARXIV_MIN_INTERVAL_SECONDS = 3.0
+_ARXIV_CONTENT_MAX_RETRIES = 3
+_ARXIV_CONTENT_RETRY_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 _ARXIV_CLIENT: Any | None = None
 _ARXIV_LAST_REQUEST_MONOTONIC: float | None = None
 _ARXIV_RATE_LOCK = threading.Lock()
@@ -83,6 +86,60 @@ def _wait_for_arxiv_request() -> None:
 def _is_arxiv_url(url: str) -> bool:
     hostname = urlparse(url).hostname
     return hostname is not None and (hostname == "arxiv.org" or hostname.endswith(".arxiv.org"))
+
+
+def _parse_retry_after_seconds(raw: Optional[str]) -> Optional[float]:
+    if not raw:
+        return None
+
+    raw = raw.strip()
+    try:
+        seconds = float(raw)
+    except ValueError:
+        try:
+            retry_at = parsedate_to_datetime(raw)
+        except (TypeError, ValueError, IndexError, OverflowError):
+            return None
+        now = datetime.now(retry_at.tzinfo) if retry_at.tzinfo else datetime.now()
+        seconds = (retry_at - now).total_seconds()
+
+    return max(0.0, seconds)
+
+
+def _arxiv_content_retry_delay(response: Any, attempt: int) -> float:
+    retry_after = _parse_retry_after_seconds(getattr(response, "headers", {}).get("Retry-After"))
+    if retry_after is not None:
+        return retry_after
+    return float(2**attempt)
+
+
+def _request_arxiv_content(url: str, *, timeout: int, stream: bool = False) -> Any:
+    """GET an arXiv content URL with shared pacing plus retry/backoff."""
+    import requests
+
+    for attempt in range(_ARXIV_CONTENT_MAX_RETRIES + 1):
+        _wait_for_arxiv_request()
+        try:
+            kwargs: dict[str, Any] = {"timeout": timeout}
+            if stream:
+                kwargs["stream"] = True
+            response = requests.get(url, **kwargs)
+            status = getattr(response, "status_code", None)
+            if status in _ARXIV_CONTENT_RETRY_STATUS_CODES and attempt < _ARXIV_CONTENT_MAX_RETRIES:
+                wait_seconds = _arxiv_content_retry_delay(response, attempt)
+                echo_warning(f"arXiv returned HTTP {status} for {url}. Retrying in {wait_seconds:g}s...")
+                time.sleep(wait_seconds)
+                continue
+            response.raise_for_status()
+            return response
+        except (requests.Timeout, requests.ConnectionError) as e:
+            if attempt >= _ARXIV_CONTENT_MAX_RETRIES:
+                raise
+            wait_seconds = float(2**attempt)
+            echo_warning(f"{type(e).__name__} downloading from arXiv. Retrying in {wait_seconds:g}s...")
+            time.sleep(wait_seconds)
+
+    raise RuntimeError("unreachable arXiv content retry state")
 
 
 def fetch_arxiv_metadata(arxiv_id: str) -> dict:
@@ -180,9 +237,7 @@ def download_source(arxiv_id: str, paper_dir: Path, *, extract_figures: bool = F
     source_url = f"https://arxiv.org/e-print/{arxiv_id}"
 
     try:
-        _wait_for_arxiv_request()
-        response = requests.get(source_url, timeout=30)
-        response.raise_for_status()
+        response = _request_arxiv_content(source_url, timeout=30)
     except requests.Timeout:
         echo_warning(f"Timed out downloading source for {arxiv_id}. Try again later.")
         return None
@@ -298,8 +353,9 @@ def download_pdf_from_url(url: str, *, timeout: int = 60) -> tuple[Optional[Path
 
     try:
         if _is_arxiv_url(url):
-            _wait_for_arxiv_request()
-        response = requests.get(url, timeout=timeout, stream=True)
+            response = _request_arxiv_content(url, timeout=timeout, stream=True)
+        else:
+            response = requests.get(url, timeout=timeout, stream=True)
         response.raise_for_status()
     except requests.Timeout:
         return None, f"Timed out downloading PDF from {url}"

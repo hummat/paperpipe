@@ -406,6 +406,7 @@ export OPENAI_API_KEY=...
 export ANTHROPIC_API_KEY=...
 export GEMINI_API_KEY=...
 export VOYAGE_API_KEY=...
+export OPENROUTER_API_KEY=...
 
 # Ollama (local) + Ollama embeddings
 papi index --backend pqa --pqa-llm ollama/olmo-3:7b --pqa-embedding ollama/nomic-embed-text
@@ -417,7 +418,10 @@ papi index --backend pqa --pqa-llm gpt-4.1 --pqa-summary-llm gpt-4.1-mini --pqa-
 papi index --backend pqa --pqa-llm gemini/gemini-3-flash-preview --pqa-embedding gemini/gemini-embedding-001
 
 # Claude + Voyage Embeddings
-papi index --backend pqa --pqa-llm claude-sonnet-4-5 --pqa-summary-llm claude-haiku-4-5 --pqa-embedding voyage/voyage-3.5
+papi index --backend pqa --pqa-llm claude-sonnet-4-5 --pqa-summary-llm claude-haiku-4-5 --pqa-embedding voyage/voyage-4
+
+# OpenRouter + Voyage Embeddings
+papi index --backend pqa --pqa-llm openrouter/google/gemini-3.5-flash --pqa-embedding voyage/voyage-4
 ```
 
 **Asking:**
@@ -433,7 +437,10 @@ papi ask "how is neus different from nerf?" --backend pqa --pqa-llm gpt-4.1 --pq
 papi ask "how is neus different from nerf?" --backend pqa --pqa-llm gemini/gemini-3-flash-preview --pqa-embedding gemini/gemini-embedding-001
 
 # Claude
-papi ask "how is neus different from nerf?" --backend pqa --pqa-llm claude-sonnet-4-5 --pqa-summary-llm claude-haiku-4-5 --pqa-embedding voyage/voyage-3.5
+papi ask "how is neus different from nerf?" --backend pqa --pqa-llm claude-sonnet-4-5 --pqa-summary-llm claude-haiku-4-5 --pqa-embedding voyage/voyage-4
+
+# OpenRouter
+papi ask "how is neus different from nerf?" --backend pqa --pqa-llm openrouter/google/gemini-3.5-flash --pqa-embedding voyage/voyage-4
 ```
 
 </details>
@@ -459,7 +466,7 @@ papi index --backend pqa --pqa-embedding gemini/gemini-embedding-001
 
 ```bash
 export VOYAGE_API_KEY=...
-papi index --backend pqa --pqa-embedding voyage/voyage-3.5
+papi index --backend pqa --pqa-embedding voyage/voyage-4
 ```
 
 #### OpenAI-compatible endpoints (advanced)
@@ -470,7 +477,7 @@ If you want to hit an OpenAI-compatible endpoint directly (instead of a native L
 ```bash
 export OPENAI_API_BASE=https://api.voyageai.com/v1
 export OPENAI_API_KEY="$VOYAGE_API_KEY"
-papi index --backend pqa --pqa-embedding openai/voyage-3.5
+papi index --backend pqa --pqa-embedding openai/voyage-4
 ```
 
 </details>
@@ -516,6 +523,7 @@ export OPENAI_API_KEY=...
 export ANTHROPIC_API_KEY=...
 export GEMINI_API_KEY=...
 export VOYAGE_API_KEY=...
+export OPENROUTER_API_KEY=...
 
 # Ollama (local) + Ollama embeddings
 papi index --backend leann --leann-embedding-mode ollama --leann-embedding-model nomic-embed-text
@@ -527,7 +535,7 @@ papi index --backend leann --leann-embedding-mode openai --leann-embedding-model
 papi index --backend leann --leann-embedding-mode openai --leann-embedding-model gemini-embedding-001 --leann-embedding-api-base https://generativelanguage.googleapis.com/v1beta/openai/ --leann-embedding-api-key $GEMINI_API_KEY
 
 # Voyage embeddings (OpenAI-compatible)
-papi index --backend leann --leann-embedding-mode openai --leann-embedding-model voyage-3.5 --leann-embedding-api-base https://api.voyageai.com/v1 --leann-embedding-api-key $VOYAGE_API_KEY
+papi index --backend leann --leann-embedding-mode openai --leann-embedding-model voyage-4 --leann-embedding-api-base https://api.voyageai.com/v1 --leann-embedding-api-key $VOYAGE_API_KEY
 ```
 
 **Asking:**
@@ -540,7 +548,10 @@ papi ask "how is neus different from nerf?" --backend leann --leann-provider oll
 papi ask "how is neus different from nerf?" --backend leann --leann-provider openai --leann-model gpt-4.1 --leann-api-key $OPENAI_API_KEY --leann-index papers_openai_text-embedding-3-small
 
 # Anthropic + Voyage embeddings
-papi ask "how is neus different from nerf?" --backend leann --leann-provider anthropic --leann-model claude-sonnet-4-5 --leann-api-key $ANTHROPIC_API_KEY --leann-index papers_openai_voyage-3.5
+papi ask "how is neus different from nerf?" --backend leann --leann-provider anthropic --leann-model claude-sonnet-4-5 --leann-api-key $ANTHROPIC_API_KEY --leann-index papers_openai_voyage-4
+
+# OpenRouter + Voyage embeddings
+papi ask "how is neus different from nerf?" --backend leann --leann-provider openai --leann-model google/gemini-3.5-flash --leann-api-base https://openrouter.ai/api/v1 --leann-api-key $OPENROUTER_API_KEY --leann-index papers_openai_voyage-4
 
 # Gemini (OpenAI-compatible)
 papi ask "how is neus different from nerf?" --backend leann --leann-provider openai --leann-model gemini-3-flash-preview --leann-api-base https://generativelanguage.googleapis.com/v1beta/openai/ --leann-api-key $GEMINI_API_KEY --leann-index papers_openai_gemini-embedding-001
@@ -567,7 +578,7 @@ papi index --backend leann --leann-embedding-mode openai --leann-embedding-model
 
 # Voyage (OpenAI-compatible)
 export VOYAGE_API_KEY=...
-papi index --backend leann --leann-embedding-mode openai --leann-embedding-model voyage-3.5 --leann-embedding-api-base https://api.voyageai.com/v1 --leann-embedding-api-key $VOYAGE_API_KEY
+papi index --backend leann --leann-embedding-mode openai --leann-embedding-model voyage-4 --leann-embedding-api-base https://api.voyageai.com/v1 --leann-embedding-api-key $VOYAGE_API_KEY
 ```
 
 **Gemini notes:**
@@ -668,7 +679,7 @@ export OLLAMA_HOST=http://localhost:11434
 Check which models work with your keys:
 ```bash
 papi models                    # probe default models for your configured keys
-papi models latest             # probe latest models (gpt-4o, gemini-2.5, claude-sonnet-4-5)
+papi models latest             # probe latest model candidates (gpt-5, Gemini via OpenRouter/Gemini, Claude, Voyage 4)
 papi models last-gen           # probe previous generation
 papi models all                # probe broader superset
 papi models --verbose          # show underlying provider errors

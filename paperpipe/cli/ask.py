@@ -66,7 +66,7 @@ from ..output import debug, echo_error, echo_progress, echo_warning
     "embedding",
     default=None,
     show_default=False,
-    help="Embedding model for text chunks (e.g., text-embedding-3-small, voyage-3-lite).",
+    help="Embedding model for text chunks (e.g., text-embedding-3-small, voyage/voyage-4-lite).",
 )
 @click.option(
     "--pqa-temperature",

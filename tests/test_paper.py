@@ -962,6 +962,55 @@ class TestSearchArxivByTitle:
 class TestDownloadSource:
     """Unit tests for download_source with mocked requests."""
 
+    def test_retries_source_download_after_retry_after_rate_limit(self, tmp_path, monkeypatch):
+        """arXiv source downloads should honor Retry-After and retry transient rate limits."""
+        import io
+        import time
+        from unittest.mock import MagicMock
+
+        import requests
+
+        tex_content = r"\begin{document}Hello\end{document}"
+        tar_buffer = io.BytesIO()
+        with tarfile.open(fileobj=tar_buffer, mode="w:gz") as tar:
+            tex_bytes = tex_content.encode("utf-8")
+            info = tarfile.TarInfo(name="main.tex")
+            info.size = len(tex_bytes)
+            tar.addfile(info, io.BytesIO(tex_bytes))
+        tar_buffer.seek(0)
+
+        first = MagicMock()
+        first.status_code = 429
+        first.headers = {"Retry-After": "4"}
+        first.raise_for_status.side_effect = requests.HTTPError("429 Too Many Requests", response=first)
+
+        second = MagicMock()
+        second.status_code = 200
+        second.headers = {}
+        second.content = tar_buffer.read()
+        second.raise_for_status = MagicMock()
+
+        responses = iter([first, second])
+        calls = []
+
+        def fake_get(url, timeout):
+            calls.append((url, timeout))
+            return next(responses)
+
+        sleeps = []
+        monkeypatch.setattr(requests, "get", fake_get)
+        monkeypatch.setattr(time, "sleep", lambda seconds: sleeps.append(seconds))
+
+        paper_dir = tmp_path / "test-paper"
+        paper_dir.mkdir()
+
+        result = paperpipe.download_source("1706.03762", paper_dir)
+
+        assert result is not None
+        assert r"\begin{document}" in result
+        assert len(calls) == 2
+        assert sleeps == [4.0]
+
     def test_waits_before_source_download_when_recent_arxiv_request_exists(self, tmp_path, monkeypatch):
         """The source archive fetch should share arXiv-domain pacing."""
         import time
@@ -1184,6 +1233,47 @@ class TestDownloadSource:
 
 class TestDownloadPdfFromUrl:
     """Unit tests for direct PDF URL downloads."""
+
+    def test_retries_arxiv_pdf_download_after_retryable_http_error(self, monkeypatch):
+        """Direct arXiv PDF URLs should retry transient HTTP errors before failing."""
+        import time
+        from unittest.mock import MagicMock
+
+        import requests
+
+        first = MagicMock()
+        first.status_code = 503
+        first.headers = {"Retry-After": "2"}
+        first.raise_for_status.side_effect = requests.HTTPError("503 Service Unavailable", response=first)
+
+        second = MagicMock()
+        second.status_code = 200
+        second.headers = {}
+        second.raise_for_status = MagicMock()
+        second.iter_content.return_value = [b"%PDF"]
+
+        responses = iter([first, second])
+        calls = []
+
+        def fake_get(url, timeout, stream):
+            calls.append((url, timeout, stream))
+            return next(responses)
+
+        sleeps = []
+        monkeypatch.setattr(requests, "get", fake_get)
+        monkeypatch.setattr(time, "sleep", lambda seconds: sleeps.append(seconds))
+
+        temp_path, error = paper_mod.download_pdf_from_url("https://arxiv.org/pdf/1706.03762")
+
+        try:
+            assert error is None
+            assert temp_path is not None
+            assert temp_path.read_bytes() == b"%PDF"
+            assert len(calls) == 2
+            assert sleeps == [2.0]
+        finally:
+            if temp_path:
+                temp_path.unlink(missing_ok=True)
 
     def test_waits_for_arxiv_pdf_urls(self, monkeypatch):
         """Direct arXiv PDF URLs should share arXiv-domain pacing."""

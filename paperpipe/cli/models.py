@@ -180,6 +180,7 @@ def models(
             if "completion" in requested_kinds:
                 completion_groups: list[tuple[str, list[str]]] = [
                     ("openai", ["gpt-5.2", "gpt-5.1"]),
+                    ("openrouter", ["openrouter/google/gemini-3.5-flash"]),
                     ("gemini", ["gemini/gemini-3-flash-preview"]),
                     ("anthropic", ["claude-sonnet-4-5"]),
                 ]
@@ -192,7 +193,7 @@ def models(
                 embedding_groups: list[tuple[str, list[str]]] = [
                     ("openai", ["text-embedding-3-large", "text-embedding-3-small"]),
                     ("gemini", ["gemini/gemini-embedding-001"]),
-                    ("voyage", ["voyage/voyage-3-large"]),
+                    ("voyage", ["voyage/voyage-4", "voyage/voyage-4-lite"]),
                 ]
                 for provider, candidates in embedding_groups:
                     if provider not in enabled_providers:
@@ -235,6 +236,7 @@ def models(
                 "gpt-4o",
                 "gpt-4o-mini",
                 # Google
+                "openrouter/google/gemini-3.5-flash",
                 "gemini/gemini-3-flash-preview",
                 "gemini/gemini-3-pro-preview",
                 "gemini/gemini-2.5-flash",
@@ -252,6 +254,9 @@ def models(
                 # Google + Voyage
                 "gemini/gemini-embedding-001",
                 "gemini/text-embedding-004",
+                "voyage/voyage-4-large",
+                "voyage/voyage-4",
+                "voyage/voyage-4-lite",
                 "voyage/voyage-3-large",
                 "voyage/voyage-3-lite",
             ]
@@ -260,7 +265,8 @@ def models(
                 # OpenAI (flagship)
                 "gpt-5.2",
                 "gpt-5.1",
-                # Google (Gemini 3 series - preview ids)
+                # Google/OpenRouter
+                "openrouter/google/gemini-3.5-flash",
                 "gemini/gemini-3-flash-preview",
                 "gemini/gemini-3-pro-preview",
                 # Anthropic (Claude 4.5)
@@ -271,7 +277,9 @@ def models(
                 "text-embedding-3-large",
                 "text-embedding-3-small",
                 "gemini/gemini-embedding-001",
-                "voyage/voyage-3-large",
+                "voyage/voyage-4-large",
+                "voyage/voyage-4",
+                "voyage/voyage-4-lite",
             ]
         elif effective_preset.lower() == "last-gen":
             completion_models = [
@@ -303,7 +311,7 @@ def models(
             embedding_models = [
                 default_embedding_model(),
                 "text-embedding-3-small",
-                "voyage/voyage-3-large",
+                "voyage/voyage-4",
             ]
 
         # Only probe providers that are configured with an API key.

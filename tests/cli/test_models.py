@@ -147,6 +147,7 @@ class TestModelsCommand:
         monkeypatch.setenv("GEMINI_API_KEY", "x")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
         monkeypatch.setenv("VOYAGE_API_KEY", "x")
+        monkeypatch.setenv("OPENROUTER_API_KEY", "x")
 
         runner = CliRunner()
         result = runner.invoke(cli_mod.cli, ["models", "--json"])
@@ -154,11 +155,12 @@ class TestModelsCommand:
 
         # Default run probes one "latest" completion + embedding per configured provider.
         assert ("completion", "gpt-5.2") in calls
+        assert ("completion", "openrouter/google/gemini-3.5-flash") in calls
         assert ("completion", "gemini/gemini-3-flash-preview") in calls
         assert ("completion", "claude-sonnet-4-5") in calls
         assert ("embedding", "text-embedding-3-large") in calls
         assert ("embedding", "gemini/gemini-embedding-001") in calls
-        assert ("embedding", "voyage/voyage-3-large") in calls
+        assert ("embedding", "voyage/voyage-4") in calls
 
     def test_models_positional_preset_is_explicit(self, monkeypatch):
         calls = []
@@ -178,6 +180,7 @@ class TestModelsCommand:
         monkeypatch.setenv("GEMINI_API_KEY", "x")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
         monkeypatch.setenv("VOYAGE_API_KEY", "x")
+        monkeypatch.setenv("OPENROUTER_API_KEY", "x")
 
         runner = CliRunner()
         result = runner.invoke(cli_mod.cli, ["models", "latest", "--kind", "completion", "--json"])
@@ -185,5 +188,6 @@ class TestModelsCommand:
         json.loads(result.output)
 
         # Explicit "latest" probes the full preset list (includes Pro/Opus).
+        assert ("completion", "openrouter/google/gemini-3.5-flash") in calls
         assert ("completion", "gemini/gemini-3-pro-preview") in calls
         assert ("completion", "claude-opus-4-5") in calls
