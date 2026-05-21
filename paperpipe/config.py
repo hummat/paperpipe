@@ -41,6 +41,7 @@ DEFAULT_LEANN_LLM_PROVIDER = "ollama"
 DEFAULT_LEANN_LLM_MODEL = "olmo-3:7b"
 DEFAULT_LEANN_INDEX_NAME = "papers"
 GEMINI_OPENAI_COMPAT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+OPENROUTER_OPENAI_COMPAT_BASE_URL = "https://openrouter.ai/api/v1"
 
 
 _CONFIG_CACHE: Optional[tuple[Path, Optional[float], dict[str, Any]]] = None
@@ -495,8 +496,8 @@ def _split_model_id(model_id: str) -> tuple[Optional[str], str]:
 
 def _infer_leann_llm_provider_from_litellm_id(model_id: str) -> Optional[str]:
     provider, model = _split_model_id(model_id)
-    if provider == "gemini":
-        # Gemini is supported by LEANN via OpenAI-compatible endpoint.
+    if provider in {"gemini", "openrouter"}:
+        # Gemini and OpenRouter are supported by LEANN via OpenAI-compatible endpoints.
         return "openai"
     if provider in {"ollama", "openai"}:
         return provider
@@ -533,8 +534,10 @@ def _default_leann_llm_provider_fallback() -> str:
 
 def _default_leann_llm_model_fallback() -> str:
     model_id = default_llm_model()
-    _, model = _split_model_id(model_id)
+    provider, model = _split_model_id(model_id)
     if _infer_leann_llm_provider_from_litellm_id(model_id) is not None:
+        if provider == "gemini":
+            return model.removeprefix("gemini/")
         return model
     debug(
         "Could not infer LEANN LLM model from default_llm_model=%r; falling back to %r.",
@@ -621,6 +624,21 @@ def leann_index_name_for_embedding(*, embedding_mode: str, embedding_model: str)
     safe_mode = mode.replace("/", "_").replace(":", "_").strip() or "default"
     safe_model = model.replace("/", "_").replace(":", "_").strip() or "default"
     return f"{DEFAULT_LEANN_INDEX_NAME}_{safe_mode}_{safe_model}"
+
+
+def leann_embedding_from_index_name(index_name: str) -> Optional[tuple[str, str]]:
+    """Best-effort inverse of leann_index_name_for_embedding for explicit index names."""
+    name = (index_name or "").strip()
+    prefix = f"{DEFAULT_LEANN_INDEX_NAME}_"
+    if not name.startswith(prefix):
+        return None
+    suffix = name[len(prefix) :]
+    mode, sep, model = suffix.partition("_")
+    if not sep or not mode or not model:
+        return None
+    if mode not in {"sentence-transformers", "openai", "mlx", "ollama"}:
+        return None
+    return mode, model
 
 
 def default_leann_index_name(*, embedding_mode: Optional[str] = None, embedding_model: Optional[str] = None) -> str:

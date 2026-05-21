@@ -64,6 +64,7 @@ class TestAskLeannCommand:
         index_dir = temp_db / ".leann" / "indexes" / "my-index"
         index_dir.mkdir(parents=True)
         (index_dir / "documents.leann.meta.json").write_text("{}")
+        (index_dir / "documents.index").write_text("")
 
         runner = pytest.importorskip("click.testing").CliRunner()
         result = runner.invoke(

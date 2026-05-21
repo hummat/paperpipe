@@ -20,6 +20,7 @@ from paperpipe.leann import FileEntry, LeannManifest, _redact_cmd
 cli_mod = import_module("paperpipe.cli")
 # Import the index submodule for patching _leann_build_index
 cli_index_mod = import_module("paperpipe.cli.index")
+cli_ask_mod = import_module("paperpipe.cli.ask")
 
 
 def _make_manifest(*, files: dict[str, FileEntry] | None = None, is_compact: bool = False) -> LeannManifest:
@@ -35,6 +36,12 @@ def _make_manifest(*, files: dict[str, FileEntry] | None = None, is_compact: boo
             "files": files or {},
         },
     )
+
+
+def _write_leann_index_stub(index_dir: Path) -> None:
+    index_dir.mkdir(parents=True, exist_ok=True)
+    (index_dir / "documents.leann.meta.json").write_text("{}")
+    (index_dir / "documents.index").write_text("")
 
 
 class TestLeannCli:
@@ -104,9 +111,7 @@ class TestLeannAsk:
     def test_ask_backend_leann_allows_passthrough_args(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann" if cmd == "leann" else None)
 
-        meta = temp_db / ".leann" / "indexes" / "papers" / "documents.leann.meta.json"
-        meta.parent.mkdir(parents=True)
-        meta.write_text("{}")
+        _write_leann_index_stub(temp_db / ".leann" / "indexes" / "papers")
 
         mock_popen = MockPopen(returncode=0, stdout="Answer\n")
         monkeypatch.setattr(subprocess, "Popen", mock_popen)
@@ -213,9 +218,7 @@ class TestLeannCommands:
     def test_ask_backend_leann_runs_leann_ask(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann" if cmd == "leann" else None)
 
-        meta = temp_db / ".leann" / "indexes" / "papers_ollama_nomic-embed-text" / "documents.leann.meta.json"
-        meta.parent.mkdir(parents=True)
-        meta.write_text("{}")
+        _write_leann_index_stub(temp_db / ".leann" / "indexes" / "papers_ollama_nomic-embed-text")
 
         mock_popen = MockPopen(returncode=0, stdout="OUT\n")
         monkeypatch.setattr(subprocess, "Popen", mock_popen)
@@ -258,9 +261,7 @@ class TestLeannCommands:
         monkeypatch.delenv("PAPERPIPE_LEANN_LLM_MODEL", raising=False)
         monkeypatch.setattr(config, "_CONFIG_CACHE", None)
 
-        meta = temp_db / ".leann" / "indexes" / "papers_ollama_nomic-embed-text" / "documents.leann.meta.json"
-        meta.parent.mkdir(parents=True)
-        meta.write_text("{}")
+        _write_leann_index_stub(temp_db / ".leann" / "indexes" / "papers_ollama_nomic-embed-text")
 
         mock_popen = MockPopen(returncode=0, stdout="OUT\n")
         monkeypatch.setattr(subprocess, "Popen", mock_popen)
@@ -277,6 +278,31 @@ class TestLeannCommands:
         assert "--api-base" in cmd and paperpipe.GEMINI_OPENAI_COMPAT_BASE_URL in cmd
         assert "--api-key" in cmd and "test-key" in cmd
 
+    def test_ask_backend_leann_defaults_to_openrouter_openai_compat(
+        self, temp_db: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann" if cmd == "leann" else None)
+        monkeypatch.setenv("PAPERPIPE_LLM_MODEL", "openrouter/google/gemini-3.5-flash")
+        monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+        monkeypatch.delenv("PAPERPIPE_LEANN_LLM_PROVIDER", raising=False)
+        monkeypatch.delenv("PAPERPIPE_LEANN_LLM_MODEL", raising=False)
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
+
+        _write_leann_index_stub(temp_db / ".leann" / "indexes" / "papers_ollama_nomic-embed-text")
+
+        mock_popen = MockPopen(returncode=0, stdout="OUT\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["ask", "what is x", "--backend", "leann", "--leann-no-auto-index"])
+        assert result.exit_code == 0, result.output
+
+        cmd, _ = mock_popen.calls[0]
+        assert "--llm" in cmd and "openai" in cmd
+        assert "--model" in cmd and "google/gemini-3.5-flash" in cmd
+        assert "--api-base" in cmd and paperpipe.OPENROUTER_OPENAI_COMPAT_BASE_URL in cmd
+        assert "--api-key" in cmd and "openrouter-key" in cmd
+
     def test_ask_backend_leann_requires_index(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann" if cmd == "leann" else None)
 
@@ -288,9 +314,7 @@ class TestLeannCommands:
         def fake_run(args: list[str], **kwargs):
             build_calls.append((args, kwargs))
             # Simulate that `leann build` created the index metadata file.
-            meta = temp_db / ".leann" / "indexes" / "papers_ollama_nomic-embed-text" / "documents.leann.meta.json"
-            meta.parent.mkdir(parents=True, exist_ok=True)
-            meta.write_text('{"backend_name":"hnsw"}')
+            _write_leann_index_stub(temp_db / ".leann" / "indexes" / "papers_ollama_nomic-embed-text")
             return types.SimpleNamespace(returncode=0)
 
         monkeypatch.setattr(subprocess, "run", fake_run)
@@ -311,6 +335,44 @@ class TestLeannCommands:
         result = runner.invoke(cli_mod.cli, ["ask", "q", "--backend", "leann", "--leann-no-auto-index"])
         assert result.exit_code != 0
         assert "Build it first" in result.output
+
+    def test_ask_backend_leann_auto_build_infers_embedding_from_explicit_index(
+        self, temp_db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("VOYAGE_API_KEY", "voyage-key")
+
+        captured: dict[str, object] = {}
+
+        def fake_build(
+            *, index_name: str, docs_dir: Path, force: bool, no_compact: bool, extra_args: list[str]
+        ) -> None:
+            captured["index_name"] = index_name
+            captured["extra_args"] = list(extra_args)
+
+        def fake_ask(**kwargs: object) -> None:
+            captured["ask_index_name"] = kwargs["index_name"]
+
+        monkeypatch.setattr(cli_ask_mod, "_leann_build_index", fake_build)
+        monkeypatch.setattr(cli_ask_mod, "_ask_leann", fake_ask)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli_mod.cli,
+            ["ask", "q", "--backend", "leann", "--leann-index", "papers_openai_voyage-4"],
+        )
+        assert result.exit_code == 0, result.output
+        assert captured["index_name"] == "papers_openai_voyage-4"
+        assert captured["ask_index_name"] == "papers_openai_voyage-4"
+        assert captured["extra_args"] == [
+            "--embedding-mode",
+            "openai",
+            "--embedding-model",
+            "voyage-4",
+            "--embedding-api-base",
+            "https://api.voyageai.com/v1",
+            "--embedding-api-key",
+            "voyage-key",
+        ]
 
 
 class TestLeannIndexCommand:
@@ -383,6 +445,32 @@ class TestLeannIndexCommand:
 
         cmd, _ = calls[0]
         assert "--no-compact" not in cmd, "--leann-compact should prevent --no-compact"
+
+    def test_index_backend_leann_forces_rebuild_when_manifest_exists_but_index_files_missing(
+        self, temp_db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann" if cmd == "leann" else None)
+
+        from paperpipe.leann import _save_leann_manifest
+
+        docs_dir = temp_db / ".pqa_papers"
+        docs_dir.mkdir(parents=True)
+        (docs_dir / "test-paper.pdf").touch()
+        _save_leann_manifest("test-index", _make_manifest())
+
+        calls: list[list[str]] = []
+
+        def fake_run(args: list[str], **_kwargs: object):
+            calls.append(args)
+            _write_leann_index_stub(temp_db / ".leann" / "indexes" / "test-index")
+            return types.SimpleNamespace(returncode=0)
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["index", "--backend", "leann", "--leann-index", "test-index"])
+        assert result.exit_code == 0, result.output
+        assert "--force" in calls[0]
 
 
 class TestLeannManifest:
@@ -677,6 +765,7 @@ class TestLeannIncrementalUpdate:
 
         manifest = _make_manifest()
         _save_leann_manifest("test-index", manifest)
+        _write_leann_index_stub(temp_db / ".leann" / "indexes" / "test-index")
 
         with pytest.raises(IncrementalUpdateError, match="mismatch"):
             _leann_incremental_update(
@@ -702,6 +791,7 @@ class TestLeannIncrementalUpdate:
             }
         )
         _save_leann_manifest("test-index", manifest)
+        _write_leann_index_stub(temp_db / ".leann" / "indexes" / "test-index")
 
         with pytest.raises(IncrementalUpdateError, match="Removed files"):
             _leann_incremental_update(
@@ -729,6 +819,7 @@ class TestLeannIncrementalUpdate:
             }
         )
         _save_leann_manifest("test-index", manifest)
+        _write_leann_index_stub(temp_db / ".leann" / "indexes" / "test-index")
 
         # Mock LEANN API import to avoid requiring LEANN
         class MockLeannBuilder:

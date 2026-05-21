@@ -647,6 +647,7 @@ papi index --backend leann --leann-doc-chunk-size 350 --leann-doc-chunk-overlap 
 ```
 
 By default, `papi ask --backend leann` auto-builds the index if missing (disable with `--leann-no-auto-index`).
+For explicit derived names such as `papers_openai_voyage-4`, auto-build infers the embedding mode/model from the name.
 
 </details>
 

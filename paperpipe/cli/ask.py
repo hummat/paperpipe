@@ -31,10 +31,25 @@ from ..config import (
     default_pqa_temperature,
     default_pqa_timeout,
     default_pqa_verbosity,
+    leann_embedding_from_index_name,
     pqa_index_name_for_embedding,
 )
-from ..leann import _ask_leann, _leann_build_index, _leann_index_meta_path
+from ..leann import _ask_leann, _leann_build_index, _leann_index_exists
 from ..output import debug, echo_error, echo_progress, echo_warning
+
+
+def _leann_auto_build_args(index_name: str) -> list[str]:
+    inferred = leann_embedding_from_index_name(index_name)
+    if inferred is None:
+        return []
+
+    embedding_mode, embedding_model = inferred
+    args = ["--embedding-mode", embedding_mode, "--embedding-model", embedding_model]
+    if embedding_mode == "openai" and embedding_model.lower().startswith("voyage-"):
+        voyage_key = os.environ.get("VOYAGE_API_KEY")
+        if voyage_key:
+            args.extend(["--embedding-api-base", "https://api.voyageai.com/v1", "--embedding-api-key", voyage_key])
+    return args
 
 
 @click.command(context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))
@@ -278,13 +293,16 @@ def ask(
         config.PAPERS_DIR.mkdir(parents=True, exist_ok=True)
         if not leann_no_auto_index:
             index_name = (leann_index or "").strip() or DEFAULT_LEANN_INDEX_NAME
-            meta_path = _leann_index_meta_path(index_name)
-            if not meta_path.exists():
+            if not _leann_index_exists(index_name):
                 echo_progress(f"LEANN index {index_name!r} not found; building it now...")
                 staging_dir = (config.PAPER_DB / ".pqa_papers").expanduser()
                 paperqa._refresh_pqa_pdf_staging_dir(staging_dir=staging_dir)
                 _leann_build_index(
-                    index_name=index_name, docs_dir=staging_dir, force=False, no_compact=True, extra_args=[]
+                    index_name=index_name,
+                    docs_dir=staging_dir,
+                    force=False,
+                    no_compact=True,
+                    extra_args=_leann_auto_build_args(index_name),
                 )
         _ask_leann(
             query=query,

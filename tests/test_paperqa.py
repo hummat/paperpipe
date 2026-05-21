@@ -31,6 +31,14 @@ class TestPqaOutputFiltering:
         err = config._ollama_reachability_error(api_base="http://localhost:11434")
         assert err is not None and "not reachable" in err
 
+    def test_cost_mapping_warning_is_noisy(self) -> None:
+        line = (
+            "Failed to calculate cost for google/gemini-3.5-flash-20260519: "
+            "This model isn't mapped yet. model=google/gemini-3.5-flash-20260519\n"
+        )
+        assert paperqa._pqa_is_noisy_stream_line(line)
+        assert paperqa._pqa_is_noisy_index_line(line)
+
 
 class TestPqaIndexNaming:
     def test_pqa_index_name_for_embedding_is_stable_and_safe(self):

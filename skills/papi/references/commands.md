@@ -47,7 +47,7 @@
 | `papi ask "q" --format evidence-blocks` | JSON output with citations |
 | `papi ask "q" --pqa-agent-type fake` | Cheaper/deterministic |
 
-Common flags: `--pqa-llm`, `--pqa-embedding`, `--pqa-rebuild-index`, `--leann-provider`, `--leann-model`.
+Common flags: `--pqa-llm`, `--pqa-embedding`, `--pqa-rebuild-index`, `--leann-provider`, `--leann-model`, `--leann-index`.
 
 ## Per-Paper Files
 

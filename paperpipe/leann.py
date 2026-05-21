@@ -19,11 +19,13 @@ from . import config
 from .config import (
     DEFAULT_LEANN_INDEX_NAME,
     GEMINI_OPENAI_COMPAT_BASE_URL,
+    OPENROUTER_OPENAI_COMPAT_BASE_URL,
     _gemini_api_key,
     default_leann_embedding_mode,
     default_leann_embedding_model,
     default_leann_llm_model,
     default_leann_llm_provider,
+    default_llm_model,
 )
 from .output import debug, echo_error, echo_progress, echo_warning
 from .paperqa import _validate_index_name
@@ -73,6 +75,22 @@ class IndexDelta:
 def _leann_manifest_path(index_name: str) -> Path:
     """Path to paperpipe's incremental indexing manifest."""
     return config.PAPER_DB / ".leann" / "indexes" / _validate_index_name(index_name) / "paperpipe_manifest.json"
+
+
+def _leann_index_dir(index_name: str) -> Path:
+    return config.PAPER_DB / ".leann" / "indexes" / _validate_index_name(index_name)
+
+
+def _leann_index_meta_path(index_name: str) -> Path:
+    return _leann_index_dir(index_name) / "documents.leann.meta.json"
+
+
+def _leann_index_file_path(index_name: str) -> Path:
+    return _leann_index_dir(index_name) / "documents.index"
+
+
+def _leann_index_exists(index_name: str) -> bool:
+    return _leann_index_meta_path(index_name).exists() and _leann_index_file_path(index_name).exists()
 
 
 def _load_leann_manifest(index_name: str) -> Optional[LeannManifest]:
@@ -278,6 +296,8 @@ def _leann_incremental_update(
         raise IncrementalUpdateError("No manifest found; run full build first")
     if manifest.get("is_compact", True):
         raise IncrementalUpdateError("Index is compact; incremental updates not supported")
+    if not _leann_index_exists(index_name):
+        raise IncrementalUpdateError("LEANN index files are missing")
 
     meta_backend_name = _load_leann_backend_name(index_name)
     meta_backend_kwargs = _load_leann_backend_kwargs(index_name)
@@ -312,7 +332,7 @@ def _leann_incremental_update(
     except ImportError as e:
         raise IncrementalUpdateError(f"LEANN Python API not available: {e}") from e
 
-    index_dir = config.PAPER_DB / ".leann" / "indexes" / _validate_index_name(index_name)
+    index_dir = _leann_index_dir(index_name)
     index_path = index_dir / "documents.leann"
 
     index_file = index_dir / f"{index_path.stem}.index"
@@ -526,13 +546,17 @@ def _extract_arg_value(args: list[str], flag: str) -> Optional[str]:
     return None
 
 
+def _openrouter_api_key() -> Optional[str]:
+    return config.os.environ.get("OPENROUTER_API_KEY")
+
+
+def _default_llm_is_openrouter() -> bool:
+    return default_llm_model().strip().lower().startswith("openrouter/")
+
+
 # -----------------------------------------------------------------------------
 # Index path helpers
 # -----------------------------------------------------------------------------
-
-
-def _leann_index_meta_path(index_name: str) -> Path:
-    return config.PAPER_DB / ".leann" / "indexes" / _validate_index_name(index_name) / "documents.leann.meta.json"
 
 
 def _load_leann_backend_name(index_name: str) -> Optional[str]:
@@ -623,6 +647,7 @@ def _leann_build_index(
             return
         except IncrementalUpdateError as e:
             echo_warning(f"Incremental update not possible ({e}); performing full rebuild")
+            force = True
             # Fall through to full rebuild
 
     has_embedding_model_override = any(
@@ -742,15 +767,23 @@ def _ask_leann(
     model = (model or "").strip() or default_leann_llm_model()
 
     index_name = (index_name or "").strip() or DEFAULT_LEANN_INDEX_NAME
-    meta_path = _leann_index_meta_path(index_name)
-    if not meta_path.exists():
-        echo_error(f"LEANN index {index_name!r} not found at {meta_path}")
+    if not _leann_index_exists(index_name):
+        echo_error(f"LEANN index {index_name!r} not found at {_leann_index_dir(index_name)}")
         echo_error("Build it first: papi index --backend leann")
         raise SystemExit(1)
 
     cmd: list[str] = ["leann", "ask", index_name, query]
     cmd.extend(["--llm", provider])
     cmd.extend(["--model", model])
+    if not api_base and provider.lower() == "openai" and _default_llm_is_openrouter():
+        api_base = OPENROUTER_OPENAI_COMPAT_BASE_URL
+    if not api_key and provider.lower() == "openai" and _default_llm_is_openrouter():
+        api_key = _openrouter_api_key()
+        if not api_key:
+            echo_warning(
+                "LEANN is configured for OpenRouter via OpenAI-compatible endpoint but OPENROUTER_API_KEY "
+                "is not set; the request will likely fail."
+            )
     if not api_base and provider.lower() == "openai" and model.lower().startswith("gemini-"):
         api_base = GEMINI_OPENAI_COMPAT_BASE_URL
     if not api_key and provider.lower() == "openai" and model.lower().startswith("gemini-"):

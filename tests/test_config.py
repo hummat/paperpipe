@@ -165,6 +165,28 @@ class TestConfigPrecedence:
         assert paperpipe.default_leann_embedding_mode() == "ollama"
         assert paperpipe.default_leann_embedding_model() == "nomic-embed-text"
 
+    def test_leann_defaults_derive_from_openrouter_model(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        for env_var in [
+            "PAPERPIPE_LLM_MODEL",
+            "PAPERPIPE_LEANN_LLM_PROVIDER",
+            "PAPERPIPE_LEANN_LLM_MODEL",
+        ]:
+            monkeypatch.delenv(env_var, raising=False)
+
+        (temp_db / "config.toml").write_text(
+            "\n".join(
+                [
+                    "[llm]",
+                    'model = "openrouter/google/gemini-3.5-flash"',
+                    "",
+                ]
+            )
+        )
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
+
+        assert paperpipe.default_leann_llm_provider() == "openai"
+        assert paperpipe.default_leann_llm_model() == "google/gemini-3.5-flash"
+
     def test_leann_defaults_derive_from_project_models(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
         for env_var in [
             "PAPERPIPE_LLM_MODEL",
@@ -322,6 +344,14 @@ class TestConfigPrecedence:
         monkeypatch.delenv("PAPERPIPE_LEANN_INDEX_BY_EMBEDDING", raising=False)
 
         assert paperpipe.default_leann_index_name() == "papers_openai_text-embedding-3-small"
+
+    def test_leann_embedding_from_index_name_parses_derived_name(self) -> None:
+        assert paperpipe.leann_embedding_from_index_name("papers_openai_voyage-4") == ("openai", "voyage-4")
+        assert paperpipe.leann_embedding_from_index_name("papers_ollama_nomic-embed-text") == (
+            "ollama",
+            "nomic-embed-text",
+        )
+        assert paperpipe.leann_embedding_from_index_name("papers") is None
 
     def test_pqa_config_env_vars_direct(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
         """Test env vars are read correctly without config file."""

@@ -531,6 +531,7 @@ _PQA_NOISY_STREAM_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^Loading\b"),
     re.compile(r"^Using settings\b"),
     re.compile(r"^Cannot add callback - would exceed MAX_CALLBACKS limit of\b"),
+    re.compile(r"^Failed to calculate cost for .+This model isn't mapped yet\."),
     re.compile(r"^/.*pydantic/main\.py:\d+:\s+UserWarning:\s+Pydantic serializer warnings:\s*$"),
     re.compile(r"^\s+PydanticSerializationUnexpectedValue\("),
     re.compile(r"^\s+return self\.__pydantic_serializer__\.to_python\("),
@@ -542,6 +543,7 @@ _PQA_NOISY_STREAM_PATTERNS: tuple[re.Pattern[str], ...] = (
 
 _PQA_INDEX_NOISY_STREAM_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^Cannot add callback - would exceed MAX_CALLBACKS limit of\b"),
+    re.compile(r"^Failed to calculate cost for .+This model isn't mapped yet\."),
     re.compile(r"^/.*pydantic/main\.py:\d+:\s+UserWarning:\s+Pydantic serializer warnings:\s*$"),
     re.compile(r"^\s+PydanticSerializationUnexpectedValue\("),
     re.compile(r"^\s+return self\.__pydantic_serializer__\.to_python\("),

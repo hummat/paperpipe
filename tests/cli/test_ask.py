@@ -276,7 +276,12 @@ class TestAskCommand:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
         monkeypatch.setattr(paperqa, "_pillow_available", lambda: True)
 
-        mock_popen = MockPopen(returncode=0, stdout="New file to index: test-paper.pdf...\nAnswer\n")
+        noisy_cost = (
+            "Failed to calculate cost for google/gemini-3.5-flash-20260519: "
+            "This model isn't mapped yet. model=google/gemini-3.5-flash-20260519, "
+            "custom_llm_provider=openrouter.\n"
+        )
+        mock_popen = MockPopen(returncode=0, stdout=f"New file to index: test-paper.pdf...\n{noisy_cost}Answer\n")
         monkeypatch.setattr(subprocess, "Popen", mock_popen)
 
         (temp_db / "papers" / "test-paper").mkdir(parents=True)
@@ -287,6 +292,7 @@ class TestAskCommand:
         assert result.exit_code == 0, result.output
         assert "Answer" in result.output
         assert "New file to index:" not in result.output
+        assert "Failed to calculate cost" not in result.output
 
     def test_ask_pqa_raw_disables_output_filtering(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
