@@ -329,14 +329,14 @@ def ask(
     if not has_settings_flag:
         cmd.extend(["--settings", default_pqa_settings_name()])
 
-    # PaperQA2 can attempt PDF image extraction (multimodal parsing). If Pillow isn't installed,
-    # PyPDF raises at import-time when accessing `page.images`. Disable multimodal parsing unless
-    # the user explicitly provides parsing settings.
+    # PaperQA2's multimodal default uses an enrichment LLM during indexing. Managed paperpipe
+    # indexes default to text-only retrieval; pass explicit parsing settings to opt in.
     has_parsing_override = any(
         arg == "--parsing" or arg.startswith("--parsing.") or arg.startswith("--parsing=") for arg in ctx.args
     )
-    if not has_parsing_override and not paperqa._pillow_available():
+    if not has_parsing_override:
         cmd.extend(["--parsing.multimodal", "OFF"])
+        cmd.extend(["--parsing.use_doc_details", "false"])
 
     llm_for_pqa: Optional[str] = None
     embedding_for_pqa: Optional[str] = None
@@ -422,6 +422,17 @@ def ask(
         staging_dir = (config.PAPER_DB / ".pqa_papers").expanduser()
         paperqa._refresh_pqa_pdf_staging_dir(staging_dir=staging_dir, exclude_names=excluded_files)
         cmd.extend(["--agent.index.paper_directory", str(staging_dir)])
+
+    has_manifest_override = any(
+        arg == "--agent.index.manifest_file"
+        or arg == "--agent.index.manifest-file"
+        or arg.startswith(("--agent.index.manifest_file=", "--agent.index.manifest-file="))
+        for arg in ctx.args
+    )
+    if not has_paper_dir_override and not has_manifest_override:
+        manifest_path = (config.PAPER_DB / ".pqa_papers_manifest.csv").expanduser()
+        paperqa._write_pqa_pdf_manifest(manifest_path=manifest_path, exclude_names=excluded_files)
+        cmd.extend(["--agent.index.manifest_file", str(manifest_path)])
 
     # Default to syncing the index with the paper directory so newly-added PDFs are indexed
     # automatically during `papi ask`. Users can override by passing the flag explicitly.

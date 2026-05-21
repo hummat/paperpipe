@@ -63,6 +63,8 @@ class TestAskCommand:
         assert str(temp_db / ".pqa_index") in pqa_call
         assert "--agent.index.paper_directory" in pqa_call
         assert str(temp_db / ".pqa_papers") in pqa_call
+        assert "--agent.index.manifest_file" in pqa_call
+        assert str(temp_db / ".pqa_papers_manifest.csv") in pqa_call
         assert "--agent.index.sync_with_paper_directory" in pqa_call
         assert "ask" in pqa_call
         assert "query" in pqa_call
@@ -451,8 +453,9 @@ class TestAskCommand:
         assert "--parsing.multimodal" in pqa_call
         assert "ON_WITHOUT_ENRICHMENT" in pqa_call
         assert "OFF" not in pqa_call
+        assert "--parsing.use_doc_details" not in pqa_call
 
-    def test_ask_does_not_force_multimodal_when_pillow_available(self, temp_db: Path, monkeypatch):
+    def test_ask_forces_text_only_indexing_when_pillow_available(self, temp_db: Path, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
         monkeypatch.setattr(paperqa, "_pillow_available", lambda: True)
 
@@ -468,7 +471,10 @@ class TestAskCommand:
         assert result.exit_code == 0
 
         pqa_call, _pqa_kwargs = next(c for c in mock_popen.calls if c[0][0] == "pqa")
-        assert "--parsing.multimodal" not in pqa_call
+        assert "--parsing.multimodal" in pqa_call
+        assert pqa_call[pqa_call.index("--parsing.multimodal") + 1] == "OFF"
+        assert "--parsing.use_doc_details" in pqa_call
+        assert pqa_call[pqa_call.index("--parsing.use_doc_details") + 1] == "false"
 
     def test_ask_does_not_override_user_index_directory(self, temp_db: Path, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)

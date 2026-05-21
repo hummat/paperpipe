@@ -297,8 +297,9 @@ def index_cmd(
     has_parsing_override = any(
         arg == "--parsing" or arg.startswith("--parsing.") or arg.startswith("--parsing=") for arg in ctx.args
     )
-    if not has_parsing_override and not paperqa._pillow_available():
+    if not has_parsing_override:
         cmd.extend(["--parsing.multimodal", "OFF"])
+        cmd.extend(["--parsing.use_doc_details", "false"])
 
     pqa_llm_source = ctx.get_parameter_source("pqa_llm")
     pqa_embedding_source = ctx.get_parameter_source("pqa_embedding")
@@ -381,6 +382,17 @@ def index_cmd(
         paper_dir = (config.PAPER_DB / ".pqa_papers").expanduser()
         paperqa._refresh_pqa_pdf_staging_dir(staging_dir=paper_dir, exclude_names=excluded_files)
         cmd.extend(["--agent.index.paper_directory", str(paper_dir)])
+
+    has_manifest_override = any(
+        arg == "--agent.index.manifest_file"
+        or arg == "--agent.index.manifest-file"
+        or arg.startswith(("--agent.index.manifest_file=", "--agent.index.manifest-file="))
+        for arg in ctx.args
+    )
+    if not paper_dir_override and not has_manifest_override:
+        manifest_path = (config.PAPER_DB / ".pqa_papers_manifest.csv").expanduser()
+        paperqa._write_pqa_pdf_manifest(manifest_path=manifest_path, exclude_names=excluded_files)
+        cmd.extend(["--agent.index.manifest_file", str(manifest_path)])
 
     has_sync_override = any(
         arg == "--agent.index.sync_with_paper_directory"

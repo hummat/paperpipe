@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import csv
 import io
+import json
 import os
 import pickle
 import re
@@ -182,6 +184,65 @@ def _refresh_pqa_pdf_staging_dir(*, staging_dir: Path, exclude_names: Optional[s
         count += 1
 
     return count
+
+
+def _pqa_manifest_citation(*, name: str, meta: dict[str, Any]) -> str:
+    title = str(meta.get("title") or name).strip() or name
+    published = str(meta.get("published") or "").strip()
+    year = str(meta.get("year") or (published[:4] if re.match(r"^\d{4}", published) else "")).strip()
+    authors_raw = meta.get("authors")
+    authors = [str(a).strip() for a in authors_raw if str(a).strip()] if isinstance(authors_raw, list) else []
+
+    if authors:
+        author = authors[0] if len(authors) == 1 else f"{authors[0]} et al."
+        return f"{author} ({year}). {title}." if year else f"{author}. {title}."
+    return f"{title} ({year})." if year else title
+
+
+def _write_pqa_pdf_manifest(*, manifest_path: Path, exclude_names: Optional[set[str]] = None) -> int:
+    """Write a PaperQA2 CSV manifest for paperpipe's managed PDF staging directory."""
+    exclude_names = exclude_names or set()
+    rows: list[dict[str, str]] = []
+
+    if config.PAPERS_DIR.exists():
+        for paper_dir in sorted(config.PAPERS_DIR.iterdir(), key=lambda p: p.name):
+            if not paper_dir.is_dir() or not (paper_dir / "paper.pdf").exists():
+                continue
+            file_location = f"{paper_dir.name}.pdf"
+            if file_location in exclude_names:
+                continue
+
+            meta: dict[str, Any] = {}
+            meta_path = paper_dir / "meta.json"
+            if meta_path.exists():
+                try:
+                    loaded = json.loads(meta_path.read_text())
+                    if isinstance(loaded, dict):
+                        meta = loaded
+                except (OSError, json.JSONDecodeError):
+                    debug("Failed reading paper metadata for PaperQA2 manifest: %s", meta_path)
+
+            title = str(meta.get("title") or paper_dir.name).strip() or paper_dir.name
+            rows.append(
+                {
+                    "file_location": file_location,
+                    "docname": paper_dir.name,
+                    "dockey": paper_dir.name,
+                    "citation": _pqa_manifest_citation(name=paper_dir.name, meta=meta),
+                    "title": title,
+                    "fields_to_overwrite_from_metadata": "[]",
+                }
+            )
+
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = manifest_path.with_suffix(f"{manifest_path.suffix}.tmp")
+    fieldnames = ["file_location", "docname", "dockey", "citation", "title", "fields_to_overwrite_from_metadata"]
+    with tmp_path.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    tmp_path.replace(manifest_path)
+    return len(rows)
 
 
 def _extract_flag_value(args: list[str], *, names: set[str]) -> Optional[str]:

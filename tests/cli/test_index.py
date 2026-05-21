@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import shutil
 import subprocess
 from pathlib import Path
@@ -40,8 +41,49 @@ class TestIndexCommand:
         assert "index" in pqa_call
         assert str(temp_db / ".pqa_papers") in pqa_call
         assert "--agent.index.paper_directory" in pqa_call
+        assert "--agent.index.manifest_file" in pqa_call
+        assert "--parsing.multimodal" in pqa_call
+        assert "OFF" in pqa_call
+        assert "--parsing.use_doc_details" in pqa_call
+        assert "false" in pqa_call
         assert "--index" in pqa_call and "paperpipe_my-embed" in pqa_call
         assert (temp_db / ".pqa_papers" / "test-paper.pdf").exists()
+        assert (temp_db / ".pqa_papers_manifest.csv").exists()
+
+    def test_index_backend_pqa_writes_manifest_from_paper_metadata(
+        self, temp_db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+
+        mock_popen = MockPopen(returncode=0, stdout="Indexed\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+
+        paper_dir = temp_db / "papers" / "test-paper"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "paper.pdf").touch()
+        (paper_dir / "meta.json").write_text(
+            '{"title": "Test Paper", "authors": ["Ada Lovelace", "Grace Hopper"], "published": "2024-01-02"}'
+        )
+
+        runner = pytest.importorskip("click.testing").CliRunner()
+        result = runner.invoke(cli_mod.cli, ["index", "--pqa-embedding", "my-embed"])
+        assert result.exit_code == 0, result.output
+
+        pqa_call, _ = next(c for c in mock_popen.calls if c[0][0] == "pqa")
+        manifest_path = temp_db / ".pqa_papers_manifest.csv"
+        assert pqa_call[pqa_call.index("--agent.index.manifest_file") + 1] == str(manifest_path)
+
+        rows = list(csv.DictReader(manifest_path.read_text().splitlines()))
+        assert rows == [
+            {
+                "file_location": "test-paper.pdf",
+                "docname": "test-paper",
+                "dockey": "test-paper",
+                "citation": "Ada Lovelace et al. (2024). Test Paper.",
+                "title": "Test Paper",
+                "fields_to_overwrite_from_metadata": "[]",
+            }
+        ]
 
     def test_index_backend_pqa_ollama_embedding_strips_prefix_and_forces_provider(
         self, temp_db: Path, monkeypatch: pytest.MonkeyPatch

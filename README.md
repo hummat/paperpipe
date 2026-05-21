@@ -489,7 +489,9 @@ papi index --backend pqa --pqa-embedding openai/voyage-4
 - If you indexed wrong content (or changed embeddings), delete `.pqa_index/` to force rebuild.
 - If PDFs failed indexing (recorded as `ERROR`), re-run with `--pqa-retry-failed` or `--pqa-rebuild-index`.
 - By default, `papi ask` uses `--settings default` to avoid stale user settings; pass `-s/--settings <name>` to override.
-- If Pillow is not installed, `papi ask` forces `--parsing.multimodal OFF`; pass your own `--parsing...` args to override.
+- Managed PaperQA2 indexing uses a CSV manifest from `meta.json` and defaults to text-only PDF parsing
+  (`--parsing.multimodal OFF`, `--parsing.use_doc_details false`) so embedding updates do not invoke PaperQA2
+  metadata/enrichment LLM calls. Pass explicit `--parsing...` args to opt into PaperQA2 multimodal enrichment.
 
 </details>
 
