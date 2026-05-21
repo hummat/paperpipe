@@ -157,8 +157,19 @@ def download_pdf(arxiv_id: str, dest: Path) -> bool:
     search = arxiv.Search(id_list=[arxiv_id])
     _wait_for_arxiv_request()
     paper = next(_get_arxiv_client().results(search))
-    _wait_for_arxiv_request()
-    paper.download_pdf(filename=str(dest))
+
+    pdf_url = getattr(paper, "pdf_url", None)
+    if not isinstance(pdf_url, str) or not pdf_url:
+        return False
+
+    temp_path, _error = download_pdf_from_url(pdf_url)
+    if temp_path is None:
+        return False
+
+    try:
+        shutil.move(str(temp_path), dest)
+    finally:
+        temp_path.unlink(missing_ok=True)
     return dest.exists()
 
 

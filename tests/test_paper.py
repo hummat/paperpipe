@@ -603,6 +603,7 @@ class TestFetchArxivMetadata:
         from unittest.mock import MagicMock
 
         import arxiv
+        import requests
 
         metadata_paper = MagicMock()
         metadata_paper.title = "Attention Is All You Need"
@@ -618,7 +619,7 @@ class TestFetchArxivMetadata:
 
         pdf_path = tmp_path / "paper.pdf"
         pdf_paper = MagicMock()
-        pdf_paper.download_pdf = lambda filename: Path(filename).write_bytes(b"%PDF")
+        pdf_paper.pdf_url = "https://arxiv.org/pdf/1706.03762"
 
         papers = iter([metadata_paper, pdf_paper])
         client_instances = []
@@ -633,10 +634,20 @@ class TestFetchArxivMetadata:
         monkeypatch.setattr(arxiv, "Search", lambda id_list: MagicMock())
         monkeypatch.setattr(arxiv, "Client", FakeClient)
 
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def iter_content(self, chunk_size=8192):
+                yield b"%PDF"
+
+        monkeypatch.setattr(requests, "get", lambda url, *, timeout, stream: FakeResponse())
+
         paperpipe.fetch_arxiv_metadata("1706.03762")
         paperpipe.download_pdf("1706.03762", pdf_path)
 
         assert len(client_instances) == 1
+        assert pdf_path.exists()
 
     def test_extracts_metadata_from_arxiv_result(self, monkeypatch):
         """Test that metadata is correctly extracted from arxiv API response."""
@@ -708,27 +719,73 @@ class TestFetchArxivMetadata:
 class TestDownloadPdf:
     """Unit tests for download_pdf with mocked arxiv library."""
 
+    def test_downloads_pdf_from_result_pdf_url_without_download_helper(self, tmp_path, monkeypatch):
+        """arxiv 4.x exposes pdf_url but no Result.download_pdf helper."""
+        from unittest.mock import MagicMock
+
+        import arxiv
+        import requests
+
+        pdf_content = b"%PDF-1.4 fake pdf content"
+        dest = tmp_path / "paper.pdf"
+
+        mock_paper = MagicMock(spec=["pdf_url"])
+        mock_paper.pdf_url = "https://arxiv.org/pdf/1706.03762"
+
+        mock_client = MagicMock()
+        mock_client.results.return_value = iter([mock_paper])
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def iter_content(self, chunk_size=8192):
+                assert chunk_size == 8192
+                yield pdf_content
+
+        requested_urls = []
+
+        def fake_get(url, *, timeout, stream):
+            requested_urls.append((url, timeout, stream))
+            return FakeResponse()
+
+        monkeypatch.setattr(arxiv, "Search", lambda id_list: MagicMock())
+        monkeypatch.setattr(arxiv, "Client", lambda: mock_client)
+        monkeypatch.setattr(requests, "get", fake_get)
+
+        result = paperpipe.download_pdf("1706.03762", dest)
+
+        assert result is True
+        assert dest.exists()
+        assert dest.read_bytes() == pdf_content
+        assert requested_urls == [("https://arxiv.org/pdf/1706.03762", 60, True)]
+
     def test_downloads_pdf_successfully(self, tmp_path, monkeypatch):
         """Test successful PDF download."""
         from unittest.mock import MagicMock
 
         import arxiv
+        import requests
 
         pdf_content = b"%PDF-1.4 fake pdf content"
         dest = tmp_path / "paper.pdf"
 
         mock_paper = MagicMock()
-
-        def fake_download(filename):
-            Path(filename).write_bytes(pdf_content)
-
-        mock_paper.download_pdf = fake_download
+        mock_paper.pdf_url = "https://arxiv.org/pdf/1706.03762"
 
         mock_client = MagicMock()
         mock_client.results.return_value = iter([mock_paper])
 
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def iter_content(self, chunk_size=8192):
+                yield pdf_content
+
         monkeypatch.setattr(arxiv, "Search", lambda id_list: MagicMock())
         monkeypatch.setattr(arxiv, "Client", lambda: mock_client)
+        monkeypatch.setattr(requests, "get", lambda url, *, timeout, stream: FakeResponse())
 
         result = paperpipe.download_pdf("1706.03762", dest)
 
@@ -749,15 +806,25 @@ class TestDownloadPdf:
         monkeypatch.setattr(time, "monotonic", lambda: next(times))
         monkeypatch.setattr(time, "sleep", lambda seconds: sleeps.append(seconds))
 
+        import requests
+
         dest = tmp_path / "paper.pdf"
         mock_paper = MagicMock()
-        mock_paper.download_pdf = lambda filename: Path(filename).write_bytes(b"%PDF")
+        mock_paper.pdf_url = "https://arxiv.org/pdf/1706.03762"
 
         mock_client = MagicMock()
         mock_client.results.return_value = iter([mock_paper])
 
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def iter_content(self, chunk_size=8192):
+                yield b"%PDF"
+
         monkeypatch.setattr(arxiv, "Search", lambda id_list: MagicMock())
         monkeypatch.setattr(arxiv, "Client", lambda: mock_client)
+        monkeypatch.setattr(requests, "get", lambda url, *, timeout, stream: FakeResponse())
 
         result = paperpipe.download_pdf("1706.03762", dest)
 
@@ -773,7 +840,7 @@ class TestDownloadPdf:
         dest = tmp_path / "paper.pdf"
 
         mock_paper = MagicMock()
-        mock_paper.download_pdf = MagicMock()  # Does nothing, file not created
+        mock_paper.pdf_url = None
 
         mock_client = MagicMock()
         mock_client.results.return_value = iter([mock_paper])
