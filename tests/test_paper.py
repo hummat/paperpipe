@@ -644,7 +644,7 @@ class TestFetchArxivMetadata:
             def iter_content(self, chunk_size=8192):
                 yield b"%PDF"
 
-        monkeypatch.setattr(requests, "get", lambda url, *, timeout, stream: FakeResponse())
+        monkeypatch.setattr(requests, "get", lambda url, *, timeout, stream, **_kwargs: FakeResponse())
 
         paperpipe.fetch_arxiv_metadata("1706.03762")
         paperpipe.download_pdf("1706.03762", pdf_path)
@@ -748,7 +748,7 @@ class TestDownloadPdf:
 
         requested_urls = []
 
-        def fake_get(url, *, timeout, stream):
+        def fake_get(url, *, timeout, stream, **_kwargs):
             requested_urls.append((url, timeout, stream))
             return FakeResponse()
 
@@ -788,7 +788,7 @@ class TestDownloadPdf:
 
         monkeypatch.setattr(arxiv, "Search", lambda id_list: MagicMock())
         monkeypatch.setattr(arxiv, "Client", lambda: mock_client)
-        monkeypatch.setattr(requests, "get", lambda url, *, timeout, stream: FakeResponse())
+        monkeypatch.setattr(requests, "get", lambda url, *, timeout, stream, **_kwargs: FakeResponse())
 
         result = paperpipe.download_pdf("1706.03762", dest)
 
@@ -827,7 +827,7 @@ class TestDownloadPdf:
 
         monkeypatch.setattr(arxiv, "Search", lambda id_list: MagicMock())
         monkeypatch.setattr(arxiv, "Client", lambda: mock_client)
-        monkeypatch.setattr(requests, "get", lambda url, *, timeout, stream: FakeResponse())
+        monkeypatch.setattr(requests, "get", lambda url, *, timeout, stream, **_kwargs: FakeResponse())
 
         result = paperpipe.download_pdf("1706.03762", dest)
 
@@ -996,7 +996,7 @@ class TestDownloadSource:
         responses = iter([first, second])
         calls = []
 
-        def fake_get(url, timeout, stream=False):
+        def fake_get(url, timeout, **_kwargs):
             calls.append((url, timeout))
             return next(responses)
 
@@ -1034,7 +1034,7 @@ class TestDownloadSource:
         mock_response.iter_content.return_value = [b"plain text"]
         mock_response.raise_for_status = MagicMock()
 
-        monkeypatch.setattr(requests, "get", lambda url, timeout, stream=False: mock_response)
+        monkeypatch.setattr(requests, "get", lambda url, timeout, **_kwargs: mock_response)
 
         paper_dir = tmp_path / "test-paper"
         paper_dir.mkdir()
@@ -1067,7 +1067,7 @@ class TestDownloadSource:
         mock_response.iter_content.return_value = [tar_buffer.read()]
         mock_response.raise_for_status = MagicMock()
 
-        monkeypatch.setattr(requests, "get", lambda url, timeout, stream=False: mock_response)
+        monkeypatch.setattr(requests, "get", lambda url, timeout, **_kwargs: mock_response)
 
         paper_dir = tmp_path / "test-paper"
         paper_dir.mkdir()
@@ -1088,7 +1088,7 @@ class TestDownloadSource:
         mock_response.status_code = 404
         mock_response.raise_for_status.side_effect = requests.HTTPError("404 Not Found", response=mock_response)
 
-        monkeypatch.setattr(requests, "get", lambda url, timeout, stream=False: mock_response)
+        monkeypatch.setattr(requests, "get", lambda url, timeout, **_kwargs: mock_response)
 
         paper_dir = tmp_path / "test-paper"
         paper_dir.mkdir()
@@ -1111,7 +1111,7 @@ class TestDownloadSource:
         mock_response.iter_content.return_value = [b"This is just plain text, no LaTeX here."]
         mock_response.raise_for_status = MagicMock()
 
-        monkeypatch.setattr(requests, "get", lambda url, timeout, stream=False: mock_response)
+        monkeypatch.setattr(requests, "get", lambda url, timeout, **_kwargs: mock_response)
 
         paper_dir = tmp_path / "test-paper"
         paper_dir.mkdir()
@@ -1150,7 +1150,7 @@ class TestDownloadSource:
         mock_response.iter_content.return_value = [tar_buffer.read()]
         mock_response.raise_for_status = MagicMock()
 
-        monkeypatch.setattr(requests, "get", lambda url, timeout, stream=False: mock_response)
+        monkeypatch.setattr(requests, "get", lambda url, timeout, **_kwargs: mock_response)
 
         paper_dir = tmp_path / "test-paper"
         paper_dir.mkdir()
@@ -1191,7 +1191,7 @@ class TestDownloadSource:
         mock_response.iter_content.return_value = [tar_buffer.read()]
         mock_response.raise_for_status = MagicMock()
 
-        monkeypatch.setattr(requests, "get", lambda url, timeout, stream=False: mock_response)
+        monkeypatch.setattr(requests, "get", lambda url, timeout, **_kwargs: mock_response)
 
         paper_dir = tmp_path / "test-paper"
         paper_dir.mkdir()
@@ -1232,7 +1232,7 @@ class TestDownloadSource:
         mock_response.iter_content.return_value = [tar_buffer.read()]
         mock_response.raise_for_status = MagicMock()
 
-        monkeypatch.setattr(requests, "get", lambda url, timeout, stream=False: mock_response)
+        monkeypatch.setattr(requests, "get", lambda url, timeout, **_kwargs: mock_response)
 
         paper_dir = tmp_path / "test-paper"
         paper_dir.mkdir()
@@ -1241,6 +1241,38 @@ class TestDownloadSource:
 
         # No \begin{document}, so returns None
         assert result is None
+
+
+class TestArxivUserAgent:
+    """arXiv content requests should carry a descriptive User-Agent."""
+
+    def test_request_arxiv_content_sends_user_agent(self, monkeypatch):
+        from unittest.mock import MagicMock
+
+        import requests
+
+        captured = {}
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
+
+        def fake_get(url, **kwargs):
+            captured["headers"] = kwargs.get("headers")
+            return mock_response
+
+        monkeypatch.setattr(requests, "get", fake_get)
+        monkeypatch.setattr(paper_mod, "_ARXIV_LAST_REQUEST_MONOTONIC", None, raising=False)
+
+        paper_mod._request_arxiv_content("https://arxiv.org/e-print/1706.03762", timeout=30)
+
+        assert captured["headers"] is not None
+        assert captured["headers"]["User-Agent"].startswith("paperpipe/")
+
+    def test_user_agent_includes_version_and_url(self):
+        ua = paper_mod._arxiv_user_agent()
+        assert ua.startswith("paperpipe/")
+        assert "github.com/hummat/paperpipe" in ua
 
 
 class TestDownloadPdfFromUrl:
@@ -1267,7 +1299,7 @@ class TestDownloadPdfFromUrl:
         responses = iter([first, second])
         calls = []
 
-        def fake_get(url, timeout, stream):
+        def fake_get(url, timeout, stream, **_kwargs):
             calls.append((url, timeout, stream))
             return next(responses)
 
@@ -1303,7 +1335,7 @@ class TestDownloadPdfFromUrl:
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
         mock_response.iter_content.return_value = [b"%PDF"]
-        monkeypatch.setattr(requests, "get", lambda url, timeout, stream: mock_response)
+        monkeypatch.setattr(requests, "get", lambda url, timeout, stream, **_kwargs: mock_response)
 
         temp_path, error = paper_mod.download_pdf_from_url("https://arxiv.org/pdf/1706.03762")
 
@@ -1330,7 +1362,7 @@ class TestDownloadPdfFromUrl:
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
         mock_response.iter_content.return_value = [b"%PDF"]
-        monkeypatch.setattr(requests, "get", lambda url, timeout, stream: mock_response)
+        monkeypatch.setattr(requests, "get", lambda url, timeout, stream, **_kwargs: mock_response)
 
         temp_path, error = paper_mod.download_pdf_from_url("https://example.com/paper.pdf")
 
@@ -1454,7 +1486,7 @@ class TestDownloadSourceSizeLimits:
         mock_response.iter_content.return_value = [b"small"]
         mock_response.raise_for_status = MagicMock()
 
-        monkeypatch.setattr(requests, "get", lambda url, timeout, stream=False: mock_response)
+        monkeypatch.setattr(requests, "get", lambda url, timeout, **_kwargs: mock_response)
 
         paper_dir = tmp_path / "test-paper"
         paper_dir.mkdir()
@@ -1477,7 +1509,7 @@ class TestDownloadSourceSizeLimits:
         mock_response.iter_content.return_value = [b"x" * 200]  # exceeds monkeypatched limit
         mock_response.raise_for_status = MagicMock()
 
-        monkeypatch.setattr(requests, "get", lambda url, timeout, stream=False: mock_response)
+        monkeypatch.setattr(requests, "get", lambda url, timeout, **_kwargs: mock_response)
 
         paper_dir = tmp_path / "test-paper"
         paper_dir.mkdir()
@@ -1501,7 +1533,7 @@ class TestDownloadSourceSizeLimits:
         mock_response.iter_content.return_value = [b"x" * 200]  # 200 bytes > 100 byte limit
         mock_response.raise_for_status = MagicMock()
 
-        monkeypatch.setattr(requests, "get", lambda url, timeout, stream=False: mock_response)
+        monkeypatch.setattr(requests, "get", lambda url, timeout, **_kwargs: mock_response)
 
         paper_dir = tmp_path / "test-paper"
         paper_dir.mkdir()

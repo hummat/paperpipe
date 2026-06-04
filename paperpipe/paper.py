@@ -60,6 +60,23 @@ _ARXIV_CONTENT_RETRY_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 _ARXIV_CLIENT: Any | None = None
 _ARXIV_LAST_REQUEST_MONOTONIC: float | None = None
 _ARXIV_RATE_LOCK = threading.Lock()
+_ARXIV_USER_AGENT: str | None = None
+
+
+def _arxiv_user_agent() -> str:
+    """Descriptive User-Agent for arXiv access (arXiv recommends one for automated use)."""
+    global _ARXIV_USER_AGENT
+
+    if _ARXIV_USER_AGENT is None:
+        from importlib.metadata import PackageNotFoundError
+        from importlib.metadata import version as package_version
+
+        try:
+            ver = package_version("paperpipe")
+        except PackageNotFoundError:
+            ver = "0+unknown"
+        _ARXIV_USER_AGENT = f"paperpipe/{ver} (+https://github.com/hummat/paperpipe)"
+    return _ARXIV_USER_AGENT
 
 
 def _get_arxiv_client() -> Any:
@@ -70,6 +87,10 @@ def _get_arxiv_client() -> Any:
         import arxiv
 
         _ARXIV_CLIENT = arxiv.Client()
+        # arxiv.Client has no User-Agent param; set it on its underlying session.
+        session = getattr(_ARXIV_CLIENT, "_session", None)
+        if session is not None:
+            session.headers.update({"User-Agent": _arxiv_user_agent()})
     return _ARXIV_CLIENT
 
 
@@ -125,7 +146,7 @@ def _request_arxiv_content(url: str, *, timeout: int, stream: bool = False) -> A
     for attempt in range(_ARXIV_CONTENT_MAX_RETRIES + 1):
         _wait_for_arxiv_request()
         try:
-            kwargs: dict[str, Any] = {"timeout": timeout}
+            kwargs: dict[str, Any] = {"timeout": timeout, "headers": {"User-Agent": _arxiv_user_agent()}}
             if stream:
                 kwargs["stream"] = True
             response = requests.get(url, **kwargs)
