@@ -690,10 +690,10 @@ export PAPERPIPE_OLLAMA_NUM_CTX=16384   # or set [llm] ollama_num_ctx in config.
 
 This applies to local and Ollama Cloud (`ollama/<model>:cloud`, after `ollama signin`) models.
 
-Reasoning-capable models (Qwen3.6, Nemotron, etc.) "think" by default and can spend their whole
-output budget on hidden reasoning, returning empty content for extraction prompts. paperpipe
-disables thinking for Ollama models by default since it does structured extraction, not reasoning.
-Re-enable it if you want:
+Many reasoning-capable models "think" by default and can spend their whole output budget on
+hidden reasoning, returning empty content for extraction prompts. paperpipe disables thinking
+for Ollama models by default since it does structured extraction, not reasoning. Re-enable it
+if you want:
 
 ```bash
 export PAPERPIPE_OLLAMA_THINK=true   # or set [llm] ollama_think in config.toml
