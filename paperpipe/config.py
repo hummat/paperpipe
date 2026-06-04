@@ -53,6 +53,16 @@ def _is_ollama_model_id(model_id: Optional[str]) -> bool:
     return bool(model_id) and model_id.strip().lower().startswith("ollama/")
 
 
+def _is_claude_cli_model_id(model_id: Optional[str]) -> bool:
+    return bool(model_id) and model_id.strip().lower().startswith("claude-cli/")
+
+
+def _claude_cli_model_alias(model_id: str) -> str:
+    """Return the model alias after the ``claude-cli/`` prefix (defaults to ``sonnet``)."""
+    alias = model_id.strip().split("/", 1)[1].strip() if "/" in model_id else ""
+    return alias or "sonnet"
+
+
 def _normalize_ollama_base_url(raw: str) -> str:
     base = (raw or "").strip()
     if not base:

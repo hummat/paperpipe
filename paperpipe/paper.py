@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import tarfile
 import tempfile
 import threading
@@ -21,6 +22,8 @@ import click
 
 from . import config
 from .config import (
+    _claude_cli_model_alias,
+    _is_claude_cli_model_id,
     _is_ollama_model_id,
     _ollama_reachability_error,
     _prepare_ollama_env,
@@ -779,7 +782,7 @@ def _generate_local_pdf_name(meta: dict, *, use_llm: bool, model: Optional[str] 
         return "paper"
 
     name = _extract_name_from_title(title)
-    if not name and use_llm and _litellm_available():
+    if not name and use_llm and _llm_available(model):
         name = _generate_name_with_llm(meta, model=model)
     if not name:
         name = _slugify_title(title)
@@ -805,7 +808,7 @@ def generate_auto_name(meta: dict, existing_names: set[str], use_llm: bool = Tru
     name = _extract_name_from_title(title)
 
     # If no prefix name, try LLM
-    if not name and use_llm and _litellm_available():
+    if not name and use_llm and _llm_available(model):
         name = _generate_name_with_llm(meta, model=model)
 
     # Fallback:
@@ -896,7 +899,7 @@ def generate_llm_content(
             if content_for_llm:
                 echo_progress(f"  Extracted {len(content_for_llm) // 1000}k chars from PDF")
 
-    if not _litellm_available():
+    if not _llm_available(model):
         # Fallback: simple extraction without LLM
         summary = generate_simple_summary(meta, tex_content)
         equations = extract_equations_simple(tex_content) if tex_content else "No LaTeX source available."
@@ -993,6 +996,17 @@ def _litellm_available() -> bool:
         return True
     except ImportError:
         return False
+
+
+def _llm_available(model: Optional[str] = None) -> bool:
+    """Check whether the configured LLM backend is usable.
+
+    The Claude CLI backend needs the ``claude`` binary; all other backends need LiteLLM.
+    """
+    model = model or default_llm_model()
+    if _is_claude_cli_model_id(model):
+        return shutil.which("claude") is not None
+    return _litellm_available()
 
 
 # Fallback context window sizes for common models (when litellm doesn't have mapping).
@@ -1092,8 +1106,73 @@ def _check_context_limit(messages: list[dict[str, str]], model: str, litellm_mod
     return True, None
 
 
+# Headless Claude CLI calls boot the full runtime (~3s) before generating, so allow ample time.
+_CLAUDE_CLI_TIMEOUT_SEC = 120
+
+
+def _run_claude_cli(prompt: str, *, alias: str, purpose: str) -> Optional[str]:
+    """Run a prompt through the Claude Code CLI in headless mode.
+
+    Uses the CLI's own authentication (e.g. an OAuth subscription seat), so no API key is
+    required. The prompt is passed on stdin to avoid argument-length limits with large LaTeX.
+    Returns None on any failure so callers fall back to non-LLM generation.
+    """
+    claude_bin = shutil.which("claude")
+    if not claude_bin:
+        echo_error("Claude CLI not found on PATH. Install Claude Code or set llm.model to an API model.")
+        return None
+
+    cmd = [
+        claude_bin,
+        "-p",
+        "--model",
+        alias,
+        "--output-format",
+        "text",
+        "--tools",
+        "",
+        "--disable-slash-commands",
+        "--no-session-persistence",
+        "--setting-sources",
+        "",
+    ]
+
+    echo_progress(f"  LLM (claude-cli/{alias}): generating {purpose}...")
+    try:
+        result = subprocess.run(
+            cmd,
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=_CLAUDE_CLI_TIMEOUT_SEC,
+        )
+    except subprocess.TimeoutExpired:
+        echo_error(f"LLM (claude-cli/{alias}): {purpose} timed out after {_CLAUDE_CLI_TIMEOUT_SEC}s.")
+        return None
+    except OSError as e:
+        echo_error(f"LLM (claude-cli/{alias}): {purpose} failed: {str(e).splitlines()[0][:100]}")
+        return None
+
+    if result.returncode != 0:
+        err = (result.stderr or result.stdout or "").strip().splitlines()
+        detail = err[0][:150] if err else f"exit {result.returncode}"
+        echo_error(f"LLM (claude-cli/{alias}): {purpose} failed: {detail}")
+        return None
+
+    out = (result.stdout or "").strip()
+    if out:
+        echo_progress(f"  LLM (claude-cli/{alias}): {purpose} ok")
+    return out or None
+
+
 def _run_llm(prompt: str, *, purpose: str, model: Optional[str] = None) -> Optional[str]:
-    """Run a prompt through LiteLLM. Returns None on any failure."""
+    """Run a prompt through the configured LLM backend. Returns None on any failure."""
+    model = model or default_llm_model()
+
+    # Claude Code CLI backend: uses the CLI's own auth (no API key); skips LiteLLM entirely.
+    if _is_claude_cli_model_id(model):
+        return _run_claude_cli(prompt, alias=_claude_cli_model_alias(model), purpose=purpose)
+
     try:
         import litellm  # type: ignore[import-not-found]
 
@@ -1102,7 +1181,6 @@ def _run_llm(prompt: str, *, purpose: str, model: Optional[str] = None) -> Optio
         echo_error("LiteLLM not installed. Install with: pip install litellm")
         return None
 
-    model = model or default_llm_model()
     if _is_ollama_model_id(model):
         _prepare_ollama_env(os.environ)
         err = _ollama_reachability_error(api_base=os.environ["OLLAMA_API_BASE"])
@@ -1188,7 +1266,7 @@ def extract_title_from_pdf(pdf_path: Path) -> Optional[str]:
     Extracts text from the first page and asks the LLM to identify the title.
     Returns None if PyMuPDF is unavailable, PDF cannot be read, or LLM fails.
     """
-    if not _litellm_available():
+    if not _llm_available():
         return None
 
     first_page_text = _extract_first_page_text(pdf_path)
@@ -1216,7 +1294,7 @@ def extract_title_and_name_from_pdf(
 
     Returns (title, name).  Either or both may be ``None`` on failure.
     """
-    if not _litellm_available():
+    if not _llm_available(model):
         return None, None
 
     first_page_text = _extract_first_page_text(pdf_path)
@@ -1364,6 +1442,7 @@ RULES:
 - Only explain what the AUTHORS explicitly describe - do not infer meanings
 - If variable meaning is not stated, write "not defined in paper"
 - Skip trivial equations (e.g., x=1, simple arithmetic)
+- Output ONLY the formatted equations below - no preamble, introduction, or closing remarks
 
 FORMAT for each equation:
 ```latex

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import logging
+import shutil
+import subprocess
 import tarfile
 import tempfile
+import types
 from pathlib import Path
 
 import pytest
@@ -1506,3 +1509,80 @@ class TestDownloadSourceSizeLimits:
         result = paperpipe.download_source("1234.56789", paper_dir)
         assert result is None
         mock_response.close.assert_called_once()
+
+
+class TestClaudeCliBackend:
+    """Tests for the claude-cli/* LLM backend."""
+
+    def _fake_which(self, found: bool):
+        return lambda cmd: "/usr/bin/claude" if (found and cmd == "claude") else None
+
+    def test_run_claude_cli_success(self, monkeypatch):
+        monkeypatch.setattr(shutil, "which", self._fake_which(True))
+        calls: list[tuple[list[str], dict]] = []
+
+        def fake_run(args, **kwargs):
+            calls.append((args, kwargs))
+            return types.SimpleNamespace(returncode=0, stdout="  a summary  \n", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        result = paper_mod._run_claude_cli("Summarize this.", alias="sonnet", purpose="summary")
+
+        assert result == "a summary"
+        cmd, kwargs = calls[0]
+        assert cmd[0] == "/usr/bin/claude"
+        assert "-p" in cmd
+        assert cmd[cmd.index("--model") + 1] == "sonnet"
+        # Prompt goes via stdin, not argv, to avoid arg-length limits.
+        assert kwargs["input"] == "Summarize this."
+        assert "Summarize this." not in cmd
+
+    def test_run_claude_cli_missing_binary(self, monkeypatch):
+        monkeypatch.setattr(shutil, "which", self._fake_which(False))
+        result = paper_mod._run_claude_cli("x", alias="sonnet", purpose="summary")
+        assert result is None
+
+    def test_run_claude_cli_nonzero_exit(self, monkeypatch):
+        monkeypatch.setattr(shutil, "which", self._fake_which(True))
+
+        def fake_run(args, **kwargs):
+            return types.SimpleNamespace(returncode=1, stdout="", stderr="auth error\n")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        result = paper_mod._run_claude_cli("x", alias="opus", purpose="summary")
+        assert result is None
+
+    def test_run_claude_cli_timeout(self, monkeypatch):
+        monkeypatch.setattr(shutil, "which", self._fake_which(True))
+
+        def fake_run(args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd=args, timeout=1)
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        result = paper_mod._run_claude_cli("x", alias="sonnet", purpose="summary")
+        assert result is None
+
+    def test_run_llm_routes_to_claude_cli(self, monkeypatch):
+        captured: dict[str, str] = {}
+
+        def fake_cli(prompt, *, alias, purpose):
+            captured.update(prompt=prompt, alias=alias, purpose=purpose)
+            return "routed"
+
+        monkeypatch.setattr(paper_mod, "_run_claude_cli", fake_cli)
+        # Should never touch LiteLLM on this path.
+        monkeypatch.setattr(
+            paper_mod, "_litellm_available", lambda: pytest.fail("LiteLLM must not be used for claude-cli")
+        )
+
+        result = paper_mod._run_llm("prompt text", purpose="tags", model="claude-cli/opus")
+
+        assert result == "routed"
+        assert captured == {"prompt": "prompt text", "alias": "opus", "purpose": "tags"}
+
+    def test_llm_available_claude_cli(self, monkeypatch):
+        monkeypatch.setattr(shutil, "which", self._fake_which(True))
+        assert paper_mod._llm_available("claude-cli/sonnet") is True
+        monkeypatch.setattr(shutil, "which", self._fake_which(False))
+        assert paper_mod._llm_available("claude-cli/sonnet") is False

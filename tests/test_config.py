@@ -541,3 +541,19 @@ class TestModelIdHelpers:
         assert config._split_model_id("/model") == (None, "/model")
         assert config._split_model_id("provider/") == (None, "provider/")
         assert config._split_model_id("provider/model") == ("provider", "model")
+
+
+class TestClaudeCliHelpers:
+    def test_is_claude_cli_model_id(self) -> None:
+        assert config._is_claude_cli_model_id("claude-cli/sonnet")
+        assert config._is_claude_cli_model_id("  CLAUDE-CLI/opus  ")
+        assert not config._is_claude_cli_model_id("anthropic/claude-sonnet-4-5")
+        assert not config._is_claude_cli_model_id("")
+        assert not config._is_claude_cli_model_id(None)
+
+    def test_claude_cli_model_alias(self) -> None:
+        assert config._claude_cli_model_alias("claude-cli/sonnet") == "sonnet"
+        assert config._claude_cli_model_alias("claude-cli/claude-opus-4-8") == "claude-opus-4-8"
+        assert config._claude_cli_model_alias("  claude-cli/opus  ") == "opus"
+        # Missing/empty alias falls back to a sensible default.
+        assert config._claude_cli_model_alias("claude-cli/") == "sonnet"

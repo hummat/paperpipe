@@ -679,6 +679,21 @@ export OLLAMA_HOST=http://localhost:11434
 # export OLLAMA_API_BASE=http://localhost:11434
 ```
 
+### Via the Claude Code CLI (no API key)
+
+If you have the [Claude Code](https://docs.claude.com/en/docs/claude-code) CLI installed and signed in (including subscription/OAuth logins), paperpipe can route summary/equation/tag/title generation through it instead of an API key:
+
+```bash
+export PAPERPIPE_LLM_MODEL=claude-cli/sonnet   # or claude-cli/opus, claude-cli/<full-model-name>
+```
+
+paperpipe shells out to `claude -p` for each generation step using the CLI's own authentication. Notes:
+
+- **Summarization only.** `papi ask` (PaperQA2/RAG) and embeddings still need an API key or local Ollama — the CLI backend cannot drive them.
+- Calls count against your Claude Code usage/rate limits, not API billing.
+- Each invocation boots the CLI runtime (~3s), so generation is slower than an API backend.
+- `temperature` is not configurable on this backend.
+
 Check which models work with your keys:
 ```bash
 papi models                    # probe default models for your configured keys
