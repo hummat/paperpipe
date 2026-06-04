@@ -39,6 +39,10 @@ DEFAULT_LLM_TEMPERATURE_FALLBACK = 0.3
 DEFAULT_OLLAMA_NUM_CTX = 32768
 # Per-request LLM timeout (seconds). Generous enough for slow local/reasoning models on full papers.
 DEFAULT_LLM_TIMEOUT_FALLBACK = 120.0
+# Whether to enable Ollama "thinking" for reasoning-capable models. paperpipe does structured
+# extraction, not reasoning; thinking-by-default models (Qwen3.6, Nemotron) can spend their budget
+# on hidden reasoning and return empty content, so we disable it by default.
+DEFAULT_OLLAMA_THINK = False
 
 DEFAULT_LEANN_EMBEDDING_MODEL = "nomic-embed-text"
 DEFAULT_LEANN_EMBEDDING_MODE = "ollama"
@@ -200,6 +204,41 @@ def _setting_float(*, env: str, keys: tuple[str, ...], default: float) -> float:
     return default
 
 
+def _setting_bool(*, env: str, keys: tuple[str, ...], default: bool) -> bool:
+    def parse(raw: str) -> Optional[bool]:
+        val = raw.strip().lower()
+        if val in {"1", "true", "yes", "on"}:
+            return True
+        if val in {"0", "false", "no", "off"}:
+            return False
+        return None
+
+    def warn_once(source: str, raw_value: object) -> None:
+        key = f"{source}:{env}:{'.'.join(keys)}"
+        if key in _WARNED_INVALID_SETTINGS:
+            return
+        _WARNED_INVALID_SETTINGS.add(key)
+        setting_label = f"{env} ({'.'.join(keys)})" if keys else env
+        echo_warning(f"Ignoring invalid {source} value for {setting_label}: {raw_value!r}")
+
+    val = os.environ.get(env)
+    if val is not None and val.strip():
+        parsed = parse(val)
+        if parsed is not None:
+            return parsed
+        warn_once("env", val)
+    cfg = load_config()
+    raw = _config_get(cfg, keys)
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        parsed = parse(raw)
+        if parsed is not None:
+            return parsed
+        warn_once("config", raw)
+    return default
+
+
 def default_llm_model() -> str:
     return _setting_str(env="PAPERPIPE_LLM_MODEL", keys=("llm", "model"), default=DEFAULT_LLM_MODEL_FALLBACK)
 
@@ -242,6 +281,16 @@ def default_llm_timeout() -> float:
         keys=("llm", "timeout"),
         default=DEFAULT_LLM_TIMEOUT_FALLBACK,
     )
+
+
+def default_ollama_think() -> bool:
+    """Whether to enable Ollama 'thinking' for reasoning-capable models.
+
+    Disabled by default: paperpipe generates structured extractions (summaries, equations,
+    tags), not reasoning. Thinking-by-default models (Qwen3.6, Nemotron) otherwise spend their
+    budget on hidden reasoning and can return empty content. Set to true to re-enable.
+    """
+    return _setting_bool(env="PAPERPIPE_OLLAMA_THINK", keys=("llm", "ollama_think"), default=DEFAULT_OLLAMA_THINK)
 
 
 def default_pqa_settings_name() -> str:

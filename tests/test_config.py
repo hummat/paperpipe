@@ -557,3 +557,32 @@ class TestClaudeCliHelpers:
         assert config._claude_cli_model_alias("  claude-cli/opus  ") == "opus"
         # Missing/empty alias falls back to a sensible default.
         assert config._claude_cli_model_alias("claude-cli/") == "sonnet"
+
+
+class TestOllamaThink:
+    def test_default_disables_thinking(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("PAPERPIPE_OLLAMA_THINK", raising=False)
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
+        assert config.default_ollama_think() is False
+
+    def test_env_enables_thinking(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
+        monkeypatch.setenv("PAPERPIPE_OLLAMA_THINK", "true")
+        assert config.default_ollama_think() is True
+
+    def test_config_enables_thinking(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("PAPERPIPE_OLLAMA_THINK", raising=False)
+        (temp_db / "config.toml").write_text("[llm]\nollama_think = true\n")
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
+        assert config.default_ollama_think() is True
+
+    def test_env_overrides_config(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        (temp_db / "config.toml").write_text("[llm]\nollama_think = true\n")
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
+        monkeypatch.setenv("PAPERPIPE_OLLAMA_THINK", "off")
+        assert config.default_ollama_think() is False
+
+    def test_invalid_value_falls_back_to_default(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
+        monkeypatch.setenv("PAPERPIPE_OLLAMA_THINK", "maybe")
+        assert config.default_ollama_think() is False

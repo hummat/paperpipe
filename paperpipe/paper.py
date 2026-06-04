@@ -31,6 +31,7 @@ from .config import (
     default_llm_temperature,
     default_llm_timeout,
     default_ollama_num_ctx,
+    default_ollama_think,
     get_all_tags,
     normalize_tags,
 )
@@ -1243,9 +1244,11 @@ def _run_llm(prompt: str, *, purpose: str, model: Optional[str] = None) -> Optio
         return None
 
     # Ollama truncates at its default context window unless num_ctx is set; size it to the prompt.
+    # Disable "thinking" by default so reasoning-capable models don't return empty content.
     extra_params: dict[str, Any] = {}
     if is_ollama:
         extra_params["num_ctx"] = _ollama_num_ctx(_count_message_tokens(messages, model, litellm))
+        extra_params["think"] = default_ollama_think()
 
     echo_progress(f"  LLM ({model}): generating {purpose}...")
 

@@ -1676,6 +1676,43 @@ class TestOllamaNumCtx:
         assert out == "ok"
         assert "num_ctx" not in captured
 
+    def test_run_llm_disables_think_for_ollama_by_default(self, monkeypatch):
+        import sys
+
+        captured: dict = {}
+        monkeypatch.setitem(sys.modules, "litellm", self._fake_litellm(captured, token_count=1000))
+        monkeypatch.setattr(paper_mod, "_ollama_reachability_error", lambda **kw: None)
+        monkeypatch.setattr(paper_mod, "default_ollama_think", lambda: False)
+
+        out = paper_mod._run_llm("prompt", purpose="equations", model="ollama/qwen3.6:27b")
+
+        assert out == "ok"
+        assert captured["think"] is False
+
+    def test_run_llm_enables_think_when_configured(self, monkeypatch):
+        import sys
+
+        captured: dict = {}
+        monkeypatch.setitem(sys.modules, "litellm", self._fake_litellm(captured, token_count=1000))
+        monkeypatch.setattr(paper_mod, "_ollama_reachability_error", lambda **kw: None)
+        monkeypatch.setattr(paper_mod, "default_ollama_think", lambda: True)
+
+        out = paper_mod._run_llm("prompt", purpose="summary", model="ollama/qwen3.6:27b")
+
+        assert out == "ok"
+        assert captured["think"] is True
+
+    def test_run_llm_omits_think_for_non_ollama(self, monkeypatch):
+        import sys
+
+        captured: dict = {}
+        monkeypatch.setitem(sys.modules, "litellm", self._fake_litellm(captured, token_count=5000))
+
+        out = paper_mod._run_llm("prompt", purpose="summary", model="gpt-4o")
+
+        assert out == "ok"
+        assert "think" not in captured
+
     def test_run_llm_returns_none_on_empty_output(self, monkeypatch):
         import sys
 

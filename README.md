@@ -690,6 +690,15 @@ export PAPERPIPE_OLLAMA_NUM_CTX=16384   # or set [llm] ollama_num_ctx in config.
 
 This applies to local and Ollama Cloud (`ollama/<model>:cloud`, after `ollama signin`) models.
 
+Reasoning-capable models (Qwen3.6, Nemotron, etc.) "think" by default and can spend their whole
+output budget on hidden reasoning, returning empty content for extraction prompts. paperpipe
+disables thinking for Ollama models by default since it does structured extraction, not reasoning.
+Re-enable it if you want:
+
+```bash
+export PAPERPIPE_OLLAMA_THINK=true   # or set [llm] ollama_think in config.toml
+```
+
 ### Via the Claude Code CLI (no API key)
 
 If you have the [Claude Code](https://docs.claude.com/en/docs/claude-code) CLI installed and signed in (including subscription/OAuth logins), paperpipe can route summary/equation/tag/title generation through it instead of an API key:
@@ -747,6 +756,7 @@ For persistent settings, create `~/.paperpipe/config.toml` (override location wi
 model = "gemini/gemini-2.5-flash"
 temperature = 0.3
 # ollama_num_ctx = 32768   # max context window for ollama/* models (default 32768)
+# ollama_think = false     # enable Ollama "thinking" for reasoning models (default false)
 # timeout = 120            # per-request seconds; raise for slow local/reasoning models (default 120)
 
 [embedding]
