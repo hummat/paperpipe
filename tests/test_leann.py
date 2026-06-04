@@ -303,6 +303,30 @@ class TestLeannCommands:
         assert "--api-base" in cmd and paperpipe.OPENROUTER_OPENAI_COMPAT_BASE_URL in cmd
         assert "--api-key" in cmd and "openrouter-key" in cmd
 
+    def test_ask_backend_leann_openrouter_from_leann_model(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        # OpenRouter selected via the LEANN model id itself, even when [llm].model is not openrouter.
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann" if cmd == "leann" else None)
+        monkeypatch.delenv("PAPERPIPE_LLM_MODEL", raising=False)
+        monkeypatch.setenv("PAPERPIPE_LEANN_LLM_MODEL", "openrouter/deepseek/deepseek-v4-pro")
+        monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+        monkeypatch.delenv("PAPERPIPE_LEANN_LLM_PROVIDER", raising=False)
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
+
+        _write_leann_index_stub(temp_db / ".leann" / "indexes" / "papers_ollama_nomic-embed-text")
+
+        mock_popen = MockPopen(returncode=0, stdout="OUT\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+
+        result = CliRunner().invoke(cli_mod.cli, ["ask", "what is x", "--backend", "leann", "--leann-no-auto-index"])
+        assert result.exit_code == 0, result.output
+
+        cmd, _ = mock_popen.calls[0]
+        assert "--llm" in cmd and "openai" in cmd
+        assert "--model" in cmd and "deepseek/deepseek-v4-pro" in cmd
+        assert "openrouter/deepseek/deepseek-v4-pro" not in cmd  # prefix stripped
+        assert "--api-base" in cmd and paperpipe.OPENROUTER_OPENAI_COMPAT_BASE_URL in cmd
+        assert "--api-key" in cmd and "openrouter-key" in cmd
+
     def test_ask_backend_leann_requires_index(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann" if cmd == "leann" else None)
 

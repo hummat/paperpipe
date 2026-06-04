@@ -84,6 +84,52 @@ class TestAskCommand:
         assert "2" in pqa_call
         assert pqa_kwargs.get("cwd") == config.PAPERS_DIR
         assert (temp_db / ".pqa_papers" / "test-paper.pdf").exists()
+        # Agent LLM inherits the answer LLM so PaperQA2 doesn't fall back to its gpt-4o default.
+        assert "--agent.agent_llm" in pqa_call
+        assert pqa_call[pqa_call.index("--agent.agent_llm") + 1] == "my-llm"
+
+    def test_ask_agent_config_from_toml(self, temp_db: Path, monkeypatch) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: False)
+        for env_var in ["PAPERPIPE_PQA_AGENT_LLM", "PAPERPIPE_PQA_AGENT_TYPE"]:
+            monkeypatch.delenv(env_var, raising=False)
+        mock_popen = MockPopen(returncode=0, stdout="Answer\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+        (temp_db / "papers" / "test-paper").mkdir(parents=True)
+        (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
+        (temp_db / "config.toml").write_text("\n".join(["[paperqa]", 'agent_llm = "agent-x"', 'agent_type = "fake"']))
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
+
+        result = pytest.importorskip("click.testing").CliRunner().invoke(cli_mod.cli, ["ask", "query"])
+
+        assert result.exit_code == 0
+        pqa_call, _ = next(c for c in mock_popen.calls if c[0][0] == "pqa")
+        assert pqa_call[pqa_call.index("--agent.agent_llm") + 1] == "agent-x"
+        assert pqa_call[pqa_call.index("--agent.agent_type") + 1] == "fake"
+
+    def test_ask_agent_llm_passthrough_not_overridden(self, temp_db: Path, monkeypatch) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: False)
+        for env_var in ["PAPERPIPE_PQA_AGENT_LLM", "PAPERPIPE_PQA_AGENT_TYPE"]:
+            monkeypatch.delenv(env_var, raising=False)
+        mock_popen = MockPopen(returncode=0, stdout="Answer\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+        (temp_db / "papers" / "test-paper").mkdir(parents=True)
+        (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
+
+        result = (
+            pytest.importorskip("click.testing")
+            .CliRunner()
+            .invoke(cli_mod.cli, ["ask", "query", "--pqa-llm", "my-llm", "--agent.agent_llm", "explicit-agent"])
+        )
+
+        assert result.exit_code == 0
+        pqa_call, _ = next(c for c in mock_popen.calls if c[0][0] == "pqa")
+        # The explicit passthrough wins; paperpipe does not also inject the inherited llm.
+        assert pqa_call.count("--agent.agent_llm") == 1
+        assert "explicit-agent" in pqa_call
+        assert "my-llm" not in pqa_call[pqa_call.index("--agent.agent_llm") + 1 :]
 
     def test_ask_injects_ollama_timeout_config_by_default(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)

@@ -377,6 +377,7 @@ The first query builds an index (cached under `.pqa_index/` or `.leann/`). Use `
 |------|-------------|
 | `--pqa-llm MODEL` | LLM for answer generation (LiteLLM id) |
 | `--pqa-summary-llm MODEL` | LLM for evidence summarization (often cheaper) |
+| `--pqa-agent-llm MODEL` | LLM that drives the search agent (defaults to `--pqa-llm`) |
 | `--pqa-embedding MODEL` | Embedding model for text chunks |
 | `--pqa-temperature FLOAT` | LLM temperature (0.0-1.0) |
 | `--pqa-verbosity INT` | Logging level (0-3; 3 = log all LLM calls) |
@@ -635,6 +636,13 @@ embedding_mode = "ollama"
 
 Or env vars: `PAPERPIPE_LEANN_LLM_PROVIDER`, `PAPERPIPE_LEANN_LLM_MODEL`, `PAPERPIPE_LEANN_EMBEDDING_MODEL`, `PAPERPIPE_LEANN_EMBEDDING_MODE`.
 
+An `openrouter/...` LLM model id routes through OpenRouter's OpenAI-compatible endpoint, with the key
+taken from `OPENROUTER_API_KEY` (no secret stored in config):
+```toml
+[leann]
+llm_model = "openrouter/deepseek/deepseek-v4-pro"
+```
+
 ### Index builds
 
 ```bash
@@ -767,6 +775,11 @@ settings = "default"
 index_dir = "~/.paperpipe/.pqa_index"
 summary_llm = "gpt-4o-mini"
 enrichment_llm = "gpt-4o-mini"
+# agent_llm drives PaperQA2's search agent. PaperQA2's own default is gpt-4o; paperpipe
+# instead inherits the answer llm (above) unless you set this. Set agent_type = "fake" for
+# deterministic, low-token retrieval that skips the agent LLM's tool-calling loop.
+# agent_llm = "gpt-4o-mini"
+# agent_type = "fake"
 
 # Optional: override LEANN separately (otherwise it follows [llm]/[embedding] for openai/ollama model ids)
 [leann]

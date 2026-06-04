@@ -17,6 +17,8 @@ from ..config import (
     _effective_leann_index_name,
     _is_ollama_model_id,
     _strip_ollama_prefix,
+    default_pqa_agent_llm,
+    default_pqa_agent_type,
     default_pqa_answer_length,
     default_pqa_concurrency,
     default_pqa_embedding_model,
@@ -75,6 +77,13 @@ def _leann_auto_build_args(index_name: str) -> list[str]:
     default=None,
     show_default=False,
     help="LLM for evidence summarization (often a cheaper/faster model than --pqa-llm).",
+)
+@click.option(
+    "--pqa-agent-llm",
+    "agent_llm",
+    default=None,
+    show_default=False,
+    help="LLM that drives PaperQA2's search agent (defaults to --pqa-llm; PaperQA2's own default is gpt-4o).",
 )
 @click.option(
     "--pqa-embedding",
@@ -238,6 +247,7 @@ def ask(
     output_format: str,
     llm: Optional[str],
     summary_llm: Optional[str],
+    agent_llm: Optional[str],
     embedding: Optional[str],
     temperature: Optional[float],
     verbosity: Optional[int],
@@ -500,6 +510,23 @@ def ask(
         cmd.extend(["--parsing.enrichment_llm", enrichment_llm_default])
         enrichment_llm_for_pqa = enrichment_llm_default
 
+    # agent_llm: explicit CLI/config wins; otherwise inherit the answer llm so the search agent
+    # doesn't silently fall back to PaperQA2's gpt-4o default. Skip the llm-inheritance when the
+    # user brought their own --settings, to avoid overriding the agent_llm in their settings file.
+    has_agent_llm_passthrough = any(
+        arg in {"--agent.agent_llm", "--agent.agent-llm"}
+        or arg.startswith(("--agent.agent_llm=", "--agent.agent-llm="))
+        for arg in ctx.args
+    )
+    if not has_agent_llm_passthrough:
+        agent_llm_source = ctx.get_parameter_source("agent_llm")
+        if agent_llm_source != click.core.ParameterSource.DEFAULT and agent_llm:
+            cmd.extend(["--agent.agent_llm", agent_llm])
+        else:
+            agent_llm_default = default_pqa_agent_llm(llm_for_pqa if not has_settings_flag else None)
+            if agent_llm_default:
+                cmd.extend(["--agent.agent_llm", agent_llm_default])
+
     # Ollama can have long cold-start / first-token latency. If the user didn't provide explicit
     # per-provider configs, inject a larger LiteLLM router timeout to avoid spurious 60s timeouts.
     if (
@@ -570,8 +597,9 @@ def ask(
         if agent_type:
             cmd.extend(["--agent.agent_type", agent_type])
     elif not has_agent_type_passthrough:
-        # No default; only set when explicitly requested.
-        pass
+        agent_type_default = default_pqa_agent_type()
+        if agent_type_default:
+            cmd.extend(["--agent.agent_type", agent_type_default])
 
     # answer_length -> --answer.answer_length
     answer_length_source = ctx.get_parameter_source("answer_length")

@@ -757,6 +757,14 @@ def _ask_leann(
     provider = (provider or "").strip() or default_leann_llm_provider()
     model = (model or "").strip() or default_leann_llm_model()
 
+    # An explicit `openrouter/...` LEANN model id selects OpenRouter via its OpenAI-compatible
+    # endpoint regardless of the default [llm].model. LEANN speaks the OpenAI protocol, so the
+    # provider becomes "openai" and the `openrouter/` prefix is stripped from the model name.
+    model_is_openrouter = model.lower().startswith("openrouter/")
+    if model_is_openrouter:
+        provider = "openai"
+        model = model.split("/", 1)[1]
+
     index_name = (index_name or "").strip() or DEFAULT_LEANN_INDEX_NAME
     if not _leann_index_exists(index_name):
         echo_error(f"LEANN index {index_name!r} not found at {_leann_index_dir(index_name)}")
@@ -766,9 +774,10 @@ def _ask_leann(
     cmd: list[str] = ["leann", "ask", index_name, query]
     cmd.extend(["--llm", provider])
     cmd.extend(["--model", model])
-    if not api_base and provider.lower() == "openai" and _default_llm_is_openrouter():
+    use_openrouter = provider.lower() == "openai" and (model_is_openrouter or _default_llm_is_openrouter())
+    if not api_base and use_openrouter:
         api_base = OPENROUTER_OPENAI_COMPAT_BASE_URL
-    if not api_key and provider.lower() == "openai" and _default_llm_is_openrouter():
+    if not api_key and use_openrouter:
         api_key = _openrouter_api_key()
         if not api_key:
             echo_warning(

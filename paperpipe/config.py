@@ -453,6 +453,34 @@ def default_pqa_enrichment_llm(fallback: Optional[str]) -> Optional[str]:
     return fallback
 
 
+def default_pqa_agent_llm(fallback: Optional[str]) -> Optional[str]:
+    """LLM that drives PaperQA2's search agent.
+
+    PaperQA2 defaults this to gpt-4o, which fails without an OpenAI key. Falling back to the
+    answer LLM keeps `papi ask` on a single configured provider unless explicitly overridden.
+    """
+    configured = os.environ.get("PAPERPIPE_PQA_AGENT_LLM")
+    if configured and configured.strip():
+        return configured.strip()
+    cfg = load_config()
+    raw = _config_get(cfg, ("paperqa", "agent_llm"))
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return fallback
+
+
+def default_pqa_agent_type() -> Optional[str]:
+    """PaperQA2 agent type (e.g. 'fake' for deterministic, low-token retrieval)."""
+    configured = os.environ.get("PAPERPIPE_PQA_AGENT_TYPE")
+    if configured and configured.strip():
+        return configured.strip()
+    cfg = load_config()
+    raw = _config_get(cfg, ("paperqa", "agent_type"))
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return None
+
+
 def default_pqa_temperature() -> Optional[float]:
     configured = os.environ.get("PAPERPIPE_PQA_TEMPERATURE")
     if configured and configured.strip():

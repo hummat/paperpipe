@@ -89,6 +89,43 @@ class TestConfigPrecedence:
         assert paperpipe.default_pqa_timeout() == 300.0
         assert paperpipe.default_pqa_concurrency() == 4
 
+    def test_pqa_agent_config_from_toml(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        for env_var in ["PAPERPIPE_PQA_AGENT_LLM", "PAPERPIPE_PQA_AGENT_TYPE"]:
+            monkeypatch.delenv(env_var, raising=False)
+
+        (temp_db / "config.toml").write_text(
+            "\n".join(
+                [
+                    "[paperqa]",
+                    'agent_llm = "openrouter/deepseek/deepseek-v4-pro"',
+                    'agent_type = "fake"',
+                ]
+            )
+        )
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
+
+        assert paperpipe.default_pqa_agent_llm("ignored-fallback") == "openrouter/deepseek/deepseek-v4-pro"
+        assert paperpipe.default_pqa_agent_type() == "fake"
+
+    def test_pqa_agent_llm_falls_back_when_unset(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("PAPERPIPE_PQA_AGENT_LLM", raising=False)
+        monkeypatch.delenv("PAPERPIPE_PQA_AGENT_TYPE", raising=False)
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
+
+        assert paperpipe.default_pqa_agent_llm("the-answer-llm") == "the-answer-llm"
+        assert paperpipe.default_pqa_agent_type() is None
+
+    def test_pqa_agent_env_overrides_toml(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        (temp_db / "config.toml").write_text(
+            "\n".join(["[paperqa]", 'agent_llm = "config-llm"', 'agent_type = "config-type"'])
+        )
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
+        monkeypatch.setenv("PAPERPIPE_PQA_AGENT_LLM", "env-llm")
+        monkeypatch.setenv("PAPERPIPE_PQA_AGENT_TYPE", "env-type")
+
+        assert paperpipe.default_pqa_agent_llm("fallback") == "env-llm"
+        assert paperpipe.default_pqa_agent_type() == "env-type"
+
     def test_leann_config_from_toml(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
         for env_var in [
             "PAPERPIPE_LEANN_LLM_PROVIDER",
