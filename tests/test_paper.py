@@ -796,60 +796,10 @@ class TestDownloadPdf:
         assert dest.exists()
         assert dest.read_bytes() == pdf_content
 
-    def test_waits_before_direct_pdf_download_after_api_lookup(self, tmp_path, monkeypatch):
-        """The direct PDF fetch should share pacing with the preceding arXiv API lookup."""
-        import time
-        from unittest.mock import MagicMock
-
-        import arxiv
-
-        monkeypatch.setattr(paper_mod, "_ARXIV_MIN_INTERVAL_SECONDS", 3.0, raising=False)
-        sleeps = []
-        times = iter([100.0, 101.0])
-        monkeypatch.setattr(time, "monotonic", lambda: next(times))
-        monkeypatch.setattr(time, "sleep", lambda seconds: sleeps.append(seconds))
-
-        import requests
-
-        dest = tmp_path / "paper.pdf"
-        mock_paper = MagicMock()
-        mock_paper.pdf_url = "https://arxiv.org/pdf/1706.03762"
-
-        mock_client = MagicMock()
-        mock_client.results.return_value = iter([mock_paper])
-
-        class FakeResponse:
-            def raise_for_status(self):
-                return None
-
-            def iter_content(self, chunk_size=8192):
-                yield b"%PDF"
-
-        monkeypatch.setattr(arxiv, "Search", lambda id_list: MagicMock())
-        monkeypatch.setattr(arxiv, "Client", lambda: mock_client)
-        monkeypatch.setattr(requests, "get", lambda url, *, timeout, stream, **_kwargs: FakeResponse())
-
-        result = paperpipe.download_pdf("1706.03762", dest)
-
-        assert result is True
-        assert sleeps == [2.0]
-
     def test_returns_false_when_download_fails(self, tmp_path, monkeypatch):
-        """Test that download_pdf returns False when file isn't created."""
-        from unittest.mock import MagicMock
-
-        import arxiv
-
+        """download_pdf returns False when the underlying fetch yields no file."""
         dest = tmp_path / "paper.pdf"
-
-        mock_paper = MagicMock()
-        mock_paper.pdf_url = None
-
-        mock_client = MagicMock()
-        mock_client.results.return_value = iter([mock_paper])
-
-        monkeypatch.setattr(arxiv, "Search", lambda id_list: MagicMock())
-        monkeypatch.setattr(arxiv, "Client", lambda: mock_client)
+        monkeypatch.setattr(paper_mod, "download_pdf_from_url", lambda url, **_kwargs: (None, "boom"))
 
         result = paperpipe.download_pdf("1706.03762", dest)
 
@@ -1774,3 +1724,140 @@ class TestStripReasoning:
 
     def test_returns_empty_when_only_reasoning(self):
         assert paper_mod._strip_reasoning("all reasoning, no answer</think>") == ""
+
+
+# Trimmed arxiv.org/abs markup with the Highwire citation_* tags + subjects row the
+# scraper reads. Mirrors the real page for 2308.11408 (MatFuse).
+_ABS_HTML = """\
+<html><head>
+<meta name="citation_title" content="MatFuse: Controllable Material Generation" />
+<meta name="citation_author" content="Vecchio, Giuseppe" />
+<meta name="citation_author" content="Sortino, Renato" />
+<meta name="citation_doi" content="10.1109/CVPR52733.2024.00424" />
+<meta name="citation_date" content="2023/08/22" />
+<meta name="citation_online_date" content="2024/03/13" />
+<meta name="citation_pdf_url" content="https://arxiv.org/pdf/2308.11408" />
+<meta name="citation_abstract" content="Creating high-quality materials is hard." />
+</head><body>
+<td class="tablecell subjects">
+  <span class="primary-subject">Computer Vision and Pattern Recognition (cs.CV)</span>; Graphics (cs.GR)</td>
+</body></html>"""
+
+
+class TestFetchArxivMetadataAbs:
+    """Tests for the abs-page metadata scraper that bypasses the throttled query API."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_breaker(self, monkeypatch):
+        monkeypatch.setattr(paper_mod, "_ARXIV_API_DISABLED", False, raising=False)
+        monkeypatch.delenv("PAPERPIPE_ARXIV_NO_API", raising=False)
+
+    def _stub_abs(self, monkeypatch, html=_ABS_HTML):
+        calls = {}
+
+        def fake_request(url, *, timeout, stream=False):
+            calls["url"] = url
+            return types.SimpleNamespace(text=html)
+
+        monkeypatch.setattr(paper_mod, "_request_arxiv_content", fake_request)
+        return calls
+
+    def test_parses_all_citation_fields(self, monkeypatch):
+        self._stub_abs(monkeypatch)
+        meta = paper_mod._fetch_arxiv_metadata_abs("2308.11408")
+        assert meta["arxiv_id"] == "2308.11408"
+        assert meta["title"] == "MatFuse: Controllable Material Generation"
+        assert meta["authors"] == ["Vecchio, Giuseppe", "Sortino, Renato"]
+        assert meta["abstract"] == "Creating high-quality materials is hard."
+        assert meta["doi"] == "10.1109/CVPR52733.2024.00424"
+        assert meta["pdf_url"] == "https://arxiv.org/pdf/2308.11408"
+
+    def test_parses_categories_from_subjects_row(self, monkeypatch):
+        self._stub_abs(monkeypatch)
+        meta = paper_mod._fetch_arxiv_metadata_abs("2308.11408")
+        assert meta["categories"] == ["cs.CV", "cs.GR"]
+        assert meta["primary_category"] == "cs.CV"
+
+    def test_published_date_parsed_to_iso(self, monkeypatch):
+        self._stub_abs(monkeypatch)
+        meta = paper_mod._fetch_arxiv_metadata_abs("2308.11408")
+        assert meta["published"].startswith("2023-08-22T")
+        assert meta["updated"].startswith("2024-03-13T")
+
+    def test_strips_version_suffix_when_fetching(self, monkeypatch):
+        calls = self._stub_abs(monkeypatch)
+        meta = paper_mod._fetch_arxiv_metadata_abs("2308.11408v3")
+        assert calls["url"] == "https://arxiv.org/abs/2308.11408"
+        assert meta["arxiv_id"] == "2308.11408"
+
+    def test_missing_categories_degrades_gracefully(self, monkeypatch):
+        html = '<meta name="citation_title" content="No Subjects Row" />'
+        self._stub_abs(monkeypatch, html=html)
+        meta = paper_mod._fetch_arxiv_metadata_abs("1234.56789")
+        assert meta["categories"] == []
+        assert meta["primary_category"] is None
+
+    def test_raises_without_citation_title(self, monkeypatch):
+        self._stub_abs(monkeypatch, html="<html><body>no meta tags</body></html>")
+        with pytest.raises(RuntimeError, match="citation_title"):
+            paper_mod._fetch_arxiv_metadata_abs("1234.56789")
+
+
+class TestFetchArxivMetadataFallback:
+    """Tests for the API-first / abs-fallback dispatcher and its circuit breaker."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_breaker(self, monkeypatch):
+        monkeypatch.setattr(paper_mod, "_ARXIV_API_DISABLED", False, raising=False)
+        monkeypatch.delenv("PAPERPIPE_ARXIV_NO_API", raising=False)
+
+    def test_uses_api_when_available(self, monkeypatch):
+        monkeypatch.setattr(paper_mod, "_fetch_arxiv_metadata_api", lambda i: {"src": "api", "arxiv_id": i})
+        monkeypatch.setattr(paper_mod, "_fetch_arxiv_metadata_abs", lambda i: pytest.fail("abs should not be called"))
+        assert paper_mod.fetch_arxiv_metadata("2308.11408")["src"] == "api"
+
+    def test_falls_back_to_abs_on_api_failure(self, monkeypatch):
+        def boom(_):
+            raise RuntimeError("HTTP 429")
+
+        monkeypatch.setattr(paper_mod, "_fetch_arxiv_metadata_api", boom)
+        monkeypatch.setattr(paper_mod, "_fetch_arxiv_metadata_abs", lambda i: {"src": "abs", "arxiv_id": i})
+        assert paper_mod.fetch_arxiv_metadata("2308.11408")["src"] == "abs"
+
+    def test_api_failure_trips_breaker_for_rest_of_run(self, monkeypatch):
+        api_calls = {"n": 0}
+
+        def boom(_):
+            api_calls["n"] += 1
+            raise RuntimeError("HTTP 429")
+
+        monkeypatch.setattr(paper_mod, "_fetch_arxiv_metadata_api", boom)
+        monkeypatch.setattr(paper_mod, "_fetch_arxiv_metadata_abs", lambda i: {"src": "abs"})
+        paper_mod.fetch_arxiv_metadata("1111.11111")
+        paper_mod.fetch_arxiv_metadata("2222.22222")
+        # API attempted once; second call short-circuits straight to abs.
+        assert api_calls["n"] == 1
+        assert paper_mod._ARXIV_API_DISABLED is True
+
+    def test_env_var_skips_api_entirely(self, monkeypatch):
+        monkeypatch.setenv("PAPERPIPE_ARXIV_NO_API", "1")
+        monkeypatch.setattr(paper_mod, "_fetch_arxiv_metadata_api", lambda i: pytest.fail("API should be skipped"))
+        monkeypatch.setattr(paper_mod, "_fetch_arxiv_metadata_abs", lambda i: {"src": "abs"})
+        assert paper_mod.fetch_arxiv_metadata("2308.11408")["src"] == "abs"
+
+
+class TestDownloadPdfUrl:
+    """download_pdf should hit the deterministic /pdf URL, never the query API."""
+
+    def test_uses_deterministic_pdf_url(self, monkeypatch, tmp_path):
+        captured = {}
+
+        def fake_dl(url, **kwargs):
+            captured["url"] = url
+            return None, "stubbed"
+
+        monkeypatch.setattr(paper_mod, "download_pdf_from_url", fake_dl)
+        # Must not touch the arxiv library / query API.
+        monkeypatch.setattr(paper_mod, "_get_arxiv_client", lambda: pytest.fail("must not call query API"))
+        assert paper_mod.download_pdf("2206.03380v2", tmp_path / "p.pdf") is False
+        assert captured["url"] == "https://arxiv.org/pdf/2206.03380"

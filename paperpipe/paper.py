@@ -12,7 +12,7 @@ import tempfile
 import threading
 import time
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -62,6 +62,13 @@ _ARXIV_CLIENT: Any | None = None
 _ARXIV_LAST_REQUEST_MONOTONIC: float | None = None
 _ARXIV_RATE_LOCK = threading.Lock()
 _ARXIV_USER_AGENT: str | None = None
+# The arXiv query API (export.arxiv.org/api) is rate-limited far more aggressively
+# than the content hosts (arxiv.org/abs, /pdf, /e-print) and can stay 429-blocked for
+# a whole egress IP (e.g. shared corporate NAT). Once the API fails this run, trip a
+# process-wide breaker so subsequent papers go straight to the abs-page fallback instead
+# of re-burning the slow retry budget on a dead endpoint. PAPERPIPE_ARXIV_NO_API=1 skips
+# the API from the start.
+_ARXIV_API_DISABLED = False
 
 
 def _arxiv_user_agent() -> str:
@@ -174,8 +181,8 @@ def _request_arxiv_content(url: str, *, timeout: int, stream: bool = False) -> A
     raise RuntimeError("unreachable arXiv content retry state")
 
 
-def fetch_arxiv_metadata(arxiv_id: str) -> dict:
-    """Fetch paper metadata from arXiv API."""
+def _fetch_arxiv_metadata_api(arxiv_id: str) -> dict:
+    """Fetch metadata via the arXiv query API (export.arxiv.org/api)."""
     import arxiv
 
     search = arxiv.Search(id_list=[arxiv_id])
@@ -195,6 +202,72 @@ def fetch_arxiv_metadata(arxiv_id: str) -> dict:
         "journal_ref": paper.journal_ref,
         "pdf_url": paper.pdf_url,
     }
+
+
+def _fetch_arxiv_metadata_abs(arxiv_id: str) -> dict:
+    """Fetch metadata by scraping the abs page (arxiv.org/abs), avoiding the query API.
+
+    The abs page carries Highwire ``citation_*`` meta tags plus the subject list, which
+    cover everything callers need. Used as the fallback when the query API is throttled.
+    """
+    base = arxiv_base_id(arxiv_id)
+    html = _request_arxiv_content(f"https://arxiv.org/abs/{base}", timeout=30).text
+
+    def _meta(field: str) -> Optional[str]:
+        m = re.search(rf'<meta name="{field}" content="([^"]*)"', html)
+        return m.group(1) if m else None
+
+    def _iso(raw: Optional[str]) -> str:
+        if raw:
+            for fmt in ("%Y/%m/%d", "%Y-%m-%d"):
+                try:
+                    return datetime.strptime(raw, fmt).replace(tzinfo=timezone.utc).isoformat()
+                except ValueError:
+                    continue
+        return datetime.now(timezone.utc).isoformat()
+
+    title = _meta("citation_title")
+    if not title:
+        raise RuntimeError(f"abs page for {base} had no citation_title meta tag")
+
+    subjects = re.search(r'subjects">(.*?)</td>', html, re.S)
+    categories = re.findall(r"\(([a-zA-Z\-]+\.[a-zA-Z]{2,})\)", subjects.group(1)) if subjects else []
+    published = _meta("citation_date")
+    return {
+        "arxiv_id": base,
+        "title": title,
+        "authors": re.findall(r'<meta name="citation_author" content="([^"]*)"', html),
+        "abstract": _meta("citation_abstract") or "",
+        "primary_category": categories[0] if categories else None,
+        "categories": categories,
+        "published": _iso(published),
+        "updated": _iso(_meta("citation_online_date") or published),
+        "doi": _meta("citation_doi"),
+        "journal_ref": None,
+        "pdf_url": f"https://arxiv.org/pdf/{base}",
+    }
+
+
+def fetch_arxiv_metadata(arxiv_id: str) -> dict:
+    """Fetch paper metadata, preferring the arXiv API but falling back to the abs page.
+
+    The query API is the canonical source, but it is the first thing to get rate-limited.
+    On failure we trip a process-wide breaker and scrape the abs page for the rest of the
+    run; PAPERPIPE_ARXIV_NO_API=1 skips the API entirely from the start.
+    """
+    global _ARXIV_API_DISABLED
+
+    if _ARXIV_API_DISABLED or os.environ.get("PAPERPIPE_ARXIV_NO_API") == "1":
+        return _fetch_arxiv_metadata_abs(arxiv_id)
+
+    try:
+        return _fetch_arxiv_metadata_api(arxiv_id)
+    except Exception as e:
+        _ARXIV_API_DISABLED = True
+        echo_warning(
+            f"arXiv query API unavailable ({type(e).__name__}); using abs-page metadata for the rest of this run."
+        )
+        return _fetch_arxiv_metadata_abs(arxiv_id)
 
 
 def search_arxiv_by_title(query: str, *, max_results: int = 5) -> list[dict]:
@@ -240,16 +313,13 @@ def search_arxiv_by_title(query: str, *, max_results: int = 5) -> list[dict]:
 
 
 def download_pdf(arxiv_id: str, dest: Path) -> bool:
-    """Download paper PDF."""
-    import arxiv
+    """Download paper PDF from the deterministic arxiv.org/pdf URL.
 
-    search = arxiv.Search(id_list=[arxiv_id])
-    _wait_for_arxiv_request()
-    paper = next(_get_arxiv_client().results(search))
-
-    pdf_url = getattr(paper, "pdf_url", None)
-    if not isinstance(pdf_url, str) or not pdf_url:
-        return False
+    The PDF URL never needs the query API to resolve (it is always
+    ``https://arxiv.org/pdf/<id>``), so hitting it directly avoids the throttled
+    endpoint entirely.
+    """
+    pdf_url = f"https://arxiv.org/pdf/{arxiv_base_id(arxiv_id)}"
 
     temp_path, _error = download_pdf_from_url(pdf_url)
     if temp_path is None:
