@@ -1730,3 +1730,47 @@ class TestOllamaNumCtx:
         monkeypatch.setitem(sys.modules, "litellm", fake)
 
         assert paper_mod._run_llm("prompt", purpose="equations", model="gpt-4o") is None
+
+    def test_run_llm_strips_inline_reasoning(self, monkeypatch):
+        import sys
+
+        # Model leaks its chain-of-thought inline, terminated by </think>, before the answer.
+        def completion(**kwargs):
+            content = "Let me reason about this.\nStep 1...\n</think>\n\nThe Transformer."
+            msg = types.SimpleNamespace(content=content)
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg)])
+
+        fake = types.SimpleNamespace(
+            suppress_debug_info=False,
+            completion=completion,
+            token_counter=lambda model, messages: 100,
+            get_model_info=lambda model: {"max_input_tokens": 32768},
+        )
+        monkeypatch.setitem(sys.modules, "litellm", fake)
+
+        assert paper_mod._run_llm("prompt", purpose="tldr", model="gpt-4o") == "The Transformer."
+
+
+class TestStripReasoning:
+    """Tests for stripping <think> reasoning traces from model output."""
+
+    def test_strips_full_think_block(self):
+        assert paper_mod._strip_reasoning("<think>reasoning here</think>answer") == "answer"
+
+    def test_strips_unopened_trace_with_close_tag(self):
+        # Qwen3-style: reasoning emitted inline without an opening tag, then </think>, then answer.
+        text = "I need to write a TL;DR.\nLet me think...\n</think>\n\nThe real answer."
+        assert paper_mod._strip_reasoning(text) == "The real answer."
+
+    def test_keeps_text_after_last_close_tag(self):
+        assert paper_mod._strip_reasoning("a</think>b</think>final") == "final"
+
+    def test_passes_through_text_without_tags(self):
+        eq = r"\begin{equation} E = mc^2 \end{equation}"
+        assert paper_mod._strip_reasoning(eq) == eq
+
+    def test_handles_tag_whitespace_variant(self):
+        assert paper_mod._strip_reasoning("reasoning</think >answer") == "answer"
+
+    def test_returns_empty_when_only_reasoning(self):
+        assert paper_mod._strip_reasoning("all reasoning, no answer</think>") == ""

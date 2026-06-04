@@ -1197,6 +1197,20 @@ def _run_claude_cli(prompt: str, *, alias: str, purpose: str) -> Optional[str]:
 # Bounds for the auto-sized Ollama context window (tokens).
 _OLLAMA_MIN_NUM_CTX = 4096
 _OLLAMA_OUTPUT_RESERVE = 2048
+_THINK_CLOSE_RE = re.compile(r"</think\s*>", re.IGNORECASE)
+
+
+def _strip_reasoning(text: str) -> str:
+    """Drop a reasoning model's <think> trace, keeping only the final answer.
+
+    Reasoning-capable models (Qwen3, Nemotron, etc.) can emit their chain-of-thought inline,
+    terminated by a </think> marker, before the real answer. When that happens we keep only
+    what follows the last marker; text without the marker is returned unchanged.
+    """
+    matches = list(_THINK_CLOSE_RE.finditer(text))
+    if matches:
+        return text[matches[-1].end() :].strip()
+    return text
 
 
 def _ollama_num_ctx(prompt_tokens: int) -> int:
@@ -1262,7 +1276,7 @@ def _run_llm(prompt: str, *, purpose: str, model: Optional[str] = None) -> Optio
         )
         out = response.choices[0].message.content  # type: ignore[union-attr]
         if out:
-            out = out.strip()
+            out = _strip_reasoning(out.strip())
         if not out:
             # Reasoning models sometimes spend their whole budget on hidden thinking and
             # return no content; surface it instead of silently falling back.
