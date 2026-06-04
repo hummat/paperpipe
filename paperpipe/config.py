@@ -34,6 +34,11 @@ INDEX_FILE = PAPER_DB / "index.json"
 DEFAULT_LLM_MODEL_FALLBACK = "gemini/gemini-3-flash-preview"
 DEFAULT_EMBEDDING_MODEL_FALLBACK = "gemini/gemini-embedding-001"
 DEFAULT_LLM_TEMPERATURE_FALLBACK = 0.3
+# Upper bound for the Ollama context window paperpipe requests. Ollama's own default (~4k)
+# silently truncates full-paper prompts; paperpipe sizes num_ctx to the prompt up to this cap.
+DEFAULT_OLLAMA_NUM_CTX = 32768
+# Per-request LLM timeout (seconds). Generous enough for slow local/reasoning models on full papers.
+DEFAULT_LLM_TIMEOUT_FALLBACK = 120.0
 
 DEFAULT_LEANN_EMBEDDING_MODEL = "nomic-embed-text"
 DEFAULT_LEANN_EMBEDDING_MODE = "ollama"
@@ -212,6 +217,30 @@ def default_llm_temperature() -> float:
         env="PAPERPIPE_LLM_TEMPERATURE",
         keys=("llm", "temperature"),
         default=DEFAULT_LLM_TEMPERATURE_FALLBACK,
+    )
+
+
+def default_ollama_num_ctx() -> int:
+    """Max context window (tokens) paperpipe requests from Ollama. Lower it to save memory."""
+    return int(
+        _setting_float(
+            env="PAPERPIPE_OLLAMA_NUM_CTX",
+            keys=("llm", "ollama_num_ctx"),
+            default=DEFAULT_OLLAMA_NUM_CTX,
+        )
+    )
+
+
+def default_llm_timeout() -> float:
+    """Per-request timeout (seconds) for summary/equation/tag generation.
+
+    The default suits fast cloud APIs; slow local or reasoning models (e.g. large Ollama
+    models that do extended hidden thinking) often need more, so raise it for those.
+    """
+    return _setting_float(
+        env="PAPERPIPE_LLM_TIMEOUT",
+        keys=("llm", "timeout"),
+        default=DEFAULT_LLM_TIMEOUT_FALLBACK,
     )
 
 

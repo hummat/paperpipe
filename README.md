@@ -679,6 +679,17 @@ export OLLAMA_HOST=http://localhost:11434
 # export OLLAMA_API_BASE=http://localhost:11434
 ```
 
+Ollama defaults to a small context window (~4k tokens) and **silently truncates** longer
+prompts, so a full paper's LaTeX would be cut off. paperpipe avoids this by sizing the
+context window to each prompt, capped at 32768 tokens. Lower the cap to save memory, or raise
+it for very long papers:
+
+```bash
+export PAPERPIPE_OLLAMA_NUM_CTX=16384   # or set [llm] ollama_num_ctx in config.toml
+```
+
+This applies to local and Ollama Cloud (`ollama/<model>:cloud`, after `ollama signin`) models.
+
 ### Via the Claude Code CLI (no API key)
 
 If you have the [Claude Code](https://docs.claude.com/en/docs/claude-code) CLI installed and signed in (including subscription/OAuth logins), paperpipe can route summary/equation/tag/title generation through it instead of an API key:
@@ -735,6 +746,8 @@ For persistent settings, create `~/.paperpipe/config.toml` (override location wi
 [llm]
 model = "gemini/gemini-2.5-flash"
 temperature = 0.3
+# ollama_num_ctx = 32768   # max context window for ollama/* models (default 32768)
+# timeout = 120            # per-request seconds; raise for slow local/reasoning models (default 120)
 
 [embedding]
 model = "gemini/gemini-embedding-001"

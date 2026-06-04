@@ -25,8 +25,8 @@ class TestGenerateLlmContent:
     """Tests for generate_llm_content fallback behavior."""
 
     def test_falls_back_when_litellm_unavailable(self, tmp_path, monkeypatch):
-        # Force LiteLLM to appear unavailable
-        monkeypatch.setattr(paper_mod, "_litellm_available", lambda: False)
+        # Force the LLM backend to appear unavailable (gate is _llm_available, hermetic vs config)
+        monkeypatch.setattr(paper_mod, "_llm_available", lambda model=None: False)
 
         meta = {
             "arxiv_id": "2301.00001",
@@ -50,7 +50,7 @@ class TestGenerateLlmContent:
         assert "Test Paper" in tldr
 
     def test_falls_back_without_tex_content(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(paper_mod, "_litellm_available", lambda: False)
+        monkeypatch.setattr(paper_mod, "_llm_available", lambda model=None: False)
 
         meta = {
             "arxiv_id": "2301.00001",
@@ -1586,3 +1586,78 @@ class TestClaudeCliBackend:
         assert paper_mod._llm_available("claude-cli/sonnet") is True
         monkeypatch.setattr(shutil, "which", self._fake_which(False))
         assert paper_mod._llm_available("claude-cli/sonnet") is False
+
+
+class TestOllamaNumCtx:
+    """Tests for Ollama context-window sizing (anti-truncation)."""
+
+    def test_num_ctx_clamps_to_minimum(self, monkeypatch):
+        monkeypatch.setattr(paper_mod, "default_ollama_num_ctx", lambda: 32768)
+        # Tiny prompt: floored at the minimum window.
+        assert paper_mod._ollama_num_ctx(100) == paper_mod._OLLAMA_MIN_NUM_CTX
+
+    def test_num_ctx_sizes_to_prompt(self, monkeypatch):
+        monkeypatch.setattr(paper_mod, "default_ollama_num_ctx", lambda: 32768)
+        # Mid-size prompt: prompt tokens + generation reserve.
+        assert paper_mod._ollama_num_ctx(10000) == 10000 + paper_mod._OLLAMA_OUTPUT_RESERVE
+
+    def test_num_ctx_caps_at_configured_max(self, monkeypatch):
+        monkeypatch.setattr(paper_mod, "default_ollama_num_ctx", lambda: 8192)
+        # Huge prompt: capped at the configured maximum.
+        assert paper_mod._ollama_num_ctx(1_000_000) == 8192
+
+    def _fake_litellm(self, captured: dict, token_count: int):
+        def completion(**kwargs):
+            captured.update(kwargs)
+            msg = types.SimpleNamespace(content="ok")
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg)])
+
+        return types.SimpleNamespace(
+            suppress_debug_info=False,
+            completion=completion,
+            token_counter=lambda model, messages: token_count,
+            get_model_info=lambda model: {"max_input_tokens": 32768},
+        )
+
+    def test_run_llm_passes_num_ctx_for_ollama(self, monkeypatch):
+        import sys
+
+        captured: dict = {}
+        monkeypatch.setitem(sys.modules, "litellm", self._fake_litellm(captured, token_count=10000))
+        # Skip the live reachability probe.
+        monkeypatch.setattr(paper_mod, "_ollama_reachability_error", lambda **kw: None)
+        monkeypatch.setattr(paper_mod, "default_ollama_num_ctx", lambda: 32768)
+
+        out = paper_mod._run_llm("prompt", purpose="summary", model="ollama/qwen3:8b")
+
+        assert out == "ok"
+        assert captured["num_ctx"] == 10000 + paper_mod._OLLAMA_OUTPUT_RESERVE
+
+    def test_run_llm_omits_num_ctx_for_non_ollama(self, monkeypatch):
+        import sys
+
+        captured: dict = {}
+        monkeypatch.setitem(sys.modules, "litellm", self._fake_litellm(captured, token_count=5000))
+
+        out = paper_mod._run_llm("prompt", purpose="summary", model="gpt-4o")
+
+        assert out == "ok"
+        assert "num_ctx" not in captured
+
+    def test_run_llm_returns_none_on_empty_output(self, monkeypatch):
+        import sys
+
+        # Reasoning models can return empty content; _run_llm must report None, not "ok".
+        def completion(**kwargs):
+            msg = types.SimpleNamespace(content="")
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg)])
+
+        fake = types.SimpleNamespace(
+            suppress_debug_info=False,
+            completion=completion,
+            token_counter=lambda model, messages: 100,
+            get_model_info=lambda model: {"max_input_tokens": 32768},
+        )
+        monkeypatch.setitem(sys.modules, "litellm", fake)
+
+        assert paper_mod._run_llm("prompt", purpose="equations", model="gpt-4o") is None

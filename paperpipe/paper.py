@@ -29,6 +29,8 @@ from .config import (
     _prepare_ollama_env,
     default_llm_model,
     default_llm_temperature,
+    default_llm_timeout,
+    default_ollama_num_ctx,
     get_all_tags,
     normalize_tags,
 )
@@ -1069,6 +1071,16 @@ def _get_fallback_context_window(model: str) -> Optional[int]:
     return None
 
 
+def _count_message_tokens(messages: list[dict[str, str]], model: str, litellm_module: Any) -> int:
+    """Count prompt tokens, falling back to a char-based estimate if litellm can't."""
+    try:
+        return int(litellm_module.token_counter(model=model, messages=messages))
+    except Exception:
+        # Rough estimate: 4 chars ≈ 1 token
+        total_chars = sum(len(m.get("content", "")) for m in messages)
+        return total_chars // 4
+
+
 def _check_context_limit(messages: list[dict[str, str]], model: str, litellm_module: Any) -> tuple[bool, Optional[str]]:
     """Check if messages fit within model's context window.
 
@@ -1091,12 +1103,7 @@ def _check_context_limit(messages: list[dict[str, str]], model: str, litellm_mod
         debug("No context window info for %s, skipping check", model)
         return True, None
 
-    try:
-        token_count = litellm_module.token_counter(model=model, messages=messages)
-    except Exception:
-        # Token counting failed - estimate from chars (rough: 4 chars ≈ 1 token)
-        total_chars = sum(len(m.get("content", "")) for m in messages)
-        token_count = total_chars // 4
+    token_count = _count_message_tokens(messages, model, litellm_module)
 
     if token_count > max_input:
         return False, (
@@ -1165,6 +1172,22 @@ def _run_claude_cli(prompt: str, *, alias: str, purpose: str) -> Optional[str]:
     return out or None
 
 
+# Bounds for the auto-sized Ollama context window (tokens).
+_OLLAMA_MIN_NUM_CTX = 4096
+_OLLAMA_OUTPUT_RESERVE = 2048
+
+
+def _ollama_num_ctx(prompt_tokens: int) -> int:
+    """Size the Ollama context window to fit the prompt, within [min, configured max].
+
+    Ollama defaults to ~4k tokens and silently truncates longer prompts. We request just
+    enough to fit the prompt plus a generation reserve, capped by the configured maximum so
+    short prompts don't over-allocate KV cache.
+    """
+    needed = prompt_tokens + _OLLAMA_OUTPUT_RESERVE
+    return max(_OLLAMA_MIN_NUM_CTX, min(default_ollama_num_ctx(), needed))
+
+
 def _run_llm(prompt: str, *, purpose: str, model: Optional[str] = None) -> Optional[str]:
     """Run a prompt through the configured LLM backend. Returns None on any failure."""
     model = model or default_llm_model()
@@ -1181,7 +1204,8 @@ def _run_llm(prompt: str, *, purpose: str, model: Optional[str] = None) -> Optio
         echo_error("LiteLLM not installed. Install with: pip install litellm")
         return None
 
-    if _is_ollama_model_id(model):
+    is_ollama = _is_ollama_model_id(model)
+    if is_ollama:
         _prepare_ollama_env(os.environ)
         err = _ollama_reachability_error(api_base=os.environ["OLLAMA_API_BASE"])
         if err:
@@ -1197,6 +1221,11 @@ def _run_llm(prompt: str, *, purpose: str, model: Optional[str] = None) -> Optio
         echo_error(f"LLM ({model}): {err_msg}")
         return None
 
+    # Ollama truncates at its default context window unless num_ctx is set; size it to the prompt.
+    extra_params: dict[str, Any] = {}
+    if is_ollama:
+        extra_params["num_ctx"] = _ollama_num_ctx(_count_message_tokens(messages, model, litellm))
+
     echo_progress(f"  LLM ({model}): generating {purpose}...")
 
     try:
@@ -1204,13 +1233,19 @@ def _run_llm(prompt: str, *, purpose: str, model: Optional[str] = None) -> Optio
             model=model,
             messages=messages,
             temperature=default_llm_temperature(),
-            timeout=60,
+            timeout=default_llm_timeout(),
+            **extra_params,
         )
         out = response.choices[0].message.content  # type: ignore[union-attr]
         if out:
             out = out.strip()
+        if not out:
+            # Reasoning models sometimes spend their whole budget on hidden thinking and
+            # return no content; surface it instead of silently falling back.
+            echo_warning(f"LLM ({model}): {purpose} returned empty output (no content).")
+            return None
         echo_progress(f"  LLM ({model}): {purpose} ok")
-        return out or None
+        return out
     except Exception as e:
         err_str = str(e)
         # Surface rate-limit errors clearly
