@@ -924,27 +924,15 @@ def generate_auto_name(meta: dict, existing_names: set[str], use_llm: bool = Tru
     return name
 
 
-def _extract_pdf_text(pdf_path: Path) -> Optional[str]:
-    """Extract full text from PDF for use as LLM context.
+# pymupdf4llm occasionally misclassifies a born-digital PDF's body text as
+# images (emitting "picture ... intentionally omitted" markers) and returns
+# only scaffolding. When its output is this many times shorter than raw fitz's,
+# the raw text is the more faithful LLM context, so prefer it.
+_PDF_FITZ_PREFER_RATIO = 2.0
 
-    Uses pymupdf4llm for structured markdown output (better reading order,
-    table detection) if available, falling back to raw fitz.get_text().
 
-    Returns full text from the PDF, or None if extraction fails.
-    """
-    # Try pymupdf4llm first for better structured output
-    try:
-        import pymupdf4llm  # type: ignore[import-not-found]
-
-        md_text = pymupdf4llm.to_markdown(pdf_path)
-        if md_text:
-            return md_text.strip() or None
-    except ImportError:
-        debug("pymupdf4llm not available, falling back to raw fitz")
-    except Exception as e:
-        debug("pymupdf4llm extraction failed for %s: %s, falling back to fitz", pdf_path, e)
-
-    # Fallback to raw fitz
+def _extract_pdf_text_fitz(pdf_path: Path) -> Optional[str]:
+    """Extract raw text from a PDF using PyMuPDF (fitz). Returns None on failure."""
     try:
         import fitz  # PyMuPDF
     except ImportError:
@@ -953,16 +941,51 @@ def _extract_pdf_text(pdf_path: Path) -> Optional[str]:
 
     try:
         with fitz.open(pdf_path) as doc:
-            text_parts: list[str] = []
-            for page in doc:
-                text_parts.append(str(page.get_text()))
-            text = "\n".join(text_parts).strip()
-            return text if text else None
+            text = "\n".join(str(page.get_text()) for page in doc).strip()
+            return text or None
     except (OSError, ValueError, RuntimeError) as e:
         # fitz raises ValueError for invalid PDFs, OSError for file access issues,
         # and RuntimeError subclasses (e.g., pymupdf.FileNotFoundError) for missing files
         debug("PDF text extraction failed for %s: %s", pdf_path, e)
         return None
+
+
+def _extract_pdf_text(pdf_path: Path) -> Optional[str]:
+    """Extract full text from PDF for use as LLM context.
+
+    Uses pymupdf4llm for structured markdown output (better reading order,
+    table detection) if available, falling back to raw fitz.get_text(). When
+    pymupdf4llm returns far less text than raw fitz (it sometimes misclassifies
+    body text as images on older PDFs), the fuller fitz text is preferred.
+
+    Returns full text from the PDF, or None if extraction fails.
+    """
+    # Try pymupdf4llm first for better structured output
+    md_text: Optional[str] = None
+    try:
+        import pymupdf4llm  # type: ignore[import-not-found]
+
+        md_text = (pymupdf4llm.to_markdown(pdf_path) or "").strip() or None
+    except ImportError:
+        debug("pymupdf4llm not available, falling back to raw fitz")
+    except Exception as e:
+        debug("pymupdf4llm extraction failed for %s: %s, falling back to fitz", pdf_path, e)
+
+    fitz_text = _extract_pdf_text_fitz(pdf_path)
+
+    # Prefer raw fitz when pymupdf4llm produced nothing, or markedly less text
+    # (a sign it dropped body content it mislabeled as images).
+    if md_text is None:
+        return fitz_text
+    if fitz_text is not None and len(fitz_text) > _PDF_FITZ_PREFER_RATIO * len(md_text):
+        debug(
+            "pymupdf4llm output for %s (%d chars) << fitz (%d chars); using fitz",
+            pdf_path,
+            len(md_text),
+            len(fitz_text),
+        )
+        return fitz_text
+    return md_text
 
 
 def generate_llm_content(

@@ -225,6 +225,55 @@ class TestExtractPdfText:
         assert result is not None
         assert "Fallback" in result
 
+    def test_prefers_fitz_when_pymupdf4llm_truncates(self, tmp_path, monkeypatch):
+        """When pymupdf4llm returns far less text than fitz (e.g. body text
+        misclassified as images), the fuller fitz text should be used."""
+        pytest.importorskip("fitz")
+        import sys
+        import types
+
+        import fitz
+
+        pdf_path = tmp_path / "long.pdf"
+        doc = fitz.open()
+        for i in range(5):
+            page = doc.new_page()
+            page.insert_text((72, 72), f"RealBody{i} " + "content " * 100)
+        doc.save(pdf_path)
+        doc.close()
+
+        # Fake pymupdf4llm returning degenerate scaffolding (picture-omitted markers)
+        fake = types.ModuleType("pymupdf4llm")
+        fake.to_markdown = lambda p, *a, **k: "## \n\n==> picture intentionally omitted <=="
+        monkeypatch.setitem(sys.modules, "pymupdf4llm", fake)
+
+        result = paper_mod._extract_pdf_text(pdf_path)
+        assert result is not None
+        assert "RealBody0" in result  # recovered fitz body, not the stub
+
+    def test_keeps_pymupdf4llm_output_when_comparable(self, tmp_path, monkeypatch):
+        """pymupdf4llm's structured output should be kept when it is not truncated."""
+        pytest.importorskip("fitz")
+        import sys
+        import types
+
+        import fitz
+
+        pdf_path = tmp_path / "doc.pdf"
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((72, 72), "Body text here")
+        doc.save(pdf_path)
+        doc.close()
+
+        fake = types.ModuleType("pymupdf4llm")
+        fake.to_markdown = lambda p, *a, **k: "# Heading\n\nBody text here, nicely structured."
+        monkeypatch.setitem(sys.modules, "pymupdf4llm", fake)
+
+        result = paper_mod._extract_pdf_text(pdf_path)
+        assert result is not None
+        assert "nicely structured" in result  # kept pymupdf4llm version
+
 
 class TestExtractFirstPageText:
     """Tests for _extract_first_page_text helper."""
