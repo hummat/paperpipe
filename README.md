@@ -537,8 +537,8 @@ papi index --backend leann --leann-embedding-mode openai --leann-embedding-model
 # Gemini + Gemini embeddings (OpenAI-compatible)
 papi index --backend leann --leann-embedding-mode openai --leann-embedding-model gemini-embedding-001 --leann-embedding-api-base https://generativelanguage.googleapis.com/v1beta/openai/ --leann-embedding-api-key $GEMINI_API_KEY
 
-# Voyage embeddings (OpenAI-compatible)
-papi index --backend leann --leann-embedding-mode openai --leann-embedding-model voyage-4 --leann-embedding-api-base https://api.voyageai.com/v1 --leann-embedding-api-key $VOYAGE_API_KEY
+# Voyage embeddings (OpenAI-compatible) — endpoint + key auto-routed from VOYAGE_API_KEY
+papi index --backend leann --leann-embedding-mode openai --leann-embedding-model voyage-4
 ```
 
 **Asking:**
@@ -565,7 +565,7 @@ papi ask "how is neus different from nerf?" --backend leann --leann-provider ope
 <details markdown="1">
 <summary><strong>Embedding provider examples</strong></summary>
 
-**Note:** For `--leann-embedding-mode openai`, LEANN defaults the API key to `OPENAI_API_KEY` unless you pass `--leann-embedding-api-key`.
+**Note:** For `--leann-embedding-mode openai`, LEANN defaults the API key to `OPENAI_API_KEY` unless you pass `--leann-embedding-api-key`. Voyage models (`voyage-*`) are the exception: paperpipe auto-routes the Voyage endpoint and `VOYAGE_API_KEY` for you, so the explicit `--leann-embedding-api-base`/`--leann-embedding-api-key` flags below are optional.
 
 ```bash
 # Ollama (local)
@@ -579,9 +579,9 @@ papi index --backend leann --leann-embedding-mode openai --leann-embedding-model
 export GEMINI_API_KEY=...
 papi index --backend leann --leann-embedding-mode openai --leann-embedding-model gemini-embedding-001 --leann-embedding-api-base https://generativelanguage.googleapis.com/v1beta/openai/ --leann-embedding-api-key $GEMINI_API_KEY
 
-# Voyage (OpenAI-compatible)
+# Voyage (OpenAI-compatible) — endpoint + key auto-routed from VOYAGE_API_KEY
 export VOYAGE_API_KEY=...
-papi index --backend leann --leann-embedding-mode openai --leann-embedding-model voyage-4 --leann-embedding-api-base https://api.voyageai.com/v1 --leann-embedding-api-key $VOYAGE_API_KEY
+papi index --backend leann --leann-embedding-mode openai --leann-embedding-model voyage-4
 ```
 
 **Gemini notes:**
