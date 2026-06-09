@@ -460,10 +460,15 @@ def _search_fts(*, query: str, limit: int, papers: tuple[str, ...] = ()) -> list
         try:
             rows = run(query)
         except sqlite3.OperationalError:
-            # If the user query contains FTS5 special syntax characters, retry with a quoted literal.
-            quoted = _fts5_quote_literal(query)
+            # The raw query tripped FTS5 operator parsing — e.g. the hyphen in "multi-view"
+            # is read as a column operator ("no such column: view"). Retry with each word
+            # quoted as a literal term and OR-joined, so a natural-language query yields
+            # ranked relevance results instead of erroring (and then collapsing to a
+            # whole-phrase match that almost never hits). Fall back to the whole-phrase
+            # literal only if the OR form is empty or also fails.
+            safe = _fts5_or_terms(query) or _fts5_quote_literal(query)
             try:
-                rows = run(quoted)
+                rows = run(safe)
             except sqlite3.OperationalError as exc:
                 raise click.ClickException(
                     f"FTS query failed. Try a simpler query or use `papi search --grep --fixed-strings ...`. ({exc})"
@@ -479,6 +484,19 @@ def _search_fts(*, query: str, limit: int, papers: tuple[str, ...] = ()) -> list
 
 def _fts5_quote_literal(query: str) -> str:
     return '"' + (query or "").replace('"', '""') + '"'
+
+
+def _fts5_or_terms(query: str) -> str:
+    """Tokenize *query* into bare words, quote each as an FTS5 literal term, and OR-join.
+
+    Fallback for queries that trip FTS5 operator parsing (hyphens, colons, etc.). Quoting
+    each token neutralizes the special characters; OR + bm25 ranking turns a
+    natural-language query into a relevance search rather than the strict implicit-AND of
+    the raw form. Returns "" when the query has no word characters (caller then falls back
+    to the whole-phrase literal).
+    """
+    tokens = re.findall(r"\w+", query or "", flags=re.UNICODE)
+    return " OR ".join(_fts5_quote_literal(t) for t in tokens)
 
 
 def _maybe_update_search_index(*, name: str, old_name: Optional[str] = None) -> None:
