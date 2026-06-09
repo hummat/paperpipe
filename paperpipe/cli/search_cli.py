@@ -20,6 +20,7 @@ from ..search import (
     _search_db_path,
     _search_fts,
     _search_grep,
+    resolve_paper_keys,
 )
 
 
@@ -184,6 +185,10 @@ def search(
         raise click.UsageError("--hybrid requires --fts (disable hybrid or drop --no-fts).")
     if show_grep_hits and not hybrid:
         raise click.UsageError("--show-grep-hits requires --hybrid.")
+
+    # Resolve -p tokens to real index keys once, so every downstream path (grep, FTS,
+    # scan) sees exact keys. Tolerates punctuation/typo variants like `-p rgb-x` -> `rgbx`.
+    papers = resolve_paper_keys(papers)
 
     # Default search mode (env/config) only applies when the user didn't explicitly choose.
     mode = default_search_mode()

@@ -499,6 +499,60 @@ def _fts5_or_terms(query: str) -> str:
     return " OR ".join(_fts5_quote_literal(t) for t in tokens)
 
 
+def _normalize_paper_key(key: str) -> str:
+    """Lowercase and strip every non-alphanumeric character.
+
+    Collapses punctuation variants so `rgb-x`, `RGB_X`, and `rgbx` all map to `rgbx`.
+    """
+    return re.sub(r"[^a-z0-9]", "", (key or "").lower())
+
+
+def resolve_paper_keys(papers: tuple[str, ...]) -> tuple[str, ...]:
+    """Resolve user-supplied `-p`/`--papers` tokens to real index keys.
+
+    The `-p` selector is an exact directory/key lookup downstream (grep paths, the FTS
+    `name IN (...)` filter, and the scan-mode index filter all match keys exactly). A token
+    like `rgb-x` therefore silently selects nothing when the real key is `rgbx`, which reads
+    as "paper absent" instead of "key typo". Resolution order per token: exact key →
+    punctuation-insensitive normalized match → close fuzzy match (>= 0.85). Unresolved
+    tokens are passed through unchanged so the existing "No matching papers found" message
+    still fires. Resolutions that change a token are reported to stderr (never silent).
+    """
+    if not papers:
+        return papers
+
+    keys = list(load_index().keys())
+    if not keys:
+        return papers
+
+    by_norm: dict[str, str] = {}
+    for k in keys:
+        by_norm.setdefault(_normalize_paper_key(k), k)
+    key_set = set(keys)
+
+    resolved: list[str] = []
+    for token in papers:
+        if token in key_set:
+            resolved.append(token)
+            continue
+        norm_hit = by_norm.get(_normalize_paper_key(token))
+        if norm_hit:
+            echo_warning(f"-p: resolved '{token}' -> '{norm_hit}'")
+            resolved.append(norm_hit)
+            continue
+        best, best_ratio = None, 0.0
+        for k in keys:
+            ratio = SequenceMatcher(None, token, k).ratio()
+            if ratio > best_ratio:
+                best, best_ratio = k, ratio
+        if best is not None and best_ratio >= 0.85:
+            echo_warning(f"-p: resolved '{token}' -> '{best}' (fuzzy {best_ratio:.2f})")
+            resolved.append(best)
+        else:
+            resolved.append(token)
+    return tuple(resolved)
+
+
 def _maybe_update_search_index(*, name: str, old_name: Optional[str] = None) -> None:
     db_path = _search_db_path()
     if not db_path.exists():

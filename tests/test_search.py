@@ -85,3 +85,39 @@ class TestGrepCollection:
             include_tex=False,
         )
         assert matches == []
+
+
+class TestResolvePaperKeys:
+    @pytest.fixture(autouse=True)
+    def _fake_index(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        keys = {"rgbx": {}, "hunyuan3d-21": {}, "controlmat": {}}
+        monkeypatch.setattr(search_mod, "load_index", lambda: keys)
+
+    def test_empty_passthrough(self) -> None:
+        assert search_mod.resolve_paper_keys(()) == ()
+
+    def test_exact_key_unchanged(self) -> None:
+        assert search_mod.resolve_paper_keys(("rgbx",)) == ("rgbx",)
+
+    def test_normalized_hyphen_variant(self) -> None:
+        # `rgb-x` and `RGB_X` both normalize to the real key `rgbx`.
+        assert search_mod.resolve_paper_keys(("rgb-x",)) == ("rgbx",)
+        assert search_mod.resolve_paper_keys(("RGB_X",)) == ("rgbx",)
+
+    def test_fuzzy_typo(self) -> None:
+        # Missing hyphen resolves via the normalized/fuzzy path.
+        assert search_mod.resolve_paper_keys(("hunyuan3d21",)) == ("hunyuan3d-21",)
+
+    def test_unresolved_passes_through(self) -> None:
+        # Genuine non-matches are returned unchanged so the caller's
+        # "No matching papers found" message still fires.
+        assert search_mod.resolve_paper_keys(("not-a-real-paper-xyz",)) == (
+            "not-a-real-paper-xyz",
+        )
+
+    def test_mixed_tokens(self) -> None:
+        assert search_mod.resolve_paper_keys(("rgb-x", "controlmat", "nope-zzz")) == (
+            "rgbx",
+            "controlmat",
+            "nope-zzz",
+        )
