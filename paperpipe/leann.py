@@ -628,6 +628,24 @@ def _extract_arg_value(args: list[str], flag: str) -> Optional[str]:
     return None
 
 
+def _leann_voyage_embedding_args(*, embedding_mode: Optional[str], embedding_model: Optional[str]) -> list[str]:
+    """Return `leann build` flags routing a Voyage embedding model through its OpenAI-compatible API.
+
+    LEANN reaches Voyage via its ``openai`` embedding mode, which otherwise expects ``OPENAI_API_KEY``.
+    Both `papi ask` (auto-build) and `papi index` call this so a Voyage index builds from
+    ``VOYAGE_API_KEY`` without manual ``--embedding-api-base``/``--embedding-api-key`` flags. Returns
+    an empty list when the model isn't a Voyage model or the key is unset.
+    """
+    if (embedding_mode or "").strip().lower() != "openai":
+        return []
+    if not (embedding_model or "").strip().lower().startswith("voyage-"):
+        return []
+    voyage_key = config.os.environ.get("VOYAGE_API_KEY")
+    if not voyage_key:
+        return []
+    return ["--embedding-api-base", config.VOYAGE_OPENAI_COMPAT_BASE_URL, "--embedding-api-key", voyage_key]
+
+
 def _openrouter_api_key() -> Optional[str]:
     return config.os.environ.get("OPENROUTER_API_KEY")
 

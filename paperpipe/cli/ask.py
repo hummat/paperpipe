@@ -36,7 +36,7 @@ from ..config import (
     leann_embedding_from_index_name,
     pqa_index_name_for_embedding,
 )
-from ..leann import _ask_leann, _leann_build_index, _leann_index_exists
+from ..leann import _ask_leann, _leann_build_index, _leann_index_exists, _leann_voyage_embedding_args
 from ..output import debug, echo_error, echo_progress, echo_warning
 
 
@@ -47,10 +47,7 @@ def _leann_auto_build_args(index_name: str) -> list[str]:
 
     embedding_mode, embedding_model = inferred
     args = ["--embedding-mode", embedding_mode, "--embedding-model", embedding_model]
-    if embedding_mode == "openai" and embedding_model.lower().startswith("voyage-"):
-        voyage_key = os.environ.get("VOYAGE_API_KEY")
-        if voyage_key:
-            args.extend(["--embedding-api-base", "https://api.voyageai.com/v1", "--embedding-api-key", voyage_key])
+    args.extend(_leann_voyage_embedding_args(embedding_mode=embedding_mode, embedding_model=embedding_model))
     return args
 
 

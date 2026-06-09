@@ -16,6 +16,8 @@ from ..config import (
     _effective_leann_index_name,
     _is_ollama_model_id,
     _strip_ollama_prefix,
+    default_leann_embedding_mode,
+    default_leann_embedding_model,
     default_pqa_concurrency,
     default_pqa_embedding_model,
     default_pqa_enrichment_llm,
@@ -29,7 +31,7 @@ from ..config import (
     pqa_index_name_for_embedding,
 )
 from ..core import load_index
-from ..leann import _leann_build_index
+from ..leann import _leann_build_index, _leann_voyage_embedding_args
 from ..output import debug, echo_error, echo_progress, echo_success
 from ..search import (
     _ensure_search_index_schema,
@@ -229,6 +231,16 @@ def index_cmd(
         _append_str_flag("--embedding-host", leann_embedding_host)
         _append_str_flag("--embedding-api-base", leann_embedding_api_base)
         _append_str_flag("--embedding-api-key", leann_embedding_api_key)
+
+        # Voyage runs through LEANN's openai mode; auto-route its endpoint + key from VOYAGE_API_KEY
+        # (matches `papi ask`) unless the user supplied their own embedding endpoint/key.
+        if leann_embedding_api_base is None and leann_embedding_api_key is None:
+            effective_mode = (leann_embedding_mode or "").strip() or default_leann_embedding_mode()
+            effective_model = (leann_embedding_model or "").strip() or default_leann_embedding_model()
+            leann_extra_args.extend(
+                _leann_voyage_embedding_args(embedding_mode=effective_mode, embedding_model=effective_model)
+            )
+
         _append_int_flag("--graph-degree", leann_graph_degree)
         _append_int_flag("--complexity", leann_build_complexity)
         _append_int_flag("--num-threads", leann_num_threads)

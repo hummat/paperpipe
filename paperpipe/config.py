@@ -51,6 +51,7 @@ DEFAULT_LEANN_LLM_MODEL = "olmo-3:7b"
 DEFAULT_LEANN_INDEX_NAME = "papers"
 GEMINI_OPENAI_COMPAT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 OPENROUTER_OPENAI_COMPAT_BASE_URL = "https://openrouter.ai/api/v1"
+VOYAGE_OPENAI_COMPAT_BASE_URL = "https://api.voyageai.com/v1"
 
 
 _CONFIG_CACHE: Optional[tuple[Path, Optional[float], dict[str, Any]]] = None

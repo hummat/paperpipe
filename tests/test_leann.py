@@ -399,6 +399,34 @@ class TestLeannCommands:
         ]
 
 
+class TestLeannVoyageEmbeddingArgs:
+    """Voyage embeddings route through LEANN's openai mode; shared by `papi ask` and `papi index`."""
+
+    def test_voyage_openai_mode_with_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from paperpipe.leann import _leann_voyage_embedding_args
+
+        monkeypatch.setenv("VOYAGE_API_KEY", "vk")
+        assert _leann_voyage_embedding_args(embedding_mode="openai", embedding_model="voyage-4") == [
+            "--embedding-api-base",
+            "https://api.voyageai.com/v1",
+            "--embedding-api-key",
+            "vk",
+        ]
+
+    def test_voyage_without_key_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from paperpipe.leann import _leann_voyage_embedding_args
+
+        monkeypatch.delenv("VOYAGE_API_KEY", raising=False)
+        assert _leann_voyage_embedding_args(embedding_mode="openai", embedding_model="voyage-4") == []
+
+    def test_non_voyage_or_non_openai_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from paperpipe.leann import _leann_voyage_embedding_args
+
+        monkeypatch.setenv("VOYAGE_API_KEY", "vk")
+        assert _leann_voyage_embedding_args(embedding_mode="openai", embedding_model="text-embedding-3-small") == []
+        assert _leann_voyage_embedding_args(embedding_mode="ollama", embedding_model="voyage-4") == []
+
+
 class TestLeannIndexCommand:
     def test_index_backend_leann_runs_leann_build(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann" if cmd == "leann" else None)
@@ -425,6 +453,38 @@ class TestLeannIndexCommand:
         assert "--file-types" in cmd and ".pdf" in cmd
         assert kwargs.get("cwd") == temp_db
         assert (temp_db / ".pqa_papers" / "test-paper.pdf").exists()
+
+    def test_index_backend_leann_auto_routes_voyage_embedding(
+        self, temp_db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # `papi index` must inject Voyage's endpoint + key (like `papi ask`) so an openai/voyage-*
+        # index builds from VOYAGE_API_KEY instead of failing on a missing OPENAI_API_KEY.
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann" if cmd == "leann" else None)
+        monkeypatch.setenv("VOYAGE_API_KEY", "voyage-key")
+
+        calls: list[list[str]] = []
+
+        def fake_run(args: list[str], **kwargs):
+            calls.append(args)
+            return types.SimpleNamespace(returncode=0)
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        (temp_db / "papers" / "test-paper").mkdir(parents=True)
+        (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli_mod.cli,
+            ["index", "--backend", "leann", "--leann-embedding-mode", "openai", "--leann-embedding-model", "voyage-4"],
+        )
+        assert result.exit_code == 0, result.output
+
+        cmd = calls[0]
+        assert "--embedding-api-base" in cmd
+        assert cmd[cmd.index("--embedding-api-base") + 1] == "https://api.voyageai.com/v1"
+        assert "--embedding-api-key" in cmd
+        assert cmd[cmd.index("--embedding-api-key") + 1] == "voyage-key"
 
     def test_index_backend_leann_passes_no_compact_flag(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Verify --no-compact is passed to LEANN CLI by default."""
