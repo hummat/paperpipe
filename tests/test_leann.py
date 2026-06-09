@@ -545,6 +545,57 @@ class TestLeannManifest:
 
         assert _load_leann_manifest("test-index") is None
 
+    def test_manifest_key_is_staging_basename(self) -> None:
+        from paperpipe.leann import _manifest_key
+
+        assert _manifest_key(Path("/anywhere/.paperpipe/.pqa_papers/neus2.pdf")) == "neus2.pdf"
+
+    def test_migrate_manifest_key_resolved_symlink(self) -> None:
+        from paperpipe.leann import _migrate_manifest_key
+
+        # Legacy key from a resolved symlink: every paper's file is named paper.pdf,
+        # so the portable key must come from the parent (paper-name) directory.
+        assert _migrate_manifest_key("/home/me/.paperpipe/papers/neus2/paper.pdf") == "neus2.pdf"
+        assert _migrate_manifest_key("/Users/me/.paperpipe/papers/soft-rasterizer/paper.pdf") == "soft-rasterizer.pdf"
+
+    def test_migrate_manifest_key_unresolved_and_idempotent(self) -> None:
+        from paperpipe.leann import _migrate_manifest_key
+
+        # Unresolved staging path and already-portable key both collapse to the basename.
+        assert _migrate_manifest_key("/home/me/.paperpipe/.pqa_papers/neus2.pdf") == "neus2.pdf"
+        assert _migrate_manifest_key("neus2.pdf") == "neus2.pdf"
+
+    def test_load_manifest_migrates_legacy_absolute_keys(self, temp_db: Path) -> None:
+        import json
+
+        from paperpipe.leann import _leann_manifest_path, _load_leann_manifest
+
+        path = _leann_manifest_path("test-index")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        legacy = _make_manifest(
+            files={
+                "/home/me/.paperpipe/papers/neus2/paper.pdf": {
+                    "mtime": 1.0,
+                    "indexed_at": "2026-01-26T10:00:00Z",
+                    "status": "ok",
+                },
+                "/home/me/.paperpipe/papers/nerf/paper.pdf": {
+                    "mtime": 2.0,
+                    "indexed_at": "2026-01-26T10:00:00Z",
+                    "status": "ok",
+                },
+            }
+        )
+        path.write_text(json.dumps(legacy))
+
+        loaded = _load_leann_manifest("test-index")
+        assert loaded is not None
+        assert set(loaded["files"]) == {"neus2.pdf", "nerf.pdf"}
+
+        # Migration must be persisted to disk, not just applied in memory.
+        on_disk = json.loads(path.read_text())
+        assert set(on_disk["files"]) == {"neus2.pdf", "nerf.pdf"}
+
     def test_load_backend_meta_helpers(self, temp_db: Path) -> None:
         import json
 
@@ -628,7 +679,7 @@ class TestLeannIndexDelta:
 
         manifest = _make_manifest(
             files={
-                str(pdf.resolve()): {
+                pdf.name: {
                     "mtime": pdf.stat().st_mtime,
                     "indexed_at": "2026-01-26T10:00:00Z",
                     "status": "ok",
@@ -652,7 +703,7 @@ class TestLeannIndexDelta:
 
         manifest = _make_manifest(
             files={
-                str(pdf.resolve()): {
+                pdf.name: {
                     "mtime": pdf.stat().st_mtime - 100,  # Old mtime
                     "indexed_at": "2026-01-26T10:00:00Z",
                     "status": "ok",
@@ -666,6 +717,97 @@ class TestLeannIndexDelta:
         assert len(delta.changed_files) == 1
         assert delta.unchanged_count == 0
 
+    def test_compute_delta_tolerates_subsecond_mtime_drift(self, temp_db: Path) -> None:
+        # A synced index loses sub-second mtime precision; such files must stay "unchanged".
+        from paperpipe.leann import _compute_index_delta
+
+        docs_dir = temp_db / "docs"
+        docs_dir.mkdir(parents=True)
+        pdf = docs_dir / "paper.pdf"
+        pdf.touch()
+
+        manifest = _make_manifest(
+            files={
+                pdf.name: {
+                    "mtime": pdf.stat().st_mtime + 0.9,  # sub-second drift from precision loss
+                    "indexed_at": "2026-01-26T10:00:00Z",
+                    "status": "ok",
+                }
+            }
+        )
+
+        delta = _compute_index_delta(docs_dir, manifest)
+
+        assert len(delta.changed_files) == 0
+        assert delta.unchanged_count == 1
+
+    def test_compute_delta_size_is_primary_signal(self, temp_db: Path) -> None:
+        # When size is recorded, it decides change — a differing size means changed even if mtime
+        # matches, and a matching size means unchanged even if mtime drifts far (cross-sync case).
+        from paperpipe.leann import _compute_index_delta
+
+        docs_dir = temp_db / "docs"
+        docs_dir.mkdir(parents=True)
+        pdf = docs_dir / "paper.pdf"
+        pdf.write_bytes(b"hello world")
+        st = pdf.stat()
+
+        # Same size, but mtime wildly off: size wins -> unchanged.
+        same_size = _make_manifest(
+            files={
+                pdf.name: {
+                    "mtime": st.st_mtime - 10_000,
+                    "size": st.st_size,
+                    "indexed_at": "2026-01-26T10:00:00Z",
+                    "status": "ok",
+                }
+            }
+        )
+        delta = _compute_index_delta(docs_dir, same_size)
+        assert delta.unchanged_count == 1
+        assert len(delta.changed_files) == 0
+
+        # Different size, but mtime identical: size wins -> changed.
+        diff_size = _make_manifest(
+            files={
+                pdf.name: {
+                    "mtime": st.st_mtime,
+                    "size": st.st_size + 1,
+                    "indexed_at": "2026-01-26T10:00:00Z",
+                    "status": "ok",
+                }
+            }
+        )
+        delta = _compute_index_delta(docs_dir, diff_size)
+        assert len(delta.changed_files) == 1
+        assert delta.unchanged_count == 0
+
+    def test_compute_delta_backfills_size_for_legacy_unchanged(self, temp_db: Path) -> None:
+        # A migrated legacy entry (no size) judged unchanged must gain a size in place so future
+        # comparisons use the robust filesystem-invariant signal instead of the mtime window.
+        from paperpipe.leann import _compute_index_delta
+
+        docs_dir = temp_db / "docs"
+        docs_dir.mkdir(parents=True)
+        pdf = docs_dir / "paper.pdf"
+        pdf.write_bytes(b"hello world")
+
+        manifest = _make_manifest(
+            files={
+                pdf.name: {
+                    "mtime": pdf.stat().st_mtime,
+                    "indexed_at": "2026-01-26T10:00:00Z",
+                    "status": "ok",
+                }
+            }
+        )
+
+        delta = _compute_index_delta(docs_dir, manifest)
+
+        assert delta.unchanged_count == 1
+        assert delta.backfilled_count == 1
+        assert manifest["files"][pdf.name]["size"] == pdf.stat().st_size
+
     def test_compute_delta_removed_files(self, temp_db: Path) -> None:
         from paperpipe.leann import _compute_index_delta
 
@@ -674,7 +816,7 @@ class TestLeannIndexDelta:
 
         manifest = _make_manifest(
             files={
-                "/nonexistent/removed.pdf": {
+                "removed.pdf": {
                     "mtime": 12345.0,
                     "indexed_at": "2026-01-26T10:00:00Z",
                     "status": "ok",
@@ -685,7 +827,7 @@ class TestLeannIndexDelta:
         delta = _compute_index_delta(docs_dir, manifest)
 
         assert len(delta.removed_files) == 1
-        assert delta.removed_files[0] == "/nonexistent/removed.pdf"
+        assert delta.removed_files[0] == "removed.pdf"
 
     def test_compute_delta_skips_error_status(self, temp_db: Path) -> None:
         from paperpipe.leann import _compute_index_delta
@@ -697,7 +839,7 @@ class TestLeannIndexDelta:
 
         manifest = _make_manifest(
             files={
-                str(pdf.resolve()): {
+                pdf.name: {
                     "mtime": 0,  # Different mtime, but status is error
                     "indexed_at": "2026-01-26T10:00:00Z",
                     "status": "error",
@@ -799,15 +941,17 @@ class TestLeannIncrementalUpdate:
                 embedding_model="nomic-embed-text",
             )
 
-    def test_incremental_update_error_removed_files(self, temp_db: Path) -> None:
-        from paperpipe.leann import IncrementalUpdateError, _leann_incremental_update, _save_leann_manifest
+    def test_incremental_update_removed_files_warns_and_cleans_manifest(
+        self, temp_db: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        from paperpipe.leann import _leann_incremental_update, _load_leann_manifest, _save_leann_manifest
 
         docs_dir = temp_db / "docs"
         docs_dir.mkdir(parents=True)
 
         manifest = _make_manifest(
             files={
-                "/nonexistent/removed.pdf": {
+                "removed.pdf": {
                     "mtime": 12345.0,
                     "indexed_at": "2026-01-26T10:00:00Z",
                     "status": "ok",
@@ -817,13 +961,23 @@ class TestLeannIncrementalUpdate:
         _save_leann_manifest("test-index", manifest)
         _write_leann_index_stub(temp_db / ".leann" / "indexes" / "test-index")
 
-        with pytest.raises(IncrementalUpdateError, match="Removed files"):
-            _leann_incremental_update(
-                index_name="test-index",
-                docs_dir=docs_dir,
-                embedding_mode="ollama",
-                embedding_model="nomic-embed-text",
-            )
+        # Should not raise; removed files trigger a warning and manifest cleanup instead
+        added, unchanged, errors = _leann_incremental_update(
+            index_name="test-index",
+            docs_dir=docs_dir,
+            embedding_mode="ollama",
+            embedding_model="nomic-embed-text",
+        )
+        assert added == 0
+        assert errors == 0
+
+        captured = capsys.readouterr()
+        assert "stale vectors" in captured.err or "removed paper" in captured.err
+
+        # Removed entry must be pruned from the manifest
+        updated = _load_leann_manifest("test-index")
+        assert updated is not None
+        assert "removed.pdf" not in updated["files"]
 
     def test_incremental_update_no_changes_returns_zero(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from paperpipe.leann import _leann_incremental_update, _save_leann_manifest
@@ -835,7 +989,7 @@ class TestLeannIncrementalUpdate:
 
         manifest = _make_manifest(
             files={
-                str(pdf.resolve()): {
+                pdf.name: {
                     "mtime": pdf.stat().st_mtime,
                     "indexed_at": "2026-01-26T10:00:00Z",
                     "status": "ok",

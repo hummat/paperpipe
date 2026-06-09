@@ -35,6 +35,12 @@ from .paperqa import _validate_index_name
 # -----------------------------------------------------------------------------
 
 MANIFEST_VERSION = 1
+# Treat a file as unchanged if its mtime is within this many seconds of the recorded value.
+# Filesystems and sync tools differ in mtime precision (ext4/APFS keep nanoseconds; FAT/exFAT
+# round to 2s; many cloud syncs truncate sub-second precision), so a synced index would otherwise
+# report every paper as "changed" and force a full re-embed. Genuine re-downloads replace the PDF
+# and shift mtime by far more than this, so they are still detected.
+MANIFEST_MTIME_TOLERANCE_SEC = 2.0
 LEANN_DEFAULT_GRAPH_DEGREE = 32
 LEANN_DEFAULT_BUILD_COMPLEXITY = 64
 LEANN_DEFAULT_NUM_THREADS = 1
@@ -42,12 +48,21 @@ LEANN_DEFAULT_RECOMPUTE = True
 _INVALID_UNICODE_RE = re.compile(r"[\x00\uD800-\uDFFF]")
 
 
-class FileEntry(TypedDict):
-    """Tracking info for a single indexed file."""
-
+class _FileEntryBase(TypedDict):
     mtime: float  # File modification time at indexing
     indexed_at: str  # ISO timestamp when indexed
     status: str  # "ok" or "error"
+
+
+class FileEntry(_FileEntryBase, total=False):
+    """Tracking info for a single indexed file.
+
+    ``size`` is the file size in bytes at indexing. It is the primary change signal because it is
+    byte-identical across filesystems, unlike mtime (which loses precision through sync). It is
+    optional: entries migrated from legacy manifests lack it and fall back to mtime comparison.
+    """
+
+    size: int
 
 
 class LeannManifest(TypedDict):
@@ -70,6 +85,7 @@ class IndexDelta:
     changed_files: list[Path]  # mtime differs
     removed_files: list[str]  # In manifest but not on disk
     unchanged_count: int  # Files that don't need re-indexing
+    backfilled_count: int = 0  # Legacy entries that gained a `size` and need persisting
 
 
 def _leann_manifest_path(index_name: str) -> Path:
@@ -93,8 +109,37 @@ def _leann_index_exists(index_name: str) -> bool:
     return _leann_index_meta_path(index_name).exists() and _leann_index_file_path(index_name).exists()
 
 
+def _manifest_key(pdf: Path) -> str:
+    """Stable, machine-portable manifest key for a staged PDF.
+
+    The staging dir holds symlinks named ``{paper_name}.pdf`` (e.g. ``neus2.pdf``). We key on this
+    basename rather than ``pdf.resolve()`` so the manifest survives DB relocation and cross-machine
+    sync — an absolute path embeds the home prefix (``/home/...`` vs ``/Users/...``) and, once the
+    symlink is resolved, collapses every paper onto the colliding basename ``paper.pdf``. PaperQA2's
+    own ``files.zip`` already keys on this same basename.
+    """
+    return pdf.name
+
+
+def _migrate_manifest_key(old_key: str) -> str:
+    """Convert a legacy absolute-path manifest key to the portable staging basename.
+
+    Legacy keys were ``str(pdf.resolve())`` — e.g. ``/home/me/.paperpipe/papers/neus2/paper.pdf``
+    (resolved symlink) or ``/home/me/.paperpipe/.pqa_papers/neus2.pdf`` (unresolved). Both map back
+    to ``neus2.pdf``. Already-portable keys (no path separator) are returned unchanged, so the
+    migration is idempotent.
+    """
+    p = Path(old_key)
+    if p.name == "paper.pdf" and p.parent.name:
+        return f"{p.parent.name}.pdf"
+    return p.name
+
+
 def _load_leann_manifest(index_name: str) -> Optional[LeannManifest]:
-    """Load manifest for an index. Returns None if missing or corrupt."""
+    """Load manifest for an index. Returns None if missing or corrupt.
+
+    Legacy manifests keyed on absolute paths are migrated in place to portable basenames.
+    """
     path = _leann_manifest_path(index_name)
     if not path.exists():
         return None
@@ -103,10 +148,24 @@ def _load_leann_manifest(index_name: str) -> Optional[LeannManifest]:
         if data.get("version") != MANIFEST_VERSION:
             debug("Manifest version mismatch (expected %d, got %s)", MANIFEST_VERSION, data.get("version"))
             return None
-        return data
     except (json.JSONDecodeError, OSError) as e:
         debug("Failed to load manifest: %s", e)
         return None
+
+    files = data.get("files")
+    if isinstance(files, dict):
+        migrated: dict[str, FileEntry] = {}
+        changed = False
+        for key, entry in files.items():
+            new_key = _migrate_manifest_key(key)
+            if new_key != key:
+                changed = True
+            migrated[new_key] = entry
+        if changed:
+            data["files"] = migrated
+            _save_leann_manifest(index_name, data)
+            debug("Migrated %d legacy manifest key(s) to portable basenames", len(migrated))
+    return data
 
 
 def _save_leann_manifest(index_name: str, manifest: LeannManifest) -> bool:
@@ -136,8 +195,10 @@ def _create_initial_manifest(
 
     for pdf in docs_dir.glob("*.pdf"):
         try:
-            files[str(pdf.resolve())] = {
-                "mtime": pdf.stat().st_mtime,
+            st = pdf.stat()
+            files[_manifest_key(pdf)] = {
+                "mtime": st.st_mtime,
+                "size": st.st_size,
                 "indexed_at": now_iso,
                 "status": "ok",
             }
@@ -162,39 +223,52 @@ def _compute_index_delta(docs_dir: Path, manifest: Optional[LeannManifest]) -> I
     """Compare current PDFs against manifest to find new/changed/removed files."""
     indexed = manifest.get("files", {}) if manifest else {}
     current_pdfs = list(docs_dir.glob("*.pdf"))
-    current_paths = {str(p.resolve()) for p in current_pdfs}
+    current_keys = {_manifest_key(p) for p in current_pdfs}
 
     new_files: list[Path] = []
     changed_files: list[Path] = []
     unchanged_count = 0
+    backfilled_count = 0
 
     for pdf in current_pdfs:
-        pdf_str = str(pdf.resolve())
-        if pdf_str not in indexed:
+        key = _manifest_key(pdf)
+        if key not in indexed:
             new_files.append(pdf)
-        elif indexed[pdf_str].get("status") == "error":
+        elif indexed[key].get("status") == "error":
             # Skip previously failed files (require --leann-force to retry)
             unchanged_count += 1
         else:
             try:
-                current_mtime = pdf.stat().st_mtime
-                indexed_mtime = indexed[pdf_str]["mtime"]
-                # Allow small float tolerance for mtime comparison
-                if abs(current_mtime - indexed_mtime) > 0.001:
-                    changed_files.append(pdf)
-                else:
-                    unchanged_count += 1
+                st = pdf.stat()
             except OSError:
                 # Can't stat file, skip it
                 continue
+            entry = indexed[key]
+            indexed_size = entry.get("size")
+            if indexed_size is not None:
+                # Size is filesystem-invariant: the reliable change signal across sync.
+                changed = st.st_size != indexed_size
+            else:
+                # Legacy entry without a recorded size: fall back to a sync-tolerant mtime check.
+                changed = abs(st.st_mtime - entry["mtime"]) > MANIFEST_MTIME_TOLERANCE_SEC
+                if not changed:
+                    # Record the size now so the next comparison uses the robust signal instead of
+                    # the mtime tolerance window (the caller persists when backfilled_count > 0).
+                    entry["size"] = st.st_size
+                    backfilled_count += 1
+            if changed:
+                changed_files.append(pdf)
+            else:
+                unchanged_count += 1
 
-    removed_files = [p for p in indexed if p not in current_paths]
+    removed_files = [k for k in indexed if k not in current_keys]
 
     return IndexDelta(
         new_files=new_files,
         changed_files=changed_files,
         removed_files=removed_files,
         unchanged_count=unchanged_count,
+        backfilled_count=backfilled_count,
     )
 
 
@@ -316,10 +390,23 @@ def _leann_incremental_update(
 
     delta = _compute_index_delta(docs_dir, manifest)
     if delta.removed_files:
-        raise IncrementalUpdateError("Removed files detected; full rebuild required")
+        # Stale vectors remain in the index (LEANN non-compact doesn't support deletion) but
+        # their manifest entries are cleaned up below, so they won't trigger another warning.
+        # Run with --leann-force to fully purge them.
+        echo_warning(
+            f"{len(delta.removed_files)} removed paper(s) detected; stale vectors will remain in the index "
+            "until a full rebuild (papi index --backend leann --leann-force)"
+        )
     files_to_add = delta.new_files + delta.changed_files
 
     if not files_to_add:
+        # Persist manifest changes made during delta: removed-file cleanup and/or size backfill
+        # (legacy entries gain a `size`). Vectors for removed papers remain until --leann-force.
+        if delta.removed_files:
+            for removed in delta.removed_files:
+                manifest["files"].pop(removed, None)
+        if delta.removed_files or delta.backfilled_count:
+            _save_leann_manifest(index_name, manifest)
         return 0, delta.unchanged_count, 0
 
     try:
@@ -466,14 +553,16 @@ def _leann_incremental_update(
                 for i, chunk in enumerate(chunks):
                     metadata = dict(chunk.get("metadata") or {})
                     if "id" not in metadata:
-                        metadata["id"] = f"{pdf.resolve()}::{i}"
+                        metadata["id"] = f"{_manifest_key(pdf)}::{i}"
                     # Sanitize text: PDF extractors can produce lone surrogates
                     # (e.g. \ud835 from math symbols) that are invalid in UTF-8.
                     text = _sanitize_leann_text(chunk.get("text", ""))
                     metadata = {k: _sanitize_leann_text(v) if isinstance(v, str) else v for k, v in metadata.items()}
                     builder.add_text(text, metadata=metadata)
-                manifest["files"][str(pdf.resolve())] = {
-                    "mtime": pdf.stat().st_mtime,
+                st = pdf.stat()
+                manifest["files"][_manifest_key(pdf)] = {
+                    "mtime": st.st_mtime,
+                    "size": st.st_size,
                     "indexed_at": now_iso,
                     "status": "ok",
                 }
@@ -486,8 +575,10 @@ def _leann_incremental_update(
         for pdf in files_to_add:
             try:
                 add_method(str(pdf))
-                manifest["files"][str(pdf.resolve())] = {
-                    "mtime": pdf.stat().st_mtime,
+                st = pdf.stat()
+                manifest["files"][_manifest_key(pdf)] = {
+                    "mtime": st.st_mtime,
+                    "size": st.st_size,
                     "indexed_at": now_iso,
                     "status": "ok",
                 }
