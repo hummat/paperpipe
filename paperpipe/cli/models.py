@@ -123,20 +123,31 @@ def models(
     enabled_providers = {p for p in ("openai", "gemini", "anthropic", "voyage", "openrouter") if provider_has_key(p)}
 
     def probe_one(kind_name: str, model: str):
-        if _is_ollama_model_id(model):
-            config._prepare_ollama_env(os.environ)
-            err = config._ollama_reachability_error(api_base=os.environ["OLLAMA_API_BASE"])
-            if err:
-                raise RuntimeError(err)
-        if kind_name == "completion":
-            llm_completion(
-                model=model,
-                messages=[{"role": "user", "content": "Reply with the single word 'pong'."}],
-                max_tokens=max_tokens,
-                timeout=timeout,
-            )
-        else:
-            llm_embedding(model=model, input=["ping"], timeout=embedding_timeout)
+        # LiteLLM reads the Ollama base URL from the process environment, so the
+        # env mutation is required for the probe call; restore afterwards so it
+        # doesn't leak into probes of other providers.
+        saved_env = {key: os.environ.get(key) for key in ("OLLAMA_API_BASE", "OLLAMA_HOST")}
+        try:
+            if _is_ollama_model_id(model):
+                config._prepare_ollama_env(os.environ)
+                err = config._ollama_reachability_error(api_base=os.environ["OLLAMA_API_BASE"])
+                if err:
+                    raise RuntimeError(err)
+            if kind_name == "completion":
+                llm_completion(
+                    model=model,
+                    messages=[{"role": "user", "content": "Reply with the single word 'pong'."}],
+                    max_tokens=max_tokens,
+                    timeout=timeout,
+                )
+            else:
+                llm_embedding(model=model, input=["ping"], timeout=embedding_timeout)
+        finally:
+            for key, value in saved_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
     def probe_group(kind_name: str, candidates: list[str]) -> paperqa._ModelProbeResult:
         last_exc: Optional[Exception] = None

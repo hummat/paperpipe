@@ -325,7 +325,6 @@ def _ensure_search_index_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    conn.commit()
 
 
 def _set_search_index_meta(conn: sqlite3.Connection, *, include_tex: bool, commit: bool = True) -> None:

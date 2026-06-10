@@ -407,11 +407,16 @@ class TestFigureExtractionIntegration:
         # Mock requests
         class MockResponse:
             def __init__(self):
-                self.content = tar_bytes
                 self.status_code = 200
                 self.headers: dict[str, str] = {}
 
+            def iter_content(self, chunk_size=8192):
+                yield tar_bytes
+
             def raise_for_status(self):
+                pass
+
+            def close(self):
                 pass
 
         monkeypatch.setattr(requests, "get", lambda *_args, **_kwargs: MockResponse())  # pyright: ignore[reportUnusedVariable]
@@ -447,11 +452,16 @@ class TestFigureExtractionIntegration:
 
         class MockResponse:
             def __init__(self):
-                self.content = tar_bytes
                 self.status_code = 200
                 self.headers: dict[str, str] = {}
 
+            def iter_content(self, chunk_size=8192):
+                yield tar_bytes
+
             def raise_for_status(self):
+                pass
+
+            def close(self):
                 pass
 
         monkeypatch.setattr(requests, "get", lambda *_args, **_kwargs: MockResponse())  # pyright: ignore[reportUnusedVariable]

@@ -333,6 +333,8 @@ def ask(
         click.echo("\nFalling back to local search...")
         # Do a simple local search instead
         ctx_search = subprocess.run(["papi", "search", query], capture_output=True, text=True)
+        if ctx_search.returncode != 0:
+            raise click.ClickException((ctx_search.stderr or ctx_search.stdout or "").strip() or "Local search failed")
         click.echo(ctx_search.stdout.rstrip("\n"))
         return
 

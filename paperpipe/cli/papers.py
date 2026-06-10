@@ -679,7 +679,11 @@ def regenerate(
 
         paper_dir = config.PAPERS_DIR / name
         meta_path = paper_dir / "meta.json"
-        meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+        if meta_path.exists():
+            meta = json.loads(meta_path.read_text())
+        else:
+            echo_warning(f"meta.json missing for '{name}'; index entry will lose metadata fields.")
+            meta = {}
 
         # Handle --name
         if set_name:

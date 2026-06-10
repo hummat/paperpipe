@@ -273,6 +273,7 @@ def _write_leann_metadata(index_name: str, embedding_mode: str, embedding_model:
 
     Creates paperpipe_leann_meta.json alongside LEANN's documents.leann.meta.json.
     """
+    index_name = _validate_index_name(index_name)
     try:
         from importlib.metadata import PackageNotFoundError
         from importlib.metadata import version as get_version

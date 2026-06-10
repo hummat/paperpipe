@@ -125,7 +125,7 @@ def load_config() -> dict[str, Any]:
         if not isinstance(cfg, dict):
             cfg = {}
     except Exception as e:
-        debug("Failed to parse config.toml (%s) [%s]: %s", str(path), type(e).__name__, str(e))
+        echo_warning(f"Ignoring invalid config file {path} ({type(e).__name__}: {e}); using defaults.")
         cfg = {}
 
     _CONFIG_CACHE = (path, mtime, cfg)
@@ -534,10 +534,8 @@ def _default_leann_llm_provider_fallback() -> str:
 
 def _default_leann_llm_model_fallback() -> str:
     model_id = default_llm_model()
-    provider, model = _split_model_id(model_id)
+    _provider, model = _split_model_id(model_id)
     if _infer_leann_llm_provider_from_litellm_id(model_id) is not None:
-        if provider == "gemini":
-            return model.removeprefix("gemini/")
         return model
     debug(
         "Could not infer LEANN LLM model from default_llm_model=%r; falling back to %r.",

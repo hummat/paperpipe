@@ -39,8 +39,11 @@ def _cleanup_legacy_codex_skill_links(skill_dirs: list[Path]) -> int:
                 removed += 1
         except OSError:
             # Broken legacy symlink with the same known name; safe to remove.
-            legacy_path.unlink()
-            removed += 1
+            try:
+                legacy_path.unlink()
+                removed += 1
+            except OSError:
+                continue
     return removed
 
 

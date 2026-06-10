@@ -395,12 +395,20 @@ def ensure_db():
 def load_index() -> dict:
     """Load the paper index."""
     ensure_db()
-    return json.loads(config.INDEX_FILE.read_text())
+    try:
+        return json.loads(config.INDEX_FILE.read_text())
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise click.ClickException(
+            f"Paper index is corrupted ({config.INDEX_FILE}): {e}. "
+            "Fix or delete the file, then run `papi rebuild` to regenerate it."
+        ) from e
 
 
 def save_index(index: dict):
     """Save the paper index."""
-    config.INDEX_FILE.write_text(json.dumps(index, indent=2))
+    tmp_path = config.INDEX_FILE.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(index, indent=2))
+    tmp_path.replace(config.INDEX_FILE)
 
 
 def categories_to_tags(categories: list[str]) -> list[str]:

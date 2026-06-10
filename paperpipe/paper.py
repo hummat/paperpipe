@@ -128,9 +128,14 @@ def _request_arxiv_content(url: str, *, timeout: int, stream: bool = False) -> A
             if status in _ARXIV_CONTENT_RETRY_STATUS_CODES and attempt < _ARXIV_CONTENT_MAX_RETRIES:
                 wait_seconds = _arxiv_content_retry_delay(response, attempt)
                 echo_warning(f"arXiv returned HTTP {status} for {url}. Retrying in {wait_seconds:g}s...")
+                response.close()
                 time.sleep(wait_seconds)
                 continue
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except requests.HTTPError:
+                response.close()
+                raise
             return response
         except (requests.Timeout, requests.ConnectionError) as e:
             if attempt >= _ARXIV_CONTENT_MAX_RETRIES:
@@ -237,7 +242,7 @@ def download_source(arxiv_id: str, paper_dir: Path, *, extract_figures: bool = F
     source_url = f"https://arxiv.org/e-print/{arxiv_id}"
 
     try:
-        response = _request_arxiv_content(source_url, timeout=30)
+        response = _request_arxiv_content(source_url, timeout=30, stream=True)
     except requests.Timeout:
         echo_warning(f"Timed out downloading source for {arxiv_id}. Try again later.")
         return None
@@ -258,15 +263,32 @@ def download_source(arxiv_id: str, paper_dir: Path, *, extract_figures: bool = F
         content_length_int = None
     if content_length_int is not None and content_length_int > _MAX_DOWNLOAD_SIZE:
         echo_warning(f"Source archive for {arxiv_id} too large ({content_length_int} bytes). Skipping.")
-        return None
-    if len(response.content) > _MAX_DOWNLOAD_SIZE:
-        echo_warning(f"Source archive for {arxiv_id} too large ({len(response.content)} bytes). Skipping.")
+        response.close()
         return None
 
-    # Save and extract tarball
-    with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as f:
-        f.write(response.content)
-        tar_path = Path(f.name)
+    # Stream to a temp file, enforcing the size limit without buffering the body in memory
+    abort_reason: Optional[str] = None
+    downloaded = 0
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as f:
+            tar_path = Path(f.name)
+            try:
+                for chunk in response.iter_content(chunk_size=65536):
+                    downloaded += len(chunk)
+                    if downloaded > _MAX_DOWNLOAD_SIZE:
+                        abort_reason = (
+                            f"Source archive for {arxiv_id} too large (over {_MAX_DOWNLOAD_SIZE} bytes). Skipping."
+                        )
+                        break
+                    f.write(chunk)
+            except (requests.RequestException, OSError) as e:
+                abort_reason = f"Could not download source for {arxiv_id}: {e}"
+    finally:
+        response.close()
+    if abort_reason:
+        echo_warning(abort_reason)
+        tar_path.unlink(missing_ok=True)
+        return None
 
     tex_content = None
     try:
@@ -373,11 +395,11 @@ def download_pdf_from_url(url: str, *, timeout: int = 60) -> tuple[Optional[Path
             for chunk in response.iter_content(chunk_size=8192):
                 f.write(chunk)
         return temp_path, None
-    except requests.RequestException as e:
-        # Clean up partial download on streaming failure
+    except (requests.RequestException, OSError) as e:
+        # Clean up partial download (dropped connection or write failure)
         if temp_path and temp_path.exists():
             temp_path.unlink()
-        return None, f"Download failed (connection dropped): {e}"
+        return None, f"Download failed: {e}"
 
 
 def _clear_figures_directory(paper_dir: Path) -> None:
@@ -514,8 +536,12 @@ def _extract_figures_from_latex(tex_content: str, tar: tarfile.TarFile, paper_di
 
                     dest_path = figures_dir / dest_name
 
-                    # Write file
+                    # Write file (re-check the total against actual bytes read;
+                    # member.size is the declared size and can disagree)
                     data = file_obj.read()
+                    if total_extracted_size + len(data) > _MAX_TAR_TOTAL_SIZE:
+                        echo_warning("  Tar extraction total size limit reached")
+                        return extracted_count
                     total_extracted_size += len(data)
                     dest_path.write_bytes(data)
                     extracted_count += 1
@@ -1481,6 +1507,9 @@ def _add_single_paper(
     # 2. Generate name from title if not provided
     if not name:
         name = generate_auto_name(meta, existing_names, use_llm=not no_llm, model=llm_model)
+        if not _is_safe_paper_name(name):
+            echo_error(f"Invalid auto-generated paper name: {name!r}. Use --name to set one explicitly.")
+            return False, None, "failed"
         echo_progress(f"  Auto-generated name: {name}")
 
     paper_dir = config.PAPERS_DIR / name
@@ -1495,79 +1524,85 @@ def _add_single_paper(
 
     paper_dir.mkdir(parents=True)
 
-    # 3. Download PDF (for PaperQA2)
-    echo_progress("  Downloading PDF...")
-    pdf_path = paper_dir / "paper.pdf"
     try:
-        download_pdf(arxiv_id, pdf_path)
-    except Exception as e:
-        echo_warning(f"Could not download PDF: {e}")
+        # 3. Download PDF (for PaperQA2)
+        echo_progress("  Downloading PDF...")
+        pdf_path = paper_dir / "paper.pdf"
+        try:
+            download_pdf(arxiv_id, pdf_path)
+        except Exception as e:
+            echo_warning(f"Could not download PDF: {e}")
 
-    # 4. Download LaTeX source (and extract figures if requested)
-    echo_progress("  Downloading LaTeX source...")
-    tex_content = download_source(arxiv_id, paper_dir, extract_figures=extract_figures)
-    if tex_content:
-        echo_progress(f"  Found LaTeX source ({len(tex_content) // 1000}k chars)")
-    else:
-        echo_progress("  No LaTeX source available (PDF-only submission)")
-        # Fallback: extract figures from PDF if no LaTeX source
-        if extract_figures and pdf_path.exists():
-            echo_warning(
-                "  Extracting figures from PDF (LaTeX source unavailable). "
-                "PDF extraction uses generic filenames and may miss vector graphics."
+        # 4. Download LaTeX source (and extract figures if requested)
+        echo_progress("  Downloading LaTeX source...")
+        tex_content = download_source(arxiv_id, paper_dir, extract_figures=extract_figures)
+        if tex_content:
+            echo_progress(f"  Found LaTeX source ({len(tex_content) // 1000}k chars)")
+        else:
+            echo_progress("  No LaTeX source available (PDF-only submission)")
+            # Fallback: extract figures from PDF if no LaTeX source
+            if extract_figures and pdf_path.exists():
+                echo_warning(
+                    "  Extracting figures from PDF (LaTeX source unavailable). "
+                    "PDF extraction uses generic filenames and may miss vector graphics."
+                )
+                count = _extract_figures_from_pdf(pdf_path, paper_dir)
+                if count == 0:
+                    echo_progress("  No figures found in PDF")
+
+        # 5. Generate tags
+        auto_tags = categories_to_tags(meta["categories"])
+        user_tags = [t.strip() for t in tags.split(",")] if tags else []
+
+        # 6. Generate summary, equations, and tldr
+        echo_progress("  Generating summary and equations...")
+        tldr_content = None
+        if no_llm:
+            summary = generate_simple_summary(meta, tex_content)
+            equations = extract_equations_simple(tex_content) if tex_content else "No LaTeX source available."
+            llm_tags: list[str] = []
+            if tldr:
+                tldr_content = generate_simple_tldr(meta)
+        else:
+            summary, equations, llm_tags, llm_tldr = generate_llm_content(
+                paper_dir,
+                meta,
+                tex_content,
+                model=llm_model,
+                existing_tags=get_all_tags(index),
             )
-            count = _extract_figures_from_pdf(pdf_path, paper_dir)
-            if count == 0:
-                echo_progress("  No figures found in PDF")
+            if tldr:
+                tldr_content = llm_tldr
 
-    # 5. Generate tags
-    auto_tags = categories_to_tags(meta["categories"])
-    user_tags = [t.strip() for t in tags.split(",")] if tags else []
+        # Combine all tags
+        all_tags = normalize_tags([*auto_tags, *user_tags, *llm_tags])
 
-    # 6. Generate summary, equations, and tldr
-    echo_progress("  Generating summary and equations...")
-    tldr_content = None
-    if no_llm:
-        summary = generate_simple_summary(meta, tex_content)
-        equations = extract_equations_simple(tex_content) if tex_content else "No LaTeX source available."
-        llm_tags: list[str] = []
-        if tldr:
-            tldr_content = generate_simple_tldr(meta)
-    else:
-        summary, equations, llm_tags, llm_tldr = generate_llm_content(
-            paper_dir,
-            meta,
-            tex_content,
-            model=llm_model,
-            existing_tags=get_all_tags(index),
-        )
-        if tldr:
-            tldr_content = llm_tldr
+        # 7. Save files
+        (paper_dir / "summary.md").write_text(summary)
+        (paper_dir / "equations.md").write_text(equations)
+        if tldr_content:
+            (paper_dir / "tldr.md").write_text(tldr_content)
 
-    # Combine all tags
-    all_tags = normalize_tags([*auto_tags, *user_tags, *llm_tags])
-
-    # 7. Save files
-    (paper_dir / "summary.md").write_text(summary)
-    (paper_dir / "equations.md").write_text(equations)
-    if tldr_content:
-        (paper_dir / "tldr.md").write_text(tldr_content)
-
-    # Save metadata
-    paper_meta = {
-        "arxiv_id": meta["arxiv_id"],
-        "title": meta["title"],
-        "authors": meta["authors"],
-        "abstract": meta["abstract"],
-        "categories": meta["categories"],
-        "tags": all_tags,
-        "published": meta["published"],
-        "added": datetime.now().isoformat(),
-        "has_source": tex_content is not None,
-        "has_pdf": pdf_path.exists(),
-    }
-    (paper_dir / "meta.json").write_text(json.dumps(paper_meta, indent=2))
-    ensure_notes_file(paper_dir, paper_meta)
+        # Save metadata
+        paper_meta = {
+            "arxiv_id": meta["arxiv_id"],
+            "title": meta["title"],
+            "authors": meta["authors"],
+            "abstract": meta["abstract"],
+            "categories": meta["categories"],
+            "tags": all_tags,
+            "published": meta["published"],
+            "added": datetime.now().isoformat(),
+            "has_source": tex_content is not None,
+            "has_pdf": pdf_path.exists(),
+        }
+        (paper_dir / "meta.json").write_text(json.dumps(paper_meta, indent=2))
+        ensure_notes_file(paper_dir, paper_meta)
+    except BaseException:
+        # Don't leave a partial paper directory behind (it would block re-adding);
+        # BaseException so Ctrl-C during downloads/LLM calls also cleans up.
+        shutil.rmtree(paper_dir, ignore_errors=True)
+        raise
 
     # 8. Update index
     index[name] = {
@@ -1671,6 +1706,9 @@ def _add_local_pdf(
             or _extract_name_from_title(title)
             or _generate_local_pdf_name({"title": title, "abstract": ""}, use_llm=not no_llm, model=llm_model)
         )
+        if not _is_safe_paper_name(candidate):
+            echo_error(f"Invalid auto-generated paper name: {candidate!r}. Use --name to set one explicitly.")
+            return False, None
         if candidate in existing_names or (config.PAPERS_DIR / candidate).exists():
             echo_error(
                 f"Name conflict for local PDF '{title}': '{candidate}' already exists. "
@@ -1686,61 +1724,67 @@ def _add_local_pdf(
     paper_dir = config.PAPERS_DIR / name
     paper_dir.mkdir(parents=True)
 
-    echo_progress("  Copying PDF...")
-    dest_pdf = paper_dir / "paper.pdf"
-    shutil.copy2(pdf, dest_pdf)
+    try:
+        echo_progress("  Copying PDF...")
+        dest_pdf = paper_dir / "paper.pdf"
+        shutil.copy2(pdf, dest_pdf)
 
-    user_tags = [t.strip() for t in (tags or "").split(",") if t.strip()]
+        user_tags = [t.strip() for t in (tags or "").split(",") if t.strip()]
 
-    meta: dict[str, Any] = {
-        "arxiv_id": None,
-        "title": title,
-        "authors": _parse_authors(authors),
-        "abstract": abstract_text,
-        "categories": [],
-        "tags": [],  # populated below after LLM generation
-        "published": None,
-        "year": year,
-        "venue": (venue or "").strip() or None,
-        "doi": (doi or "").strip() or None,
-        "url": (url or "").strip() or None,
-        "source_url": (source_url or "").strip() or None,
-        "added": datetime.now().isoformat(),
-        "has_source": False,
-        "has_pdf": dest_pdf.exists(),
-    }
+        meta: dict[str, Any] = {
+            "arxiv_id": None,
+            "title": title,
+            "authors": _parse_authors(authors),
+            "abstract": abstract_text,
+            "categories": [],
+            "tags": [],  # populated below after LLM generation
+            "published": None,
+            "year": year,
+            "venue": (venue or "").strip() or None,
+            "doi": (doi or "").strip() or None,
+            "url": (url or "").strip() or None,
+            "source_url": (source_url or "").strip() or None,
+            "added": datetime.now().isoformat(),
+            "has_source": False,
+            "has_pdf": dest_pdf.exists(),
+        }
 
-    # Generate summary, equations, tags, and tldr
-    echo_progress("  Generating summary...")
-    tldr_content = None
-    if no_llm:
-        summary = generate_simple_summary(meta, None)
-        equations = "No LaTeX source available."
-        llm_tags: list[str] = []
-        if tldr:
-            tldr_content = generate_simple_tldr(meta)
-    else:
-        summary, equations, llm_tags, llm_tldr = generate_llm_content(
-            paper_dir,
-            meta,
-            None,
-            do_tldr=tldr,
-            model=llm_model,
-            existing_tags=get_all_tags(index),
-        )
-        if tldr:
-            tldr_content = llm_tldr
+        # Generate summary, equations, tags, and tldr
+        echo_progress("  Generating summary...")
+        tldr_content = None
+        if no_llm:
+            summary = generate_simple_summary(meta, None)
+            equations = "No LaTeX source available."
+            llm_tags: list[str] = []
+            if tldr:
+                tldr_content = generate_simple_tldr(meta)
+        else:
+            summary, equations, llm_tags, llm_tldr = generate_llm_content(
+                paper_dir,
+                meta,
+                None,
+                do_tldr=tldr,
+                model=llm_model,
+                existing_tags=get_all_tags(index),
+            )
+            if tldr:
+                tldr_content = llm_tldr
 
-    all_tags = normalize_tags([*user_tags, *llm_tags])
-    meta["tags"] = all_tags
+        all_tags = normalize_tags([*user_tags, *llm_tags])
+        meta["tags"] = all_tags
 
-    (paper_dir / "summary.md").write_text(summary)
-    (paper_dir / "equations.md").write_text(equations)
-    if tldr_content:
-        (paper_dir / "tldr.md").write_text(tldr_content)
+        (paper_dir / "summary.md").write_text(summary)
+        (paper_dir / "equations.md").write_text(equations)
+        if tldr_content:
+            (paper_dir / "tldr.md").write_text(tldr_content)
 
-    (paper_dir / "meta.json").write_text(json.dumps(meta, indent=2))
-    ensure_notes_file(paper_dir, meta)
+        (paper_dir / "meta.json").write_text(json.dumps(meta, indent=2))
+        ensure_notes_file(paper_dir, meta)
+    except BaseException:
+        # Don't leave a partial paper directory behind (it would block re-adding);
+        # BaseException so Ctrl-C during LLM calls also cleans up.
+        shutil.rmtree(paper_dir, ignore_errors=True)
+        raise
 
     index[name] = {"arxiv_id": None, "title": title, "tags": all_tags, "added": meta["added"]}
     save_index(index)
@@ -1960,7 +2004,9 @@ def _regenerate_one_paper(
     if do_name:
         existing_names = set(index.keys()) - {name}
         candidate = generate_auto_name(meta, existing_names, use_llm=not no_llm, model=llm_model)
-        if candidate != name:
+        if candidate != name and not _is_safe_paper_name(candidate):
+            echo_warning(f"Cannot rename to invalid name {candidate!r}")
+        elif candidate != name:
             new_dir = config.PAPERS_DIR / candidate
             if new_dir.exists():
                 echo_warning(f"Cannot rename to '{candidate}' (already exists)")

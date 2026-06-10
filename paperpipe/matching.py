@@ -25,7 +25,7 @@ class MatchResult:
     """Result of paper name matching."""
 
     match_type: MatchType
-    matches: list[str]  # Empty for EXACT, 1+ for NORMALIZED/FUZZY
+    matches: list[str]  # Empty for NOT_FOUND, 1+ for EXACT/NORMALIZED/FUZZY
     query: str  # Original query
     normalized_query: str  # Normalized version
 

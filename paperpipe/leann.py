@@ -320,11 +320,6 @@ def _leann_incremental_update(
     files_to_add = delta.new_files + delta.changed_files
 
     if not files_to_add:
-        # Clean up removed files from manifest
-        if delta.removed_files:
-            for removed in delta.removed_files:
-                manifest["files"].pop(removed, None)
-            _save_leann_manifest(index_name, manifest)
         return 0, delta.unchanged_count, 0
 
     try:
@@ -506,10 +501,6 @@ def _leann_incremental_update(
             builder.update_index(str(index_path))
         except Exception as e:
             raise IncrementalUpdateError(f"Failed to update index: {e}") from e
-
-    # Clean up removed files from manifest
-    for removed in delta.removed_files:
-        manifest["files"].pop(removed, None)
 
     _save_leann_manifest(index_name, manifest)
 
