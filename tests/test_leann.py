@@ -866,7 +866,7 @@ class TestLeannIndexDelta:
 
         assert delta.unchanged_count == 1
         assert delta.backfilled_count == 1
-        assert manifest["files"][pdf.name]["size"] == pdf.stat().st_size
+        assert manifest["files"][pdf.name].get("size") == pdf.stat().st_size
 
     def test_compute_delta_removed_files(self, temp_db: Path) -> None:
         from paperpipe.leann import _compute_index_delta

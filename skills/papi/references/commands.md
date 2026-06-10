@@ -26,6 +26,8 @@
 | `papi add <id> --update` | Refresh existing paper |
 | `papi add <id> --figures` | Extract figures from LaTeX/PDF |
 | `papi regenerate <name> [--all]` | Regenerate summaries/equations |
+| `papi regenerate <name> --name NEW` | Rename a paper |
+| `papi regenerate <names...> --tags/--remove-tags/--set-tags/--clear-tags` | Edit tags on one or more papers (no LLM) |
 | `papi remove <name>` | Remove a paper |
 | `papi audit [--regenerate]` | Flag/fix issues in generated content |
 | `papi rebuild-index [--dry-run] [--validate]` | Rebuild index from paper directories |

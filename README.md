@@ -741,9 +741,17 @@ Papers are auto-tagged from:
 ```bash
 papi add 1706.03762 --tags my-project,priority
 papi list --tag attention
-papi tags --audit               # find duplicate/similar tags
+
+# Edit tags on one or more papers (no LLM)
+papi regenerate <paper>... --tags nerf,3d        # add
+papi regenerate <paper>... --remove-tags 3d      # remove
+papi regenerate <paper>... --set-tags nerf,slam  # replace all
+papi regenerate <paper>... --clear-tags          # remove all
+
+# Edit tags across the whole database
+papi tags --audit                  # find duplicate/similar tags
 papi tags --merge old-tag new-tag  # rename a tag across all papers
-papi tags --delete junk-tag     # remove a tag from all papers
+papi tags --delete junk-tag        # remove a tag from all papers
 ```
 
 ## Non-arXiv papers

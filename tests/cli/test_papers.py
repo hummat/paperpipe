@@ -1694,6 +1694,98 @@ class TestRegenerateCommand:
         assert len(captured_model) == 1
         assert captured_model[0] == "gpt-4o-mini"
 
+    @staticmethod
+    def _seed_tagged(temp_db: Path, tags: list[str]) -> Path:
+        papers_dir = temp_db / "papers"
+        (papers_dir / "p1").mkdir(parents=True)
+        (papers_dir / "p1" / "meta.json").write_text(json.dumps({"arxiv_id": "1", "title": "Paper 1", "tags": tags}))
+        paperpipe.save_index({"p1": {"arxiv_id": "1", "title": "Paper 1", "tags": tags, "added": "x"}})
+        return papers_dir
+
+    def test_regenerate_add_tags_merges(self, temp_db: Path):
+        papers_dir = self._seed_tagged(temp_db, ["nerf"])
+        result = CliRunner().invoke(cli_mod.cli, ["regenerate", "p1", "--tags", "3d,slam"])
+        assert result.exit_code == 0, result.output
+        meta = json.loads((papers_dir / "p1" / "meta.json").read_text())
+        assert meta["tags"] == ["3d", "nerf", "slam"]
+        assert paperpipe.load_index()["p1"]["tags"] == ["3d", "nerf", "slam"]
+
+    def test_regenerate_remove_tags(self, temp_db: Path):
+        papers_dir = self._seed_tagged(temp_db, ["nerf", "3d", "slam"])
+        result = CliRunner().invoke(cli_mod.cli, ["regenerate", "p1", "--remove-tags", "3d,slam"])
+        assert result.exit_code == 0, result.output
+        meta = json.loads((papers_dir / "p1" / "meta.json").read_text())
+        assert meta["tags"] == ["nerf"]
+        assert paperpipe.load_index()["p1"]["tags"] == ["nerf"]
+
+    def test_regenerate_remove_tags_ignores_absent(self, temp_db: Path):
+        papers_dir = self._seed_tagged(temp_db, ["nerf"])
+        result = CliRunner().invoke(cli_mod.cli, ["regenerate", "p1", "--remove-tags", "not-present"])
+        assert result.exit_code == 0, result.output
+        assert json.loads((papers_dir / "p1" / "meta.json").read_text())["tags"] == ["nerf"]
+
+    def test_regenerate_set_tags_replaces(self, temp_db: Path):
+        papers_dir = self._seed_tagged(temp_db, ["nerf", "3d"])
+        result = CliRunner().invoke(cli_mod.cli, ["regenerate", "p1", "--set-tags", "slam,vision"])
+        assert result.exit_code == 0, result.output
+        meta = json.loads((papers_dir / "p1" / "meta.json").read_text())
+        assert meta["tags"] == ["slam", "vision"]
+        assert paperpipe.load_index()["p1"]["tags"] == ["slam", "vision"]
+
+    def test_regenerate_clear_tags(self, temp_db: Path):
+        papers_dir = self._seed_tagged(temp_db, ["nerf", "3d"])
+        result = CliRunner().invoke(cli_mod.cli, ["regenerate", "p1", "--clear-tags"])
+        assert result.exit_code == 0, result.output
+        assert json.loads((papers_dir / "p1" / "meta.json").read_text())["tags"] == []
+        assert paperpipe.load_index()["p1"]["tags"] == []
+
+    def test_regenerate_tag_edits_mutually_exclusive(self, temp_db: Path):
+        self._seed_tagged(temp_db, ["nerf"])
+        result = CliRunner().invoke(cli_mod.cli, ["regenerate", "p1", "--tags", "a", "--clear-tags"])
+        assert result.exit_code != 0
+        assert "only one of" in result.output.lower()
+
+    def test_regenerate_tag_edit_multiple_papers(self, temp_db: Path):
+        papers_dir = temp_db / "papers"
+        for name in ["p1", "p2"]:
+            (papers_dir / name).mkdir(parents=True)
+            (papers_dir / name / "meta.json").write_text(
+                json.dumps({"arxiv_id": name, "title": name, "tags": ["nerf", "3d"]})
+            )
+        paperpipe.save_index(
+            {
+                "p1": {"arxiv_id": "p1", "title": "p1", "tags": ["nerf", "3d"], "added": "x"},
+                "p2": {"arxiv_id": "p2", "title": "p2", "tags": ["nerf", "3d"], "added": "x"},
+            }
+        )
+        result = CliRunner().invoke(cli_mod.cli, ["regenerate", "p1", "p2", "--remove-tags", "3d"])
+        assert result.exit_code == 0, result.output
+        for name in ["p1", "p2"]:
+            assert json.loads((papers_dir / name / "meta.json").read_text())["tags"] == ["nerf"]
+            assert paperpipe.load_index()[name]["tags"] == ["nerf"]
+
+    def test_regenerate_tag_edit_unknown_paper_aborts_before_editing(self, temp_db: Path):
+        papers_dir = self._seed_tagged(temp_db, ["nerf", "3d"])
+        result = CliRunner().invoke(cli_mod.cli, ["regenerate", "p1", "nonexistent", "--remove-tags", "3d"])
+        assert result.exit_code != 0
+        assert "not found" in result.output.lower()
+        # p1 must be untouched since resolution failed up front
+        assert json.loads((papers_dir / "p1" / "meta.json").read_text())["tags"] == ["nerf", "3d"]
+
+    def test_regenerate_tag_edit_refreshes_search_index(self, temp_db: Path, monkeypatch):
+        from importlib import import_module
+
+        papers_cli = import_module("paperpipe.cli.papers")
+
+        self._seed_tagged(temp_db, ["nerf", "3d"])
+        called: list[str] = []
+        monkeypatch.setattr(
+            papers_cli, "_maybe_update_search_index", lambda *, name, old_name=None: called.append(name)
+        )
+        result = CliRunner().invoke(cli_mod.cli, ["regenerate", "p1", "--remove-tags", "3d"])
+        assert result.exit_code == 0, result.output
+        assert called == ["p1"]
+
 
 class TestRegenerateMultiplePapers:
     """Tests for regenerating multiple papers at once."""

@@ -111,9 +111,7 @@ class TestResolvePaperKeys:
     def test_unresolved_passes_through(self) -> None:
         # Genuine non-matches are returned unchanged so the caller's
         # "No matching papers found" message still fires.
-        assert search_mod.resolve_paper_keys(("not-a-real-paper-xyz",)) == (
-            "not-a-real-paper-xyz",
-        )
+        assert search_mod.resolve_paper_keys(("not-a-real-paper-xyz",)) == ("not-a-real-paper-xyz",)
 
     def test_mixed_tokens(self) -> None:
         assert search_mod.resolve_paper_keys(("rgb-x", "controlmat", "nope-zzz")) == (

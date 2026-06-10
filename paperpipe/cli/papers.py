@@ -18,7 +18,7 @@ from ..cli.helpers import (
     _is_semantic_scholar_id,
     _parse_bibtex_file,
 )
-from ..config import normalize_tags
+from ..config import normalize_tag, normalize_tags
 from ..core import (
     _arxiv_base_from_any,
     _index_arxiv_base_to_names,
@@ -577,6 +577,9 @@ def add(
 )
 @click.option("--name", "-n", "set_name", default=None, help="Set name directly (single paper only)")
 @click.option("--tags", "-t", "set_tags", default=None, help="Add tags (comma-separated)")
+@click.option("--remove-tags", "remove_tags", default=None, help="Remove tags (comma-separated)")
+@click.option("--set-tags", "replace_tags", default=None, help="Replace all tags with this set (comma-separated)")
+@click.option("--clear-tags", "clear_tags", is_flag=True, help="Remove all tags")
 @click.option("--llm", "llm_model", default=None, help="LiteLLM model ID for generation (overrides config/env).")
 def regenerate(
     papers: tuple[str, ...],
@@ -585,6 +588,9 @@ def regenerate(
     overwrite: Optional[str],
     set_name: Optional[str],
     set_tags: Optional[str],
+    remove_tags: Optional[str],
+    replace_tags: Optional[str],
+    clear_tags: bool,
     llm_model: Optional[str],
 ):
     """Regenerate summary/equations/figures for existing papers (by name or arXiv ID).
@@ -597,19 +603,28 @@ def regenerate(
       --overwrite tags,tldr     Regenerate tags and TL;DR
       --overwrite figures       Extract figures from PDF
 
-    Use --name or --tags to set values directly (no LLM):
+    Edit tags directly (no LLM). Tag edits accept multiple papers; --name is single-paper only:
 
     \b
       --name neus-w             Rename paper to 'neus-w'
       --tags nerf,3d            Add tags 'nerf' and '3d'
+      --remove-tags 3d          Remove tag '3d'
+      --set-tags nerf,slam      Replace all tags with 'nerf','slam'
+      --clear-tags              Remove all tags
     """
     index = load_index()
+
+    # Tag edits are mutually exclusive
+    tag_edits = [set_tags is not None, remove_tags is not None, replace_tags is not None, clear_tags]
+    if sum(tag_edits) > 1:
+        raise click.UsageError("Use only one of --tags, --remove-tags, --set-tags, --clear-tags.")
+    any_tag_edit = any(tag_edits)
 
     # Validate set options
     if set_name and (regenerate_all or len(papers) != 1):
         raise click.UsageError("--name can only be used with a single paper.")
-    if (set_name or set_tags) and regenerate_all:
-        raise click.UsageError("--name/--tags cannot be used with --all.")
+    if (set_name or any_tag_edit) and regenerate_all:
+        raise click.UsageError("--name/tag edits cannot be used with --all.")
 
     # Parse overwrite option
     overwrite_fields, overwrite_all = _parse_overwrite_option(overwrite)
@@ -670,23 +685,47 @@ def regenerate(
     if not papers:
         raise click.UsageError("Missing PAPER argument(s) (or pass `--all`).")
 
-    # Handle direct set operations (--name, --tags) for single paper
-    if set_name or set_tags:
-        paper_ref = papers[0]
-        name = resolve_name(paper_ref)
-        if not name:
-            raise click.ClickException(f"Paper not found: {paper_ref}")
+    # Handle direct set operations (--name, tag edits)
+    if set_name or any_tag_edit:
 
-        paper_dir = config.PAPERS_DIR / name
-        meta_path = paper_dir / "meta.json"
-        if meta_path.exists():
-            meta = json.loads(meta_path.read_text())
-        else:
-            echo_warning(f"meta.json missing for '{name}'; index entry will lose metadata fields.")
-            meta = {}
+        def apply_tag_edit(name: str) -> None:
+            """Apply the (mutually exclusive) tag edit to one paper's meta + indexes."""
+            paper_dir = config.PAPERS_DIR / name
+            meta_path = paper_dir / "meta.json"
+            meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+            existing_tags = meta.get("tags", [])
+            if clear_tags:
+                new_tags: list[str] = []
+            elif replace_tags is not None:
+                new_tags = normalize_tags(replace_tags.split(","))
+            elif remove_tags is not None:
+                to_remove = {normalize_tag(t) for t in remove_tags.split(",") if t.strip()}
+                new_tags = [t for t in normalize_tags(existing_tags) if t not in to_remove]
+            else:  # set_tags (add)
+                assert set_tags is not None
+                new_tags = normalize_tags([*existing_tags, *set_tags.split(",")])
+            meta["tags"] = new_tags
+            meta_path.write_text(json.dumps(meta, indent=2))
+            index[name]["tags"] = new_tags
+            save_index(index)
+            _maybe_update_search_index(name=name)
+            echo_success(f"{name} tags: {', '.join(new_tags) if new_tags else '(none)'}")
 
-        # Handle --name
         if set_name:
+            # --name is single-paper only (validated above); may also edit that paper's tags.
+            paper_ref = papers[0]
+            name = resolve_name(paper_ref)
+            if not name:
+                raise click.ClickException(f"Paper not found: {paper_ref}")
+
+            paper_dir = config.PAPERS_DIR / name
+            meta_path = paper_dir / "meta.json"
+            if meta_path.exists():
+                meta = json.loads(meta_path.read_text())
+            else:
+                echo_warning(f"meta.json missing for '{name}'; index entry will lose metadata fields.")
+                meta = {}
+
             set_name = set_name.strip().lower()
             set_name = re.sub(r"[^a-z0-9-]", "", set_name).strip("-")
             if not set_name:
@@ -696,8 +735,7 @@ def regenerate(
             elif set_name in index:
                 raise click.ClickException(f"Name '{set_name}' already exists")
             else:
-                new_dir = config.PAPERS_DIR / set_name
-                paper_dir.rename(new_dir)
+                paper_dir.rename(config.PAPERS_DIR / set_name)
                 del index[name]
                 index[set_name] = {
                     "arxiv_id": meta.get("arxiv_id"),
@@ -708,19 +746,19 @@ def regenerate(
                 save_index(index)
                 echo_success(f"Renamed: {name} → {set_name}")
                 name = set_name
-                paper_dir = new_dir
-                meta_path = paper_dir / "meta.json"
 
-        # Handle --tags
-        if set_tags:
-            new_tags = [t.strip().lower() for t in set_tags.split(",") if t.strip()]
-            existing_tags = meta.get("tags", [])
-            all_tags = normalize_tags([*existing_tags, *new_tags])
-            meta["tags"] = all_tags
-            meta_path.write_text(json.dumps(meta, indent=2))
-            index[name]["tags"] = all_tags
-            save_index(index)
-            echo_success(f"Tags: {', '.join(all_tags)}")
+            if any_tag_edit:
+                apply_tag_edit(name)
+        elif any_tag_edit:
+            # Resolve all names up front so a typo doesn't leave a partial edit.
+            names = []
+            for paper_ref in papers:
+                name = resolve_name(paper_ref)
+                if not name:
+                    raise click.ClickException(f"Paper not found: {paper_ref}")
+                names.append(name)
+            for name in names:
+                apply_tag_edit(name)
 
         # If no --overwrite, we're done
         if not overwrite:

@@ -244,7 +244,7 @@ class TestExtractPdfText:
 
         # Fake pymupdf4llm returning degenerate scaffolding (picture-omitted markers)
         fake = types.ModuleType("pymupdf4llm")
-        fake.to_markdown = lambda p, *a, **k: "## \n\n==> picture intentionally omitted <=="
+        setattr(fake, "to_markdown", lambda p, *a, **k: "## \n\n==> picture intentionally omitted <==")
         monkeypatch.setitem(sys.modules, "pymupdf4llm", fake)
 
         result = paper_mod._extract_pdf_text(pdf_path)
@@ -267,7 +267,7 @@ class TestExtractPdfText:
         doc.close()
 
         fake = types.ModuleType("pymupdf4llm")
-        fake.to_markdown = lambda p, *a, **k: "# Heading\n\nBody text here, nicely structured."
+        setattr(fake, "to_markdown", lambda p, *a, **k: "# Heading\n\nBody text here, nicely structured.")
         monkeypatch.setitem(sys.modules, "pymupdf4llm", fake)
 
         result = paper_mod._extract_pdf_text(pdf_path)
