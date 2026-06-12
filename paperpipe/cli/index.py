@@ -32,7 +32,7 @@ from ..config import (
 )
 from ..core import load_index
 from ..leann import _leann_build_index, _leann_voyage_embedding_args
-from ..output import debug, echo_error, echo_progress, echo_success
+from ..output import debug, echo_error, echo_progress, echo_success, echo_warning
 from ..search import (
     _ensure_search_index_schema,
     _search_db_path,
@@ -312,6 +312,7 @@ def index_cmd(
     if not has_parsing_override:
         cmd.extend(["--parsing.multimodal", "OFF"])
         cmd.extend(["--parsing.use_doc_details", "false"])
+        cmd.extend(["--parsing.reader_config", paperqa._pqa_default_reader_config_json()])
 
     pqa_llm_source = ctx.get_parameter_source("pqa_llm")
     pqa_embedding_source = ctx.get_parameter_source("pqa_embedding")
@@ -573,7 +574,143 @@ def index_cmd(
             # Non-fatal: log warning but don't fail the index operation
             echo_progress(f"Warning: Failed to write index metadata: {e}")
 
+    if returncode == 0:
+        failure = paperqa._pqa_analyze_failure(
+            captured_output=captured_output,
+            has_custom_settings=has_settings_flag,
+        )
+        if failure.kind == "bad_pdf":
+            crashing_doc = failure.crashing_doc
+            if crashing_doc and index_dir_raw and index_name_raw:
+                paper_dir = (
+                    paperqa._paperqa_effective_paper_directory(cmd, base_dir=config.PAPERS_DIR)
+                    or (config.PAPER_DB / ".pqa_papers").expanduser()
+                )
+                if paper_dir.exists():
+                    f = paperqa._paperqa_find_crashing_file(paper_directory=paper_dir, crashing_doc=crashing_doc)
+                    managed_staging_dir = (config.PAPER_DB / ".pqa_papers").expanduser()
+                    if (
+                        f is not None
+                        and paper_dir.resolve() == managed_staging_dir.resolve()
+                        and paperqa._paperqa_is_directory_entry(entry=f, directory=managed_staging_dir)
+                    ):
+                        try:
+                            f.unlink()
+                            echo_warning(f"Removed '{crashing_doc}' from PaperQA2 staging to prevent re-indexing.")
+                        except OSError as exc:
+                            debug("Failed to unlink %s: %s", f, exc)
+
+            failed_docs: list[str] = []
+            if index_dir_raw and index_name_raw:
+                mapping = paperqa._paperqa_load_index_files_map(
+                    paperqa._paperqa_index_files_path(index_directory=Path(index_dir_raw), index_name=index_name_raw)
+                )
+                failed_docs = sorted([k for k, v in (mapping or {}).items() if v == "ERROR"])
+
+            paper_names = sorted({Path(f).stem for f in failed_docs}) if failed_docs else []
+            if paper_names:
+                echo_warning(f"PaperQA2 hit a PDF parsing failure while indexing: {', '.join(paper_names[:5])}")
+            elif crashing_doc:
+                echo_warning(f"PaperQA2 hit a PDF parsing failure while indexing: {Path(crashing_doc).stem}")
+            else:
+                echo_warning("PaperQA2 hit a PDF parsing failure while indexing.")
+            echo_warning("Replace or repair the PDF, then retry with --pqa-retry-failed or --pqa-rebuild-index.")
+            remove_target = (
+                paper_names[0] if len(paper_names) == 1 else Path(crashing_doc).stem if crashing_doc else "<name>"
+            )
+            echo_warning(f"If the paper is unusable, remove it with: papi remove {remove_target}")
+            raise SystemExit(1)
+
     if returncode != 0:
         if not raw_output:
             paperqa._pqa_print_filtered_index_output_on_failure(captured_output=captured_output)
+
+        failure = paperqa._pqa_analyze_failure(
+            captured_output=captured_output,
+            has_custom_settings=has_settings_flag,
+        )
+        debug("Failure analysis: kind=%s matched_line=%r", failure.kind, failure.matched_line)
+
+        if failure.kind == "missing_dependency":
+            echo_error("PaperQA2 is missing Python dependency support.")
+            if failure.missing_module:
+                echo_error(f"Missing module: {failure.missing_module}")
+            echo_error("Install with: pip install 'paperpipe[paperqa]'")
+            raise SystemExit(2)
+
+        if failure.kind == "config_error":
+            echo_error("PaperQA2 settings/config look invalid.")
+            echo_error("Retry with --settings default, or fix/remove the custom config under ~/.config/pqa/settings.")
+            raise SystemExit(2)
+
+        crashing_doc = failure.crashing_doc
+        if failure.kind in {"bad_pdf", "crash"} and crashing_doc and index_dir_raw and index_name_raw:
+            paper_dir = (
+                paperqa._paperqa_effective_paper_directory(cmd, base_dir=config.PAPERS_DIR)
+                or (config.PAPER_DB / ".pqa_papers").expanduser()
+            )
+            if paper_dir.exists():
+                f = paperqa._paperqa_find_crashing_file(paper_directory=paper_dir, crashing_doc=crashing_doc)
+                if f is not None:
+                    count, _ = paperqa._paperqa_mark_failed_documents(
+                        index_directory=Path(index_dir_raw),
+                        index_name=index_name_raw,
+                        staged_files={str(f)},
+                    )
+                    if count:
+                        managed_staging_dir = (config.PAPER_DB / ".pqa_papers").expanduser()
+                        if paper_dir.resolve() == managed_staging_dir.resolve() and paperqa._paperqa_is_directory_entry(
+                            entry=f,
+                            directory=managed_staging_dir,
+                        ):
+                            try:
+                                f.unlink()
+                                echo_warning(f"Removed '{crashing_doc}' from PaperQA2 staging to prevent re-indexing.")
+                            except OSError as exc:
+                                debug("Failed to unlink %s: %s", f, exc)
+                                echo_warning(f"Marked '{crashing_doc}' as ERROR to skip on retry.")
+                        else:
+                            echo_warning(f"Marked '{crashing_doc}' as ERROR to skip on retry.")
+
+        failed_docs: list[str] = []
+        if index_dir_raw and index_name_raw:
+            mapping = paperqa._paperqa_load_index_files_map(
+                paperqa._paperqa_index_files_path(index_directory=Path(index_dir_raw), index_name=index_name_raw)
+            )
+            failed_docs = sorted([k for k, v in (mapping or {}).items() if v == "ERROR"])
+            if failure.kind == "bad_pdf":
+                paper_names = sorted({Path(f).stem for f in failed_docs}) if failed_docs else []
+                if paper_names:
+                    echo_warning(f"PaperQA2 hit a PDF parsing failure while indexing: {', '.join(paper_names[:5])}")
+                elif crashing_doc:
+                    echo_warning(f"PaperQA2 hit a PDF parsing failure while indexing: {Path(crashing_doc).stem}")
+                else:
+                    echo_warning("PaperQA2 hit a PDF parsing failure while indexing.")
+                echo_warning("Replace or repair the PDF, then retry with --pqa-retry-failed or --pqa-rebuild-index.")
+                remove_target = paper_names[0] if len(paper_names) == 1 else "<name>"
+                echo_warning(f"If the paper is unusable, remove it with: papi remove {remove_target}")
+                raise SystemExit(1)
+            if failed_docs:
+                echo_warning(f"PaperQA2 failed. {len(failed_docs)} document(s) excluded from indexing.")
+                echo_warning("This can happen with PDFs that have text extraction issues.")
+                echo_warning("Options:")
+                echo_warning("  1. Remove problematic paper(s) entirely: papi remove <name>")
+                echo_warning("  2. Re-run index (excluded docs will stay excluded): papi index --backend pqa")
+                echo_warning("  3. Re-stage excluded docs for retry: papi index --backend pqa --pqa-retry-failed")
+                echo_warning("  4. Rebuild index from scratch: papi index --backend pqa --pqa-rebuild-index")
+                if len(failed_docs) <= 5:
+                    echo_warning(f"Failed documents: {', '.join(Path(f).stem for f in failed_docs)}")
+                raise SystemExit(1)
+
+        if failure.kind == "bad_pdf":
+            if crashing_doc:
+                echo_warning(f"PaperQA2 hit a PDF parsing failure while indexing: {Path(crashing_doc).stem}")
+            else:
+                echo_warning("PaperQA2 hit a PDF parsing failure while indexing.")
+            echo_warning("Replace or repair the PDF, then retry with --pqa-retry-failed or --pqa-rebuild-index.")
+            remove_target = Path(crashing_doc).stem if crashing_doc else "<name>"
+            echo_warning(f"If the paper is unusable, remove it with: papi remove {remove_target}")
+            raise SystemExit(1)
+
+        echo_error("PaperQA2 failed. Re-run with --pqa-raw or 'papi -v index --backend pqa' for full output.")
         raise SystemExit(returncode)

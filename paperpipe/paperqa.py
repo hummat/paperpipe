@@ -26,6 +26,13 @@ def _pillow_available() -> bool:
     return importlib.util.find_spec("PIL") is not None
 
 
+_PQA_DEFAULT_READER_CONFIG: dict[str, Any] = {"chunk_chars": 5000, "overlap": 250, "use_block_parsing": True}
+
+
+def _pqa_default_reader_config_json() -> str:
+    return json.dumps(_PQA_DEFAULT_READER_CONFIG, separators=(",", ":"))
+
+
 _SAFE_PICKLE_BUILTINS = frozenset({"dict", "str", "list", "tuple", "set", "frozenset", "int", "float", "bool", "bytes"})
 
 
@@ -281,11 +288,15 @@ def _paperqa_find_crashing_file(*, paper_directory: Path, crashing_doc: str) -> 
     resolved_parent = paper_directory.resolve()
 
     def _within_parent(p: Path) -> Optional[Path]:
-        """Return resolved path if it's within paper_directory, else None."""
+        """Return path if the entry lives within paper_directory, else None."""
         try:
-            rp = p.resolve()
-            if rp.is_relative_to(resolved_parent) and rp.exists():
-                return rp
+            if p.exists():
+                entry_parent = p.parent.resolve()
+                if entry_parent.is_relative_to(resolved_parent):
+                    return p
+                rp = p.resolve()
+                if rp.is_relative_to(resolved_parent):
+                    return rp
         except (OSError, ValueError):
             pass
         return None
@@ -328,6 +339,14 @@ def _paperqa_find_crashing_file(*, paper_directory: Path, crashing_doc: str) -> 
         pass
 
     return None
+
+
+def _paperqa_is_directory_entry(*, entry: Path, directory: Path) -> bool:
+    """Return True when entry itself is inside directory, without following the entry target."""
+    try:
+        return entry.parent.resolve().is_relative_to(directory.resolve())
+    except (OSError, ValueError):
+        return False
 
 
 def _paperqa_index_files_path(*, index_directory: Path, index_name: str) -> Path:
@@ -461,6 +480,7 @@ def _probe_hint(kind: str, model: str, error_line: str) -> Optional[str]:
 _PQA_CRASHING_DOC_RE = re.compile(r"New file to index:\s*(\S+)")
 _PQA_MISSING_MODULE_RE = re.compile(r"(?:ModuleNotFoundError|ImportError):\s+No module named ['\"]([^'\"]+)['\"]")
 _PQA_BAD_PDF_MARKERS: tuple[str, ...] = (
+    "impossibleparsingerror",
     "pdfreaderror",
     "eof marker not found",
     "file has not been decrypted",

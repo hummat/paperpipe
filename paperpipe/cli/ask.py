@@ -364,6 +364,7 @@ def ask(
     if not has_parsing_override:
         cmd.extend(["--parsing.multimodal", "OFF"])
         cmd.extend(["--parsing.use_doc_details", "false"])
+        cmd.extend(["--parsing.reader_config", paperqa._pqa_default_reader_config_json()])
 
     llm_for_pqa: Optional[str] = None
     embedding_for_pqa: Optional[str] = None
@@ -803,8 +804,9 @@ def ask(
                         # Only remove files from paperpipe's managed staging directory.
                         # Never delete from a user-provided paper directory.
                         managed_staging_dir = (config.PAPER_DB / ".pqa_papers").expanduser()
-                        if paper_dir.resolve() == managed_staging_dir.resolve() and f.resolve().is_relative_to(
-                            managed_staging_dir.resolve()
+                        if paper_dir.resolve() == managed_staging_dir.resolve() and paperqa._paperqa_is_directory_entry(
+                            entry=f,
+                            directory=managed_staging_dir,
                         ):
                             try:
                                 f.unlink()

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import csv
+import pickle
 import shutil
 import subprocess
+import zlib
 from pathlib import Path
 
 import pytest
@@ -13,6 +15,30 @@ import paperpipe.config as config
 import paperpipe.paperqa as paperqa
 
 from .conftest import MockPopen, cli_mod
+
+
+class _HookedPopenProcess:
+    def __init__(self, returncode: int, stdout: str, on_wait) -> None:
+        self._returncode = returncode
+        self._stdout_lines = stdout.splitlines(keepends=True) if stdout else []
+        self.stdout = iter(self._stdout_lines)
+        self._on_wait = on_wait
+
+    def wait(self) -> int:
+        self._on_wait()
+        return self._returncode
+
+
+class _HookedPopen:
+    def __init__(self, returncode: int, stdout: str, on_wait) -> None:
+        self.calls: list[tuple[list[str], dict]] = []
+        self._returncode = returncode
+        self._stdout = stdout
+        self._on_wait = on_wait
+
+    def __call__(self, cmd, **kwargs):
+        self.calls.append((cmd, kwargs))
+        return _HookedPopenProcess(self._returncode, self._stdout, self._on_wait)
 
 
 class TestIndexCommand:
@@ -46,6 +72,9 @@ class TestIndexCommand:
         assert "OFF" in pqa_call
         assert "--parsing.use_doc_details" in pqa_call
         assert "false" in pqa_call
+        assert "--parsing.reader_config" in pqa_call
+        reader_config = pqa_call[pqa_call.index("--parsing.reader_config") + 1]
+        assert reader_config == '{"chunk_chars":5000,"overlap":250,"use_block_parsing":true}'
         assert "--index" in pqa_call and "paperpipe_my-embed" in pqa_call
         assert (temp_db / ".pqa_papers" / "test-paper.pdf").exists()
         assert (temp_db / ".pqa_papers_manifest.csv").exists()
@@ -167,3 +196,70 @@ class TestIndexCommand:
         result = runner.invoke(cli_mod.cli, ["index", "--pqa-concurrency", "0"])
         assert result.exit_code != 0
         assert "--pqa-concurrency must be >= 1" in result.output
+
+    def test_index_bad_pdf_failure_marks_and_removes_managed_staging(
+        self, temp_db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+
+        paper_dir = temp_db / "papers" / "objaverse"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "paper.pdf").write_bytes(b"%PDF-1.4\n% fake\n")
+
+        mock_popen = MockPopen(
+            returncode=1,
+            stdout=(
+                "New file to index: objaverse.pdf...\n"
+                "Traceback (most recent call last):\n"
+                "ImpossibleParsingError: The text in page 3 of 15 was 16120357 chars long, "
+                "which exceeds the 1280000 char limit for the PDF at path /tmp/objaverse.pdf.\n"
+            ),
+        )
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+
+        runner = pytest.importorskip("click.testing").CliRunner()
+        result = runner.invoke(cli_mod.cli, ["index", "--pqa-embedding", "my-embed"])
+
+        assert result.exit_code == 1
+        assert "PaperQA2 hit a PDF parsing failure while indexing: objaverse" in result.output
+        assert "Replace or repair the PDF" in result.output
+        assert "papi remove objaverse" in result.output
+        assert not (temp_db / ".pqa_papers" / "objaverse.pdf").exists()
+
+        files_zip = temp_db / ".pqa_index" / "paperpipe_my-embed" / "files.zip"
+        mapping = pickle.loads(zlib.decompress(files_zip.read_bytes()))
+        assert mapping == {str(temp_db / ".pqa_papers" / "objaverse.pdf"): "ERROR"}
+
+    def test_index_bad_pdf_successful_pqa_exit_still_reports_partial_failure(
+        self, temp_db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+
+        paper_dir = temp_db / "papers" / "objaverse"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "paper.pdf").write_bytes(b"%PDF-1.4\n% fake\n")
+        files_zip = temp_db / ".pqa_index" / "paperpipe_my-embed" / "files.zip"
+
+        def write_pqa_error_marker() -> None:
+            files_zip.parent.mkdir(parents=True, exist_ok=True)
+            mapping = {str(temp_db / ".pqa_papers" / "objaverse.pdf"): "ERROR"}
+            files_zip.write_bytes(zlib.compress(pickle.dumps(mapping, protocol=pickle.HIGHEST_PROTOCOL)))
+
+        mock_popen = _HookedPopen(
+            returncode=0,
+            stdout=(
+                "New file to index: objaverse.pdf...\n"
+                "Error parsing objaverse.pdf, skipping index for this file.\n"
+                "ImpossibleParsingError: The text in page 3 of 15 was 16120357 chars long, "
+                "which exceeds the 1280000 char limit for the PDF at path /tmp/objaverse.pdf.\n"
+            ),
+            on_wait=write_pqa_error_marker,
+        )
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+
+        runner = pytest.importorskip("click.testing").CliRunner()
+        result = runner.invoke(cli_mod.cli, ["index", "--pqa-embedding", "my-embed", "--pqa-retry-failed"])
+
+        assert result.exit_code == 1
+        assert "PaperQA2 hit a PDF parsing failure while indexing: objaverse" in result.output
+        assert not (temp_db / ".pqa_papers" / "objaverse.pdf").exists()

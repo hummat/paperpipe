@@ -59,6 +59,9 @@ class TestAskCommand:
         assert "default" in pqa_call
         assert "--parsing.multimodal" in pqa_call
         assert "OFF" in pqa_call
+        assert "--parsing.reader_config" in pqa_call
+        reader_config = pqa_call[pqa_call.index("--parsing.reader_config") + 1]
+        assert reader_config == '{"chunk_chars":5000,"overlap":250,"use_block_parsing":true}'
         assert "--agent.index.index_directory" in pqa_call
         assert str(temp_db / ".pqa_index") in pqa_call
         assert "--agent.index.paper_directory" in pqa_call
@@ -506,6 +509,7 @@ class TestAskCommand:
         assert "ON_WITHOUT_ENRICHMENT" in pqa_call
         assert "OFF" not in pqa_call
         assert "--parsing.use_doc_details" not in pqa_call
+        assert "--parsing.reader_config" not in pqa_call
 
     def test_ask_forces_text_only_indexing_when_pillow_available(self, temp_db: Path, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
@@ -527,6 +531,9 @@ class TestAskCommand:
         assert pqa_call[pqa_call.index("--parsing.multimodal") + 1] == "OFF"
         assert "--parsing.use_doc_details" in pqa_call
         assert pqa_call[pqa_call.index("--parsing.use_doc_details") + 1] == "false"
+        assert "--parsing.reader_config" in pqa_call
+        reader_config = pqa_call[pqa_call.index("--parsing.reader_config") + 1]
+        assert reader_config == '{"chunk_chars":5000,"overlap":250,"use_block_parsing":true}'
 
     def test_ask_does_not_override_user_index_directory(self, temp_db: Path, monkeypatch):
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)

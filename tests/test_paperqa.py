@@ -206,6 +206,20 @@ class TestFindCrashingFileSecurity:
         result = paperqa._paperqa_find_crashing_file(paper_directory=paper_dir, crashing_doc="test.pdf")
         assert result is not None
 
+    def test_symlink_entry_inside_allowed(self, tmp_path):
+        paper_dir = tmp_path / "staged"
+        paper_dir.mkdir()
+        target_dir = tmp_path / "papers" / "test"
+        target_dir.mkdir(parents=True)
+        target = target_dir / "paper.pdf"
+        target.write_text("pdf")
+        staged = paper_dir / "test.pdf"
+        staged.symlink_to(target)
+
+        result = paperqa._paperqa_find_crashing_file(paper_directory=paper_dir, crashing_doc="test.pdf")
+
+        assert result == staged
+
 
 class TestSafeZlibDecompress:
     """Tests for _safe_zlib_decompress (Fix #5a: bounded decompression)."""
@@ -259,6 +273,19 @@ class TestPqaFailureAnalysis:
         )
         assert analysis.kind == "bad_pdf"
         assert analysis.crashing_doc == "broken.pdf"
+
+    def test_classifies_impossible_parsing_error_as_bad_pdf(self) -> None:
+        analysis = paperqa._pqa_analyze_failure(
+            captured_output=[
+                "New file to index: objaverse.pdf...\n",
+                "Traceback (most recent call last):\n",
+                "ImpossibleParsingError: The text in page 3 of 15 was 16120357 chars long, "
+                "which exceeds the 1280000 char limit for the PDF at path /tmp/objaverse.pdf.\n",
+            ],
+            has_custom_settings=False,
+        )
+        assert analysis.kind == "bad_pdf"
+        assert analysis.crashing_doc == "objaverse.pdf"
 
     def test_classifies_custom_settings_validation_error(self) -> None:
         analysis = paperqa._pqa_analyze_failure(
