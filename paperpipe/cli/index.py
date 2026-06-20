@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -296,11 +295,12 @@ def index_cmd(
     if pqa_concurrency is not None and pqa_concurrency < 1:
         raise click.UsageError("--pqa-concurrency must be >= 1")
 
-    if not shutil.which("pqa"):
+    pqa_executable = paperqa._pqa_executable()
+    if not pqa_executable:
         echo_error("PaperQA2 not installed. Install with: pip install 'paperpipe[paperqa]' (Python 3.11+).")
         raise SystemExit(1)
 
-    cmd = ["pqa"]
+    cmd = [pqa_executable]
 
     has_settings_flag = any(arg in {"--settings", "-s"} or arg.startswith("--settings=") for arg in ctx.args)
     if not has_settings_flag:

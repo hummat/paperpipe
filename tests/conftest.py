@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import os
-import shutil
 from pathlib import Path
 
 import pytest
 
 import paperpipe
 import paperpipe.config as config
+import paperpipe.paperqa as paperqa
 
 
 def litellm_available() -> bool:
@@ -25,7 +25,7 @@ def litellm_available() -> bool:
 
 def pqa_available() -> bool:
     """Check if PaperQA2 CLI is installed."""
-    return shutil.which("pqa") is not None
+    return paperqa._pqa_executable() is not None
 
 
 def fts5_available() -> bool:

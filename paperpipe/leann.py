@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import shutil
 import subprocess
+import sys
 import traceback
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -107,6 +109,19 @@ def _leann_index_file_path(index_name: str) -> Path:
 
 def _leann_index_exists(index_name: str) -> bool:
     return _leann_index_meta_path(index_name).exists() and _leann_index_file_path(index_name).exists()
+
+
+def _leann_executable() -> Optional[str]:
+    """Return a runnable leann command, including dependency scripts inside uv tool venvs."""
+    if shutil.which("leann"):
+        return "leann"
+
+    executable = Path(sys.executable)
+    script_name = "leann.exe" if os.name == "nt" else "leann"
+    candidate = executable.parent / script_name
+    if candidate.is_file() and os.access(candidate, os.X_OK):
+        return str(candidate)
+    return None
 
 
 def _manifest_key(pdf: Path) -> str:
@@ -687,7 +702,8 @@ def _leann_build_index(
     *, index_name: str, docs_dir: Path, force: bool, no_compact: bool, extra_args: list[str]
 ) -> None:
     """Build LEANN index. Tries incremental update first if possible, falls back to full rebuild."""
-    if not shutil.which("leann"):
+    leann_executable = _leann_executable()
+    if not leann_executable:
         echo_error("LEANN not installed. Install with: pip install 'paperpipe[leann]'")
         raise SystemExit(1)
 
@@ -757,7 +773,7 @@ def _leann_build_index(
         arg == "--embedding-mode" or arg.startswith("--embedding-mode=") for arg in extra_args
     )
 
-    cmd = ["leann", "build", index_name, "--docs", str(docs_dir), "--file-types", ".pdf"]
+    cmd = [leann_executable, "build", index_name, "--docs", str(docs_dir), "--file-types", ".pdf"]
     if force:
         cmd.append("--force")
     if no_compact:
@@ -859,7 +875,8 @@ def _ask_leann(
     interactive: bool,
     extra_args: list[str],
 ) -> None:
-    if not shutil.which("leann"):
+    leann_executable = _leann_executable()
+    if not leann_executable:
         echo_error("LEANN not installed. Install with: pip install 'paperpipe[leann]'")
         raise SystemExit(1)
 
@@ -880,7 +897,7 @@ def _ask_leann(
         echo_error("Build it first: papi index --backend leann")
         raise SystemExit(1)
 
-    cmd: list[str] = ["leann", "ask", index_name, query]
+    cmd: list[str] = [leann_executable, "ask", index_name, query]
     cmd.extend(["--llm", provider])
     cmd.extend(["--model", model])
     use_openrouter = provider.lower() == "openai" and (model_is_openrouter or _default_llm_is_openrouter())

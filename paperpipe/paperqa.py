@@ -9,6 +9,7 @@ import os
 import pickle
 import re
 import shutil
+import sys
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +32,19 @@ _PQA_DEFAULT_READER_CONFIG: dict[str, Any] = {"chunk_chars": 5000, "overlap": 25
 
 def _pqa_default_reader_config_json() -> str:
     return json.dumps(_PQA_DEFAULT_READER_CONFIG, separators=(",", ":"))
+
+
+def _pqa_executable() -> Optional[str]:
+    """Return a runnable pqa command, including dependency scripts inside uv tool venvs."""
+    if shutil.which("pqa"):
+        return "pqa"
+
+    executable = Path(sys.executable)
+    script_name = "pqa.exe" if os.name == "nt" else "pqa"
+    candidate = executable.parent / script_name
+    if candidate.is_file() and os.access(candidate, os.X_OK):
+        return str(candidate)
+    return None
 
 
 _SAFE_PICKLE_BUILTINS = frozenset({"dict", "str", "list", "tuple", "set", "frozenset", "int", "float", "bool", "bytes"})

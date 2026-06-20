@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -331,7 +330,8 @@ def ask(
         )
         return
 
-    if not shutil.which("pqa"):
+    pqa_executable = paperqa._pqa_executable()
+    if not pqa_executable:
         if output_format_norm == "evidence-blocks":
             raise click.ClickException(
                 "PaperQA2 is required for --format evidence-blocks. Install with: pip install 'paperpipe[paperqa]'"
@@ -347,7 +347,7 @@ def ask(
 
     # Build pqa command
     # pqa [global_options] ask [ask_options] query
-    cmd = ["pqa"]
+    cmd = [pqa_executable]
     # PaperQA2 CLI defaults to `--settings high_quality`, which can be overridden by a user's
     # ~/.config/pqa/settings/high_quality.json. If that file is from an older PaperQA version,
     # pqa can crash on startup due to a schema mismatch. Use the special `default` settings

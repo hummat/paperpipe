@@ -107,6 +107,27 @@ class TestLeannCli:
         ]
 
 
+class TestLeannExecutable:
+    def test_uses_path_command_when_available(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(paperpipe.leann.shutil, "which", lambda cmd: "/usr/bin/leann" if cmd == "leann" else None)
+
+        assert paperpipe.leann._leann_executable() == "leann"
+
+    def test_finds_script_next_to_python_for_uv_tool_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        bin_dir = tmp_path / "tool" / "bin"
+        bin_dir.mkdir(parents=True)
+        python = bin_dir / "python"
+        leann = bin_dir / "leann"
+        python.write_text("")
+        leann.write_text("#!/bin/sh\n")
+        leann.chmod(0o755)
+
+        monkeypatch.setattr(paperpipe.leann.shutil, "which", lambda cmd: None)
+        monkeypatch.setattr(paperpipe.leann.sys, "executable", str(python))
+
+        assert paperpipe.leann._leann_executable() == str(leann)
+
+
 class TestLeannAsk:
     def test_ask_backend_leann_allows_passthrough_args(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/leann" if cmd == "leann" else None)

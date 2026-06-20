@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pickle
 import zlib
+from pathlib import Path
 
 import pytest
 
@@ -82,6 +83,27 @@ class TestPillowAvailable:
         # Just verify it returns a boolean without crashing
         result = paperqa._pillow_available()
         assert isinstance(result, bool)
+
+
+class TestPqaExecutable:
+    def test_uses_path_command_when_available(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(paperqa.shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+
+        assert paperqa._pqa_executable() == "pqa"
+
+    def test_finds_script_next_to_python_for_uv_tool_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        bin_dir = tmp_path / "tool" / "bin"
+        bin_dir.mkdir(parents=True)
+        python = bin_dir / "python"
+        pqa = bin_dir / "pqa"
+        python.write_text("")
+        pqa.write_text("#!/bin/sh\n")
+        pqa.chmod(0o755)
+
+        monkeypatch.setattr(paperqa.shutil, "which", lambda cmd: None)
+        monkeypatch.setattr(paperqa.sys, "executable", str(python))
+
+        assert paperqa._pqa_executable() == str(pqa)
 
 
 class TestFirstLine:
