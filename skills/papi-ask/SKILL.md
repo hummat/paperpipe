@@ -11,9 +11,10 @@ Use `papi ask` for questions requiring synthesis across papers or cited answers.
 
 Before using RAG, consider cheaper alternatives:
 
-1. **Exact match**: `papi search --rg "query"` — fast, no LLM
-2. **Ranked search**: `papi search "query"` — BM25 ranking
-3. **Direct read**: `papi show <paper> -l eq|tex|summary` — if you know the paper
+1. **Literal match**: `papi search --rg "query"` (fast, no LLM)
+2. **Regex or OR match**: `papi search --rg --regex "term one|term two"` (`--regex` is required)
+3. **Ranked search**: `papi search "query"` (BM25)
+4. **Direct read**: `papi show <paper> -l eq|tex|summary` (when you know the paper)
 
 Use `papi ask` only when:
 - User explicitly requests RAG/synthesis

@@ -176,9 +176,9 @@ papi add 2303.08813 https://www.semanticscholar.org/paper/... "NeRF"
 Exact text search (fast, no LLM required):
 
 ```bash
-papi search --rg "AdamW"              # case-insensitive, literal string (default)
+papi search --rg "AdamW"                # case-insensitive, literal string (default)
 papi search --rg --case-sensitive "NeRF"  # match exact case
-papi search --rg --regex "Eq\\. [0-9]+"   # regex mode (opt-in)
+papi search --rg --regex "AdamW|Lion"   # regex or OR mode (opt-in)
 ```
 
 Ranked search (BM25 via SQLite FTS5, no LLM required):
