@@ -32,11 +32,13 @@ llm = ["litellm>=1.0.0"]
 leann = ["leann-core>=0.3.5", "leann-backend-hnsw>=0.3.5"]
 paperqa = [
     "paper-qa[docling,image,ldp,local,memory,nemotron,office,openreview,pymupdf,pypdf-enhanced,pypdf-media,qdrant,zotero]>=5.0.0; python_version >= '3.11'",
+    "fhlmi>=0.45,<0.47; python_version >= '3.11'",
     "pymupdf4llm",
 ]
 mcp = [
     "mcp>=1.0.0; python_version >= '3.11'",
     "paper-qa>=5.0.0; python_version >= '3.11'",
+    "fhlmi>=0.45,<0.47; python_version >= '3.11'",
 ]
 bibtex = ["bibtexparser>=1.4.0"]
 figures = ["pymupdf>=1.24.0"]
