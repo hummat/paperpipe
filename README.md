@@ -723,6 +723,24 @@ paperpipe shells out to `claude -p` for each generation step using the CLI's own
 - Each invocation boots the CLI runtime (~3s), so generation is slower than an API backend.
 - `temperature` is not configurable on this backend.
 
+
+### Via the Antigravity CLI / Google AI Pro (no API key)
+
+If you have the [Antigravity CLI](https://antigravity.google/product/antigravity-cli) (`agy`) installed and signed in with your Google AI Pro / Antigravity subscription:
+
+```bash
+export PAPERPIPE_LLM_MODEL=agy/gemini-3.7-flash   # or agy-cli/gemini-3.7-flash, agy/gemini-3.1-pro
+export PAPERPIPE_LLM_REASONING_EFFORT=high        # low, medium, high
+```
+
+Or in `~/.paperpipe/config.toml`:
+```toml
+[llm]
+model = "agy/gemini-3.7-flash"
+reasoning_effort = "high"
+```
+
+paperpipe routes prompts through `agy` via standard stream-json input using the CLI's subscription authentication.
 Check which models work with your keys:
 ```bash
 papi models                    # probe default models for your configured keys

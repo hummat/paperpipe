@@ -193,6 +193,12 @@ def _resolve_identifier_to_arxiv_id(
 @click.option("--tags", "-t", help="Additional comma-separated tags (applied to all papers)")
 @click.option("--no-llm", is_flag=True, help="Skip LLM-based generation")
 @click.option("--llm", "llm_model", help="LiteLLM model ID for generation (overrides config/env).")
+@click.option(
+    "--reasoning-effort",
+    type=click.Choice(["low", "medium", "high"], case_sensitive=False),
+    default=None,
+    help="Reasoning effort for thinking models (low, medium, high).",
+)
 @click.option("--tldr/--no-tldr", default=True, show_default=True, help="Generate a one-paragraph TL;DR.")
 @click.option("--figures", is_flag=True, help="Extract figures from LaTeX source or PDF")
 @click.option(
@@ -222,6 +228,7 @@ def add(
     tags: Optional[str],
     no_llm: bool,
     llm_model: Optional[str],
+    reasoning_effort: Optional[str],
     tldr: bool,
     figures: bool,
     duplicate: bool,
@@ -286,6 +293,7 @@ def add(
                 no_llm=no_llm,
                 llm_model=llm_model,
                 tldr=tldr,
+                reasoning_effort=reasoning_effort,
             )
             if not success:
                 raise SystemExit(1)
@@ -347,6 +355,7 @@ def add(
                         no_llm=no_llm,
                         llm_model=llm_model,
                         tldr=tldr,
+                        reasoning_effort=reasoning_effort,
                     )
                     if success:
                         pdf_added += 1
@@ -375,6 +384,7 @@ def add(
                     no_llm=no_llm,
                     llm_model=llm_model,
                     tldr=tldr,
+                    reasoning_effort=reasoning_effort,
                 )
                 if success:
                     pdf_added += 1
@@ -521,6 +531,7 @@ def add(
             index,
             existing_names,
             base_to_names,
+            reasoning_effort,
         )
         if success:
             if action == "added":
@@ -581,6 +592,12 @@ def add(
 @click.option("--set-tags", "replace_tags", default=None, help="Replace all tags with this set (comma-separated)")
 @click.option("--clear-tags", "clear_tags", is_flag=True, help="Remove all tags")
 @click.option("--llm", "llm_model", default=None, help="LiteLLM model ID for generation (overrides config/env).")
+@click.option(
+    "--reasoning-effort",
+    type=click.Choice(["low", "medium", "high"], case_sensitive=False),
+    default=None,
+    help="Reasoning effort for thinking models (low, medium, high).",
+)
 def regenerate(
     papers: tuple[str, ...],
     regenerate_all: bool,
@@ -592,6 +609,7 @@ def regenerate(
     replace_tags: Optional[str],
     clear_tags: bool,
     llm_model: Optional[str],
+    reasoning_effort: Optional[str],
 ):
     """Regenerate summary/equations/figures for existing papers (by name or arXiv ID).
 
@@ -667,6 +685,7 @@ def regenerate(
                 overwrite_fields=overwrite_fields,
                 overwrite_all=overwrite_all,
                 llm_model=llm_model,
+                reasoning_effort=reasoning_effort,
             )
             if not success:
                 failures += 1
@@ -786,6 +805,7 @@ def regenerate(
             overwrite_fields=overwrite_fields,
             overwrite_all=overwrite_all,
             llm_model=llm_model,
+            reasoning_effort=reasoning_effort,
         )
         if success:
             successes += 1

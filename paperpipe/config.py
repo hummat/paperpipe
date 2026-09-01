@@ -73,6 +73,20 @@ def _claude_cli_model_alias(model_id: str) -> str:
     return alias or "sonnet"
 
 
+def _is_agy_cli_model_id(model_id: Optional[str]) -> bool:
+    if not model_id:
+        return False
+    s = model_id.strip().lower()
+    return s.startswith("agy-cli/") or s.startswith("agy/") or s.startswith("antigravity-cli/")
+
+
+def _agy_cli_model_alias(model_id: str) -> str:
+    """Return the model alias after the ``agy-cli/`` or ``agy/`` prefix (defaults to ``gemini-3.7-flash``)."""
+    s = model_id.strip()
+    alias = s.split("/", 1)[1].strip() if "/" in s else ""
+    return alias or "gemini-3.7-flash"
+
+
 def _normalize_ollama_base_url(raw: str) -> str:
     base = (raw or "").strip()
     if not base:
@@ -292,6 +306,22 @@ def default_ollama_think() -> bool:
     budget on hidden reasoning and can return empty content. Set to true to re-enable.
     """
     return _setting_bool(env="PAPERPIPE_OLLAMA_THINK", keys=("llm", "ollama_think"), default=DEFAULT_OLLAMA_THINK)
+
+
+def default_llm_reasoning_effort() -> Optional[str]:
+    """Configured reasoning effort for thinking models ('low', 'medium', 'high', or None)."""
+    val = _setting_str(
+        env="PAPERPIPE_LLM_REASONING_EFFORT",
+        keys=("llm", "reasoning_effort"),
+        default="",
+    )
+    if not val:
+        return None
+    norm = val.strip().lower()
+    if norm in {"low", "medium", "high"}:
+        return norm
+    debug("Invalid reasoning_effort %r; expected 'low', 'medium', or 'high'.", val)
+    return None
 
 
 def default_pqa_settings_name() -> str:

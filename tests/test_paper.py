@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import subprocess
@@ -7,6 +8,7 @@ import tarfile
 import tempfile
 import types
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -500,7 +502,7 @@ class TestExtractTitleAndNameFromPdf:
         monkeypatch.setattr(
             paper_mod,
             "_run_llm",
-            lambda prompt, *, purpose, model=None: "TITLE: Attention Is All You Need\nNAME: transformer",
+            lambda prompt, *, purpose, model=None, **kwargs: "TITLE: Attention Is All You Need\nNAME: transformer",
         )
         title, name = paper_mod.extract_title_and_name_from_pdf(pdf)
         assert title == "Attention Is All You Need"
@@ -510,7 +512,7 @@ class TestExtractTitleAndNameFromPdf:
         pdf = self._make_pdf(tmp_path)
         monkeypatch.setattr(paper_mod, "_litellm_available", lambda: True)
         self._mock_fitz(monkeypatch, "Some text")
-        monkeypatch.setattr(paper_mod, "_run_llm", lambda prompt, *, purpose, model=None: None)
+        monkeypatch.setattr(paper_mod, "_run_llm", lambda prompt, *, purpose, model=None, **kwargs: None)
         title, name = paper_mod.extract_title_and_name_from_pdf(pdf)
         assert title is None
         assert name is None
@@ -526,7 +528,9 @@ class TestExtractTitleAndNameFromPdf:
         pdf = self._make_pdf(tmp_path)
         monkeypatch.setattr(paper_mod, "_litellm_available", lambda: True)
         self._mock_fitz(monkeypatch, "Some Title\nAbstract...")
-        monkeypatch.setattr(paper_mod, "_run_llm", lambda prompt, *, purpose, model=None: "TITLE: Some Title\nNAME: ab")
+        monkeypatch.setattr(
+            paper_mod, "_run_llm", lambda prompt, *, purpose, model=None, **kwargs: "TITLE: Some Title\nNAME: ab"
+        )
         title, name = paper_mod.extract_title_and_name_from_pdf(pdf)
         assert title == "Some Title"
         assert name is None  # "ab" is < 3 chars
@@ -1617,6 +1621,114 @@ class TestClaudeCliBackend:
         assert paper_mod._llm_available("claude-cli/sonnet") is True
         monkeypatch.setattr(shutil, "which", self._fake_which(False))
         assert paper_mod._llm_available("claude-cli/sonnet") is False
+
+
+class TestAgyCliBackend:
+    """Tests for the agy-cli/* (Antigravity) LLM backend."""
+
+    def _fake_which(self, found: bool):
+        return lambda cmd: "/usr/local/bin/agy" if (found and cmd == "agy") else None
+
+    def test_run_agy_cli_success(self, monkeypatch):
+        monkeypatch.setattr(shutil, "which", self._fake_which(True))
+        calls: list[tuple[list[str], dict]] = []
+
+        def fake_run(args, **kwargs):
+            calls.append((args, kwargs))
+            stdout_json = json.dumps(
+                {"event": "result", "result": {"status": "SUCCESS", "response": "  a summary  \n"}}
+            )
+            return types.SimpleNamespace(returncode=0, stdout=stdout_json, stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        result = paper_mod._run_agy_cli(
+            "Summarize this.", alias="gemini-3.7-flash", purpose="summary", reasoning_effort="high"
+        )
+
+        assert result == "a summary"
+        cmd, kwargs = calls[0]
+        assert cmd[0] == "/usr/local/bin/agy"
+        assert cmd[cmd.index("--model") + 1] == "gemini-3.7-flash"
+        assert cmd[cmd.index("--effort") + 1] == "high"
+        assert "--sandbox" in cmd
+        assert "--input-format" in cmd
+        assert "stream-json" in cmd
+        assert "--print-timeout" in cmd
+        # Prompt goes via stdin JSON payload to avoid arg-length limits.
+        payload = json.loads(kwargs["input"])
+        assert payload["event"] == "user"
+        assert payload["message"]["content"] == "Summarize this."
+
+    def test_run_agy_cli_oversized_prompt(self, monkeypatch):
+        """Verify oversized prompts are passed via stdin without OSError."""
+        monkeypatch.setattr(shutil, "which", self._fake_which(True))
+
+        def fake_run(args, **kwargs):
+            assert len(kwargs["input"]) > 2_000_000
+            stdout_json = json.dumps({"event": "result", "result": {"status": "SUCCESS", "response": "ok"}})
+            return types.SimpleNamespace(returncode=0, stdout=stdout_json, stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        huge_prompt = "x" * 2_500_000
+        result = paper_mod._run_agy_cli(huge_prompt, alias="gemini-3.7-flash", purpose="summary")
+        assert result == "ok"
+
+    def test_run_agy_cli_missing_binary(self, monkeypatch):
+        monkeypatch.setattr(shutil, "which", self._fake_which(False))
+        result = paper_mod._run_agy_cli("x", alias="gemini-3.7-flash", purpose="summary")
+        assert result is None
+
+    def test_run_agy_cli_nonzero_exit(self, monkeypatch):
+        monkeypatch.setattr(shutil, "which", self._fake_which(True))
+
+        def fake_run(args, **kwargs):
+            return types.SimpleNamespace(returncode=1, stdout="", stderr="auth error\n")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        result = paper_mod._run_agy_cli("x", alias="gemini-3.7-flash", purpose="summary")
+        assert result is None
+
+    def test_run_agy_cli_timeout(self, monkeypatch):
+        monkeypatch.setattr(shutil, "which", self._fake_which(True))
+
+        def fake_run(args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd=args, timeout=1)
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        result = paper_mod._run_agy_cli("x", alias="gemini-3.7-flash", purpose="summary")
+        assert result is None
+
+    def test_run_llm_routes_to_agy_cli(self, monkeypatch):
+        captured: dict[str, Any] = {}
+
+        def fake_cli(prompt, *, alias, purpose, reasoning_effort=None):
+            captured.update(prompt=prompt, alias=alias, purpose=purpose, reasoning_effort=reasoning_effort)
+            return "routed"
+
+        monkeypatch.setattr(paper_mod, "_run_agy_cli", fake_cli)
+        monkeypatch.setattr(
+            paper_mod, "_litellm_available", lambda: pytest.fail("LiteLLM must not be used for agy-cli")
+        )
+
+        result = paper_mod._run_llm(
+            "prompt text", purpose="tags", model="agy/gemini-3.7-flash", reasoning_effort="high"
+        )
+
+        assert result == "routed"
+        assert captured == {
+            "prompt": "prompt text",
+            "alias": "gemini-3.7-flash",
+            "purpose": "tags",
+            "reasoning_effort": "high",
+        }
+
+    def test_llm_available_agy_cli(self, monkeypatch):
+        monkeypatch.setattr(shutil, "which", self._fake_which(True))
+        assert paper_mod._llm_available("agy/gemini-3.7-flash") is True
+        assert paper_mod._llm_available("agy-cli/gemini-3.7-flash") is True
+        monkeypatch.setattr(shutil, "which", self._fake_which(False))
+        assert paper_mod._llm_available("agy/gemini-3.7-flash") is False
 
 
 class TestOllamaNumCtx:

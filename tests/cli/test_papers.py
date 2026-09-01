@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import sys
 from datetime import datetime
+from importlib import import_module
 from pathlib import Path
+from typing import Any
 
 import pytest
 import requests
@@ -16,6 +18,8 @@ import paperpipe.core as core
 import paperpipe.paper as paper_mod
 
 from .conftest import TEST_ARXIV_ID, cli_mod
+
+papers_cli_mod = import_module("paperpipe.cli.papers")
 
 
 class TestNotesCommand:
@@ -2206,5 +2210,46 @@ class TestFindPaperBySourceUrl:
             json.dumps({"title": "Test", "url": "https://example.com"})  # url, not source_url
         )
 
-        result = _find_paper_by_source_url("https://example.com")
-        assert result is None
+        assert _find_paper_by_source_url("https://example.com") is None
+
+
+class TestReasoningEffortCli:
+    """Tests for --reasoning-effort CLI option in add and regenerate."""
+
+    def test_add_passes_reasoning_effort(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        captured: dict[str, Any] = {}
+
+        def fake_add_single_paper(*args, **kwargs):
+            captured["reasoning_effort"] = (
+                kwargs.get("reasoning_effort")
+                if "reasoning_effort" in kwargs
+                else (args[12] if len(args) > 12 else None)
+            )
+            return True, "test-paper", "added"
+
+        monkeypatch.setattr(papers_cli_mod, "_add_single_paper", fake_add_single_paper)
+        monkeypatch.setattr(
+            paper_mod, "fetch_arxiv_metadata", lambda aid: {"title": "Test", "arxiv_id": aid, "categories": []}
+        )
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["add", "2301.00001", "--reasoning-effort", "high"])
+        assert result.exit_code == 0
+        assert captured.get("reasoning_effort") == "high"
+
+    def test_regenerate_passes_reasoning_effort(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        paper_dir = temp_db / "papers" / "my-paper"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "meta.json").write_text(json.dumps({"title": "Test Paper"}))
+        paperpipe.save_index({"my-paper": {"title": "Test Paper", "tags": [], "added": "now"}})
+
+        captured: dict[str, Any] = {}
+
+        def fake_regen(*args, **kwargs):
+            captured["reasoning_effort"] = kwargs.get("reasoning_effort")
+            return True, None
+
+        monkeypatch.setattr(papers_cli_mod, "_regenerate_one_paper", fake_regen)
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["regenerate", "my-paper", "--reasoning-effort", "medium", "-o", "summary"])
+        assert result.exit_code == 0
+        assert captured.get("reasoning_effort") == "medium"
