@@ -1919,7 +1919,7 @@ class TestAddPdfUrl:
                 def raise_for_status(self):
                     # Create HTTPError with a response attribute
                     err = requests.exceptions.HTTPError("404 Not Found")
-                    err.response = self
+                    err.response = self  # type: ignore[assignment]
                     raise err
 
             return MockResponse()
