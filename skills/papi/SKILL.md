@@ -1,6 +1,6 @@
 ---
 name: papi
-description: This skill should be used when the user wants to interact with their paper database — listing papers, searching content, showing paper details, adding papers, or exporting context. Matches queries like "search papers for X", "add this arXiv paper", "show equations from paper Y", "what papers do I have". Prefer CLI over MCP RAG tools for direct lookups.
+description: Use for direct paper-database operations: list, search, show details or equations, add arXiv papers, export context. Prefer the CLI over MCP RAG tools for lookups.
 ---
 
 # Paper Reference Assistant (CLI)

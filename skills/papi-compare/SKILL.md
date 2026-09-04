@@ -1,6 +1,6 @@
 ---
 name: papi-compare
-description: Compare papers for a decision. Use when user asks "which paper should I use", "compare approaches", or needs to choose between methods/algorithms.
+description: Compare papers or methods for a decision: "which should I use", "compare approaches".
 ---
 
 # Compare Papers for Decision

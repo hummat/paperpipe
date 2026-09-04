@@ -1,6 +1,6 @@
 ---
 name: papi-ask
-description: Query papers using RAG (PaperQA2 or LEANN). Use when user needs synthesized answers from papers, asks "what does paper X say about Y", or needs cited responses.
+description: RAG answers over papers (PaperQA2 or LEANN): "what does paper X say about Y", synthesized or cited responses.
 ---
 
 # Query Papers via RAG

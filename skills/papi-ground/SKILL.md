@@ -1,6 +1,6 @@
 ---
 name: papi-ground
-description: Ground responses in paper excerpts with citations. Use when user wants cited claims, quotes, or needs to avoid hallucination about paper content.
+description: Cite paper excerpts for claims or quotes when the answer must stay on the paper text.
 ---
 
 # Ground Responses in Paper Excerpts

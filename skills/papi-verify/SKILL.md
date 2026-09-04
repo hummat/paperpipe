@@ -1,6 +1,6 @@
 ---
 name: papi-verify
-description: Verify code against paper. Use when user asks "does this match the paper", "check my implementation", or is implementing equations/algorithms from literature.
+description: Check an implementation against its paper: equations, algorithms, "does this match the paper".
 ---
 
 # Verify Code Against Paper

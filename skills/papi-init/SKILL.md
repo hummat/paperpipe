@@ -1,6 +1,6 @@
 ---
 name: papi-init
-description: Setup paperpipe agent integration. Use when user wants to add papi to a project's CLAUDE.md/AGENTS.md or initialize paper support.
+description: Add papi to a project's CLAUDE.md/AGENTS.md or set up paper support.
 ---
 
 # Initialize PaperPipe Integration

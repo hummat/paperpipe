@@ -1,6 +1,6 @@
 ---
 name: papi-curate
-description: Create project notes from papers. Use when user wants to document paper findings, create implementation notes, or summarize papers for a project.
+description: Write project notes from papers: findings, implementation notes, per-project summaries.
 ---
 
 # Create Project Notes from Papers
