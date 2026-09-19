@@ -983,7 +983,9 @@ def _extract_pdf_text(pdf_path: Path) -> Optional[str]:
     try:
         import pymupdf4llm  # type: ignore[import-not-found]
 
-        md_text = (pymupdf4llm.to_markdown(pdf_path) or "").strip() or None
+        # to_markdown returns list[dict] only with page_chunks=True; narrow to the str form.
+        md_result = pymupdf4llm.to_markdown(pdf_path)
+        md_text = (md_result if isinstance(md_result, str) else "").strip() or None
     except ImportError:
         debug("pymupdf4llm not available, falling back to raw fitz")
     except Exception as e:
@@ -1530,7 +1532,8 @@ def _extract_first_page_text(pdf_path: Path, max_chars: int = 3000) -> Optional[
     try:
         import pymupdf4llm  # type: ignore[import-not-found]
 
-        md_text = pymupdf4llm.to_markdown(pdf_path, pages=[0])
+        md_result = pymupdf4llm.to_markdown(pdf_path, pages=[0])
+        md_text = md_result if isinstance(md_result, str) else ""
         if md_text:
             text = md_text[:max_chars].strip()
             if text:
