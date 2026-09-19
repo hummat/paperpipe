@@ -195,10 +195,9 @@ def _resolve_identifier_to_arxiv_id(
 @click.option("--llm", "llm_model", help="LiteLLM model ID for generation (overrides config/env).")
 @click.option(
     "--reasoning-effort",
-    type=click.Choice(["none", "low", "medium", "high"], case_sensitive=False),
+    type=click.Choice(["low", "medium", "high"], case_sensitive=False),
     default=None,
-    show_default=False,
-    help="Reasoning effort for LLM generation (e.g. 'none', 'low', 'medium', 'high').",
+    help="Reasoning effort for thinking models (low, medium, high).",
 )
 @click.option("--tldr/--no-tldr", default=True, show_default=True, help="Generate a one-paragraph TL;DR.")
 @click.option("--figures", is_flag=True, help="Extract figures from LaTeX source or PDF")
@@ -532,7 +531,7 @@ def add(
             index,
             existing_names,
             base_to_names,
-            reasoning_effort=reasoning_effort,
+            reasoning_effort,
         )
         if success:
             if action == "added":
@@ -595,10 +594,9 @@ def add(
 @click.option("--llm", "llm_model", default=None, help="LiteLLM model ID for generation (overrides config/env).")
 @click.option(
     "--reasoning-effort",
-    type=click.Choice(["none", "low", "medium", "high"], case_sensitive=False),
+    type=click.Choice(["low", "medium", "high"], case_sensitive=False),
     default=None,
-    show_default=False,
-    help="Reasoning effort for LLM generation (e.g. 'none', 'low', 'medium', 'high').",
+    help="Reasoning effort for thinking models (low, medium, high).",
 )
 def regenerate(
     papers: tuple[str, ...],

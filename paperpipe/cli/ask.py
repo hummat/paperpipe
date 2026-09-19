@@ -88,15 +88,15 @@ def _leann_auto_build_args(index_name: str) -> list[str]:
 @click.option(
     "--pqa-reasoning-effort",
     "reasoning_effort",
-    type=click.Choice(["none", "low", "medium", "high"], case_sensitive=False),
+    type=click.Choice(["low", "medium", "high"], case_sensitive=False),
     default=None,
     show_default=False,
-    help="Reasoning effort for PaperQA2's main LLM (e.g. 'none', 'low', 'medium', 'high').",
+    help="Reasoning effort for PaperQA2's main LLM (low, medium, high).",
 )
 @click.option(
     "--pqa-summary-reasoning-effort",
     "summary_reasoning_effort",
-    type=click.Choice(["none", "low", "medium", "high"], case_sensitive=False),
+    type=click.Choice(["low", "medium", "high"], case_sensitive=False),
     default=None,
     show_default=False,
     help="Reasoning effort for PaperQA2's summary LLM.",
@@ -104,7 +104,7 @@ def _leann_auto_build_args(index_name: str) -> list[str]:
 @click.option(
     "--pqa-agent-reasoning-effort",
     "agent_reasoning_effort",
-    type=click.Choice(["none", "low", "medium", "high"], case_sensitive=False),
+    type=click.Choice(["low", "medium", "high"], case_sensitive=False),
     default=None,
     show_default=False,
     help="Reasoning effort for PaperQA2's search agent LLM.",

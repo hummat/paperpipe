@@ -378,7 +378,7 @@ The first query builds an index (cached under `.pqa_index/` or `.leann/`). Use `
 | `--pqa-llm MODEL` | LLM for answer generation (LiteLLM id) |
 | `--pqa-summary-llm MODEL` | LLM for evidence summarization (often cheaper) |
 | `--pqa-agent-llm MODEL` | LLM that drives the search agent (defaults to `--pqa-llm`) |
-| `--pqa-reasoning-effort LEVEL` | Reasoning effort for main LLM (`none`, `low`, `medium`, `high`) |
+| `--pqa-reasoning-effort LEVEL` | Reasoning effort for main LLM (`low`, `medium`, `high`) |
 | `--pqa-summary-reasoning-effort LEVEL` | Reasoning effort for summary LLM |
 | `--pqa-agent-reasoning-effort LEVEL` | Reasoning effort for search agent LLM |
 | `--pqa-embedding MODEL` | Embedding model for text chunks |
@@ -726,6 +726,24 @@ paperpipe shells out to `claude -p` for each generation step using the CLI's own
 - Each invocation boots the CLI runtime (~3s), so generation is slower than an API backend.
 - `temperature` is not configurable on this backend.
 
+
+### Via the Antigravity CLI / Google AI Pro (no API key)
+
+If you have the [Antigravity CLI](https://antigravity.google/product/antigravity-cli) (`agy`) installed and signed in with your Google AI Pro / Antigravity subscription:
+
+```bash
+export PAPERPIPE_LLM_MODEL=agy/gemini-3.7-flash   # or agy-cli/gemini-3.7-flash, agy/gemini-3.1-pro
+export PAPERPIPE_LLM_REASONING_EFFORT=high        # low, medium, high
+```
+
+Or in `~/.paperpipe/config.toml`:
+```toml
+[llm]
+model = "agy/gemini-3.7-flash"
+reasoning_effort = "high"
+```
+
+paperpipe routes prompts through `agy` via standard stream-json input using the CLI's subscription authentication.
 Check which models work with your keys:
 ```bash
 papi models                    # probe default models for your configured keys
@@ -775,7 +793,7 @@ For persistent settings, create `~/.paperpipe/config.toml` (override location wi
 [llm]
 model = "gemini/gemini-2.5-flash"
 temperature = 0.3
-# reasoning_effort = "high"   # reasoning effort (none/low/medium/high) for supported models
+# reasoning_effort = "high"   # reasoning effort (low/medium/high) for supported models
 # ollama_num_ctx = 32768   # max context window for ollama/* models (default 32768)
 # ollama_think = false     # enable Ollama "thinking" for reasoning models (default false)
 # timeout = 120            # per-request seconds; raise for slow local/reasoning models (default 120)

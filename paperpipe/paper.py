@@ -22,7 +22,9 @@ import click
 
 from . import config
 from .config import (
+    _agy_cli_model_alias,
     _claude_cli_model_alias,
+    _is_agy_cli_model_id,
     _is_claude_cli_model_id,
     _is_ollama_model_id,
     _ollama_reachability_error,
@@ -848,7 +850,6 @@ def _generate_name_with_llm(
     model: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
 ) -> Optional[str]:
-    """Ask LLM for a short memorable name."""
     prompt = f"""Given this paper title and abstract, suggest a single short name (1-2 words, lowercase, hyphenated if multi-word) that researchers commonly use to refer to this paper.
 
 Examples:
@@ -1142,12 +1143,19 @@ def _llm_available(model: Optional[str] = None) -> bool:
     model = model or default_llm_model()
     if _is_claude_cli_model_id(model):
         return shutil.which("claude") is not None
+    if _is_agy_cli_model_id(model):
+        return shutil.which("agy") is not None
     return _litellm_available()
 
 
 # Fallback context window sizes for common models (when litellm doesn't have mapping).
 # Maps base model name patterns to max input tokens. Values verified against litellm 2026-02.
 _MODEL_CONTEXT_WINDOWS: dict[str, int] = {
+    # Gemini (current: 3.7 flash/pro, 3 flash, 2.5 flash/pro, 2.0 flash)
+    "gemini-3.7": 1_048_576,
+    "gemini-3.6": 1_048_576,
+    "gemini-3.1": 1_048_576,
+    "gemini-3": 1_048_576,
     # Gemini (current: 2.5 flash/pro, 2.0 flash)
     "gemini-2.5": 1_048_576,
     "gemini-2.0": 1_048_576,
@@ -1306,6 +1314,94 @@ def _run_claude_cli(prompt: str, *, alias: str, purpose: str) -> Optional[str]:
     return out or None
 
 
+def _run_agy_cli(
+    prompt: str,
+    *,
+    alias: str,
+    purpose: str,
+    reasoning_effort: Optional[str] = None,
+) -> Optional[str]:
+    """Run a prompt through the Antigravity CLI (agy) in print mode via stdin stream-json.
+
+    Uses the CLI's own authentication (e.g. Google AI Pro / Antigravity subscription), so
+    no API key is required. Passes the prompt via stdin JSON payload to avoid macOS argument-length
+    limits with large LaTeX papers. Runs in a temporary directory with sandbox restrictions to prevent
+    untrusted paper prompt content from interacting with local repository files.
+    Returns None on any failure so callers fall back to non-LLM generation.
+    """
+    agy_bin = shutil.which("agy")
+    if not agy_bin:
+        echo_error("Antigravity CLI (agy) not found on PATH. Install antigravity-cli or set llm.model to an API model.")
+        return None
+
+    cmd = [
+        agy_bin,
+        "--model",
+        alias,
+        "--sandbox",
+        "--disable-slash-commands",
+        "--input-format",
+        "stream-json",
+        "--output-format",
+        "stream-json",
+    ]
+
+    effort = reasoning_effort or default_llm_reasoning_effort()
+    if effort:
+        cmd.extend(["--effort", effort])
+
+    payload = json.dumps({"event": "user", "message": {"content": prompt}}) + "\n"
+    timeout_sec = default_llm_timeout()
+    timeout_str = f"{timeout_sec:g}s"
+    cmd.extend(["--print-timeout", timeout_str])
+
+    echo_progress(f"  LLM (agy/{alias}): generating {purpose}...")
+    try:
+        with tempfile.TemporaryDirectory(prefix="paperpipe-agy-") as tmp_dir:
+            result = subprocess.run(
+                cmd,
+                input=payload,
+                capture_output=True,
+                text=True,
+                timeout=timeout_sec,
+                cwd=tmp_dir,
+            )
+    except subprocess.TimeoutExpired:
+        echo_error(f"LLM (agy/{alias}): {purpose} timed out after {timeout_str}.")
+        return None
+    except OSError as e:
+        echo_error(f"LLM (agy/{alias}): {purpose} failed: {str(e).splitlines()[0][:100]}")
+        return None
+
+    if result.returncode != 0:
+        err = (result.stderr or result.stdout or "").strip().splitlines()
+        detail = err[0][:150] if err else f"exit {result.returncode}"
+        echo_error(f"LLM (agy/{alias}): {purpose} failed: {detail}")
+        return None
+
+    out: Optional[str] = None
+    for line in (result.stdout or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+            if data.get("event") == "result":
+                res_obj = data.get("result", {})
+                if res_obj.get("status") == "SUCCESS":
+                    out = res_obj.get("response", "").strip()
+                else:
+                    err_detail = res_obj.get("error") or res_obj.get("status") or "unknown error"
+                    echo_error(f"LLM (agy/{alias}): {purpose} failed: {str(err_detail)[:150]}")
+                    return None
+        except Exception:
+            continue
+
+    if out:
+        echo_progress(f"  LLM (agy/{alias}): {purpose} ok")
+    return out or None
+
+
 # Bounds for the auto-sized Ollama context window (tokens).
 _OLLAMA_MIN_NUM_CTX = 4096
 _OLLAMA_OUTPUT_RESERVE = 2048
@@ -1350,11 +1446,19 @@ def _run_llm(
     if _is_claude_cli_model_id(model):
         return _run_claude_cli(prompt, alias=_claude_cli_model_alias(model), purpose=purpose)
 
+    # Antigravity CLI backend: uses Google AI Pro / Antigravity auth; skips LiteLLM entirely.
+    if _is_agy_cli_model_id(model):
+        return _run_agy_cli(
+            prompt,
+            alias=_agy_cli_model_alias(model),
+            purpose=purpose,
+            reasoning_effort=reasoning_effort,
+        )
+
     try:
         import litellm  # type: ignore[import-not-found]
 
         litellm.suppress_debug_info = True
-        litellm.drop_params = True
     except ImportError:
         echo_error("LiteLLM not installed. Install with: pip install litellm")
         return None
@@ -1377,15 +1481,14 @@ def _run_llm(
         return None
 
     # Ollama truncates at its default context window unless num_ctx is set; size it to the prompt.
-    # Disable "thinking" by default so reasoning-capable models don't return empty content.
     extra_params: dict[str, Any] = {}
+    effort = reasoning_effort or default_llm_reasoning_effort()
+    if effort:
+        extra_params["reasoning_effort"] = effort
+
     if is_ollama:
         extra_params["num_ctx"] = _ollama_num_ctx(_count_message_tokens(messages, model, litellm))
         extra_params["think"] = default_ollama_think()
-
-    effort = reasoning_effort if reasoning_effort is not None else default_llm_reasoning_effort()
-    if effort:
-        extra_params["reasoning_effort"] = effort
     echo_progress(f"  LLM ({model}): generating {purpose}...")
 
     try:
@@ -1480,7 +1583,12 @@ Return ONLY the title, nothing else. No quotes, no explanation.
 First page text:
 {first_page_text}"""
 
-    result = _run_llm(prompt, purpose="title extraction", model=model, reasoning_effort=reasoning_effort)
+    result = _run_llm(
+        prompt,
+        purpose="title extraction",
+        model=model,
+        reasoning_effort=reasoning_effort,
+    )
     if result:
         # Clean up: remove quotes, newlines, limit length
         result = result.strip().strip("\"'").split("\n")[0][:200]
@@ -1966,12 +2074,15 @@ def _add_local_pdf(
         echo_progress(f"  Extracted title: {title}")
     elif need_title:
         echo_progress("Extracting title from PDF...")
-        title = extract_title_from_pdf(pdf, model=llm_model, reasoning_effort=reasoning_effort)
+        title = extract_title_from_pdf(
+            pdf,
+            model=llm_model,
+            reasoning_effort=reasoning_effort,
+        )
         if not title:
             echo_error("Could not extract title from PDF. Use --title to specify manually.")
             return False, None
         echo_progress(f"  Extracted title: {title}")
-
     abstract_text = (abstract or "").strip()
     if not abstract_text:
         abstract_text = "No abstract available (local PDF)."

@@ -596,6 +596,45 @@ class TestClaudeCliHelpers:
         assert config._claude_cli_model_alias("claude-cli/") == "sonnet"
 
 
+class TestAgyCliHelpers:
+    def test_is_agy_cli_model_id(self) -> None:
+        assert config._is_agy_cli_model_id("agy-cli/gemini-3.7-flash")
+        assert config._is_agy_cli_model_id("  AGY/gemini-3.7-flash  ")
+        assert config._is_agy_cli_model_id("antigravity-cli/gemini-3.1-pro")
+        assert not config._is_agy_cli_model_id("gemini/gemini-2.5-flash")
+        assert not config._is_agy_cli_model_id("")
+        assert not config._is_agy_cli_model_id(None)
+
+    def test_agy_cli_model_alias(self) -> None:
+        assert config._agy_cli_model_alias("agy-cli/gemini-3.7-flash") == "gemini-3.7-flash"
+        assert config._agy_cli_model_alias("agy/gemini-3.1-pro") == "gemini-3.1-pro"
+        assert config._agy_cli_model_alias("  antigravity-cli/gemini-3.7-flash-high  ") == "gemini-3.7-flash-high"
+        assert config._agy_cli_model_alias("agy/") == "gemini-3.7-flash"
+
+
+class TestReasoningEffort:
+    def test_default_is_none(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("PAPERPIPE_LLM_REASONING_EFFORT", raising=False)
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
+        assert config.default_llm_reasoning_effort() is None
+
+    def test_env_sets_reasoning_effort(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
+        monkeypatch.setenv("PAPERPIPE_LLM_REASONING_EFFORT", "high")
+        assert config.default_llm_reasoning_effort() == "high"
+
+    def test_config_sets_reasoning_effort(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("PAPERPIPE_LLM_REASONING_EFFORT", raising=False)
+        (temp_db / "config.toml").write_text("[llm]\nreasoning_effort = 'medium'\n")
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
+        assert config.default_llm_reasoning_effort() == "medium"
+
+    def test_invalid_reasoning_effort_falls_back(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
+        monkeypatch.setenv("PAPERPIPE_LLM_REASONING_EFFORT", "super_high")
+        assert config.default_llm_reasoning_effort() is None
+
+
 class TestOllamaThink:
     def test_default_disables_thinking(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv("PAPERPIPE_OLLAMA_THINK", raising=False)
@@ -625,52 +664,41 @@ class TestOllamaThink:
         assert config.default_ollama_think() is False
 
 
-class TestReasoningEffort:
-    def test_default_llm_reasoning_effort(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.delenv("PAPERPIPE_LLM_REASONING_EFFORT", raising=False)
-        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
-        assert config.default_llm_reasoning_effort() is None
+class TestPqaReasoningEffort:
+    """PaperQA2 reasoning-effort getters. The core LLM getter is covered by TestReasoningEffort."""
 
-        monkeypatch.setenv("PAPERPIPE_LLM_REASONING_EFFORT", "HIGH")
-        assert config.default_llm_reasoning_effort() == "high"
-
-        monkeypatch.delenv("PAPERPIPE_LLM_REASONING_EFFORT", raising=False)
-        (temp_db / "config.toml").write_text("[llm]\nreasoning_effort = 'Medium'\n")
-        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
-        assert config.default_llm_reasoning_effort() == "medium"
-
-        # Env overrides config
-        monkeypatch.setenv("PAPERPIPE_LLM_REASONING_EFFORT", "low")
-        assert config.default_llm_reasoning_effort() == "low"
-
-    def test_pqa_reasoning_effort(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_falls_back_when_unset(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv("PAPERPIPE_PQA_REASONING_EFFORT", raising=False)
-        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
-        assert config.default_pqa_reasoning_effort(fallback="low") == "low"
-
-        monkeypatch.setenv("PAPERPIPE_PQA_REASONING_EFFORT", "high")
-        assert config.default_pqa_reasoning_effort(fallback="low") == "high"
-
-        monkeypatch.delenv("PAPERPIPE_PQA_REASONING_EFFORT", raising=False)
-        (temp_db / "config.toml").write_text("[paperqa]\nreasoning_effort = 'medium'\n")
-        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
-        assert config.default_pqa_reasoning_effort() == "medium"
-
-    def test_pqa_summary_and_agent_reasoning_effort(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv("PAPERPIPE_PQA_SUMMARY_REASONING_EFFORT", raising=False)
         monkeypatch.delenv("PAPERPIPE_PQA_AGENT_REASONING_EFFORT", raising=False)
         monkeypatch.setattr(config, "_CONFIG_CACHE", None)
-        assert config.default_pqa_summary_reasoning_effort(fallback="none") == "none"
+        assert config.default_pqa_reasoning_effort(fallback="low") == "low"
+        assert config.default_pqa_summary_reasoning_effort() is None
         assert config.default_pqa_agent_reasoning_effort(fallback="high") == "high"
 
+    def test_config_sets_each_role(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("PAPERPIPE_PQA_REASONING_EFFORT", raising=False)
+        monkeypatch.delenv("PAPERPIPE_PQA_SUMMARY_REASONING_EFFORT", raising=False)
+        monkeypatch.delenv("PAPERPIPE_PQA_AGENT_REASONING_EFFORT", raising=False)
         (temp_db / "config.toml").write_text(
-            "[paperqa]\nsummary_reasoning_effort = 'none'\nagent_reasoning_effort = 'high'\n"
+            "[paperqa]\nreasoning_effort = 'Medium'\nsummary_reasoning_effort = 'low'\n"
+            "agent_reasoning_effort = 'high'\n"
         )
         monkeypatch.setattr(config, "_CONFIG_CACHE", None)
-        assert config.default_pqa_summary_reasoning_effort() == "none"
+        assert config.default_pqa_reasoning_effort() == "medium"
+        assert config.default_pqa_summary_reasoning_effort() == "low"
         assert config.default_pqa_agent_reasoning_effort() == "high"
 
-        monkeypatch.setenv("PAPERPIPE_PQA_SUMMARY_REASONING_EFFORT", "low")
-        monkeypatch.setenv("PAPERPIPE_PQA_AGENT_REASONING_EFFORT", "medium")
-        assert config.default_pqa_summary_reasoning_effort() == "low"
-        assert config.default_pqa_agent_reasoning_effort() == "medium"
+    def test_env_overrides_config(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        (temp_db / "config.toml").write_text("[paperqa]\nreasoning_effort = 'low'\n")
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
+        monkeypatch.setenv("PAPERPIPE_PQA_REASONING_EFFORT", "high")
+        assert config.default_pqa_reasoning_effort() == "high"
+
+    def test_invalid_value_falls_back(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch):
+        """Unsupported levels (e.g. 'none') must not reach LiteLLM as a router parameter."""
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
+        monkeypatch.setenv("PAPERPIPE_PQA_REASONING_EFFORT", "none")
+        assert config.default_pqa_reasoning_effort(fallback="low") == "low"
+        monkeypatch.setenv("PAPERPIPE_PQA_AGENT_REASONING_EFFORT", "turbo")
+        assert config.default_pqa_agent_reasoning_effort() is None

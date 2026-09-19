@@ -61,14 +61,14 @@ from ..search import (
 )
 @click.option(
     "--pqa-reasoning-effort",
-    type=click.Choice(["none", "low", "medium", "high"], case_sensitive=False),
+    type=click.Choice(["low", "medium", "high"], case_sensitive=False),
     default=None,
     show_default=False,
-    help="PaperQA2 reasoning effort for main LLM (e.g. 'none', 'low', 'medium', 'high').",
+    help="PaperQA2 reasoning effort for main LLM (low, medium, high).",
 )
 @click.option(
     "--pqa-summary-reasoning-effort",
-    type=click.Choice(["none", "low", "medium", "high"], case_sensitive=False),
+    type=click.Choice(["low", "medium", "high"], case_sensitive=False),
     default=None,
     show_default=False,
     help="PaperQA2 reasoning effort for summary LLM.",
