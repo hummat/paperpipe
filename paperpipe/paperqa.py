@@ -34,6 +34,43 @@ def _pqa_default_reader_config_json() -> str:
     return json.dumps(_PQA_DEFAULT_READER_CONFIG, separators=(",", ":"))
 
 
+def _pqa_build_llm_config(
+    model: Optional[str] = None,
+    *,
+    reasoning_effort: Optional[str] = None,
+    timeout: Optional[float] = None,
+    drop_params: bool = True,
+) -> Optional[str]:
+    """Build a JSON LiteLLM Router configuration for PaperQA2 CLI.
+
+    PaperQA2 expects `--llm_config` to be a JSON string with `model_list` and optional `router_kwargs`.
+    """
+    if not reasoning_effort and timeout is None:
+        return None
+
+    cfg: dict[str, Any] = {}
+    if timeout is not None:
+        cfg["router_kwargs"] = {"timeout": timeout}
+
+    if reasoning_effort:
+        target_model = model or ""
+        litellm_params: dict[str, Any] = {
+            "model": target_model,
+            "reasoning_effort": reasoning_effort,
+        }
+        if drop_params:
+            litellm_params["drop_params"] = True
+
+        cfg["model_list"] = [
+            {
+                "model_name": target_model,
+                "litellm_params": litellm_params,
+            }
+        ]
+
+    return json.dumps(cfg)
+
+
 def _pqa_executable() -> Optional[str]:
     """Return a runnable pqa command, including dependency scripts inside uv tool venvs."""
     if shutil.which("pqa"):

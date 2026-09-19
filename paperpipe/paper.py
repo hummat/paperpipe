@@ -28,6 +28,7 @@ from .config import (
     _ollama_reachability_error,
     _prepare_ollama_env,
     default_llm_model,
+    default_llm_reasoning_effort,
     default_llm_temperature,
     default_llm_timeout,
     default_ollama_num_ctx,
@@ -842,7 +843,11 @@ def _extract_name_from_title(title: str) -> Optional[str]:
     return None
 
 
-def _generate_name_with_llm(meta: dict, model: Optional[str] = None) -> Optional[str]:
+def _generate_name_with_llm(
+    meta: dict,
+    model: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,
+) -> Optional[str]:
     """Ask LLM for a short memorable name."""
     prompt = f"""Given this paper title and abstract, suggest a single short name (1-2 words, lowercase, hyphenated if multi-word) that researchers commonly use to refer to this paper.
 
@@ -857,7 +862,10 @@ Return ONLY the name, nothing else. No quotes, no explanation.
 Title: {meta["title"]}
 Abstract: {meta["abstract"][:500]}"""
 
-    result = _run_llm(prompt, purpose="name", model=model)
+    if reasoning_effort is not None:
+        result = _run_llm(prompt, purpose="name", model=model, reasoning_effort=reasoning_effort)
+    else:
+        result = _run_llm(prompt, purpose="name", model=model)
     if result:
         # Clean up the result - take first word/term only
         name = result.strip().lower().split()[0] if result.strip() else None
@@ -869,7 +877,13 @@ Abstract: {meta["abstract"][:500]}"""
     return None
 
 
-def _generate_local_pdf_name(meta: dict, *, use_llm: bool, model: Optional[str] = None) -> str:
+def _generate_local_pdf_name(
+    meta: dict,
+    *,
+    use_llm: bool,
+    model: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,
+) -> str:
     """Generate a base name for local PDF ingestion (no collision suffixing)."""
     title = str(meta.get("title") or "").strip()
     if not title:
@@ -877,7 +891,7 @@ def _generate_local_pdf_name(meta: dict, *, use_llm: bool, model: Optional[str] 
 
     name = _extract_name_from_title(title)
     if not name and use_llm and _llm_available(model):
-        name = _generate_name_with_llm(meta, model=model)
+        name = _generate_name_with_llm(meta, model=model, reasoning_effort=reasoning_effort)
     if not name:
         name = _slugify_title(title)
 
@@ -886,7 +900,13 @@ def _generate_local_pdf_name(meta: dict, *, use_llm: bool, model: Optional[str] 
     return name or "paper"
 
 
-def generate_auto_name(meta: dict, existing_names: set[str], use_llm: bool = True, model: Optional[str] = None) -> str:
+def generate_auto_name(
+    meta: dict,
+    existing_names: set[str],
+    use_llm: bool = True,
+    model: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,
+) -> str:
     """Generate a short memorable name for a paper.
 
     Strategy:
@@ -903,7 +923,7 @@ def generate_auto_name(meta: dict, existing_names: set[str], use_llm: bool = Tru
 
     # If no prefix name, try LLM
     if not name and use_llm and _llm_available(model):
-        name = _generate_name_with_llm(meta, model=model)
+        name = _generate_name_with_llm(meta, model=model, reasoning_effort=reasoning_effort)
 
     # Fallback:
     # - arXiv ingest: arxiv ID
@@ -1000,6 +1020,7 @@ def generate_llm_content(
     do_tldr: bool = True,
     model: Optional[str] = None,
     existing_tags: Optional[list[str]] = None,
+    reasoning_effort: Optional[str] = None,
 ) -> tuple[str, str, list[str], str]:
     """
     Generate summary, equations.md, semantic tags, and tldr.md using LLM.
@@ -1037,6 +1058,7 @@ def generate_llm_content(
             do_tldr=do_tldr,
             model=model,
             existing_tags=existing_tags,
+            reasoning_effort=reasoning_effort,
         )
         # If no LaTeX source, ensure equations reflects that
         if not has_latex and not equations:
@@ -1317,7 +1339,13 @@ def _ollama_num_ctx(prompt_tokens: int) -> int:
     return max(_OLLAMA_MIN_NUM_CTX, min(default_ollama_num_ctx(), needed))
 
 
-def _run_llm(prompt: str, *, purpose: str, model: Optional[str] = None) -> Optional[str]:
+def _run_llm(
+    prompt: str,
+    *,
+    purpose: str,
+    model: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,
+) -> Optional[str]:
     """Run a prompt through the configured LLM backend. Returns None on any failure."""
     model = model or default_llm_model()
 
@@ -1329,6 +1357,7 @@ def _run_llm(prompt: str, *, purpose: str, model: Optional[str] = None) -> Optio
         import litellm  # type: ignore[import-not-found]
 
         litellm.suppress_debug_info = True
+        litellm.drop_params = True
     except ImportError:
         echo_error("LiteLLM not installed. Install with: pip install litellm")
         return None
@@ -1357,6 +1386,9 @@ def _run_llm(prompt: str, *, purpose: str, model: Optional[str] = None) -> Optio
         extra_params["num_ctx"] = _ollama_num_ctx(_count_message_tokens(messages, model, litellm))
         extra_params["think"] = default_ollama_think()
 
+    effort = reasoning_effort if reasoning_effort is not None else default_llm_reasoning_effort()
+    if effort:
+        extra_params["reasoning_effort"] = effort
     echo_progress(f"  LLM ({model}): generating {purpose}...")
 
     try:
@@ -1426,13 +1458,18 @@ def _extract_first_page_text(pdf_path: Path, max_chars: int = 3000) -> Optional[
         return None
 
 
-def extract_title_from_pdf(pdf_path: Path) -> Optional[str]:
+def extract_title_from_pdf(
+    pdf_path: Path,
+    *,
+    model: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,
+) -> Optional[str]:
     """Extract title from a PDF using LLM.
 
     Extracts text from the first page and asks the LLM to identify the title.
     Returns None if PyMuPDF is unavailable, PDF cannot be read, or LLM fails.
     """
-    if not _llm_available():
+    if not _llm_available(model):
         return None
 
     first_page_text = _extract_first_page_text(pdf_path)
@@ -1446,7 +1483,10 @@ Return ONLY the title, nothing else. No quotes, no explanation.
 First page text:
 {first_page_text}"""
 
-    result = _run_llm(prompt, purpose="title extraction")
+    if reasoning_effort is not None:
+        result = _run_llm(prompt, purpose="title extraction", model=model, reasoning_effort=reasoning_effort)
+    else:
+        result = _run_llm(prompt, purpose="title extraction", model=model)
     if result:
         # Clean up: remove quotes, newlines, limit length
         result = result.strip().strip("\"'").split("\n")[0][:200]
@@ -1454,7 +1494,10 @@ First page text:
 
 
 def extract_title_and_name_from_pdf(
-    pdf_path: Path, *, model: Optional[str] = None
+    pdf_path: Path,
+    *,
+    model: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,
 ) -> tuple[Optional[str], Optional[str]]:
     """Extract title *and* short name from a PDF in a single LLM call.
 
@@ -1485,7 +1528,10 @@ NAME: <the short name>
 First page text:
 {first_page_text}"""
 
-    result = _run_llm(prompt, purpose="title+name extraction", model=model)
+    if reasoning_effort is not None:
+        result = _run_llm(prompt, purpose="title+name extraction", model=model, reasoning_effort=reasoning_effort)
+    else:
+        result = _run_llm(prompt, purpose="title+name extraction", model=model)
     if not result:
         return None, None
 
@@ -1515,6 +1561,7 @@ def generate_with_litellm(
     do_tldr: bool = True,
     model: Optional[str] = None,
     existing_tags: Optional[list[str]] = None,
+    reasoning_effort: Optional[str] = None,
 ) -> tuple[str, str, list[str], str]:
     """Generate summary, equations, tags, and tldr using LiteLLM.
 
@@ -1555,7 +1602,11 @@ Context:
 TL;DR:"""
 
         try:
-            llm_tldr = _run_llm(tldr_prompt, purpose="tldr", model=model)
+            llm_tldr = (
+                _run_llm(tldr_prompt, purpose="tldr", model=model, reasoning_effort=reasoning_effort)
+                if reasoning_effort is not None
+                else _run_llm(tldr_prompt, purpose="tldr", model=model)
+            )
             tldr = llm_tldr if llm_tldr else generate_simple_tldr(meta)
         except Exception as e:
             debug("TL;DR generation failed: %s", e)
@@ -1591,7 +1642,11 @@ Context:
 Summary:"""
 
         try:
-            llm_summary = _run_llm(summary_prompt, purpose="summary", model=model)
+            llm_summary = (
+                _run_llm(summary_prompt, purpose="summary", model=model, reasoning_effort=reasoning_effort)
+                if reasoning_effort is not None
+                else _run_llm(summary_prompt, purpose="summary", model=model)
+            )
             summary = llm_summary if llm_summary else generate_simple_summary(meta, tex_content)
         except Exception as e:
             debug("Summary generation failed: %s", e)
@@ -1623,7 +1678,11 @@ LaTeX source:
 {context}"""
 
             try:
-                llm_equations = _run_llm(eq_prompt, purpose="equations", model=model)
+                llm_equations = (
+                    _run_llm(eq_prompt, purpose="equations", model=model, reasoning_effort=reasoning_effort)
+                    if reasoning_effort is not None
+                    else _run_llm(eq_prompt, purpose="equations", model=model)
+                )
                 equations = llm_equations if llm_equations else extract_equations_simple(tex_content)
             except Exception as e:
                 debug("Equations extraction failed: %s", e)
@@ -1649,7 +1708,11 @@ Title: {title}
 Abstract: {abstract[:800]}"""
 
         try:
-            llm_tags_text = _run_llm(tag_prompt, purpose="tags", model=model)
+            llm_tags_text = (
+                _run_llm(tag_prompt, purpose="tags", model=model, reasoning_effort=reasoning_effort)
+                if reasoning_effort is not None
+                else _run_llm(tag_prompt, purpose="tags", model=model)
+            )
             if llm_tags_text:
                 additional_tags = [
                     t.strip().lower().replace(" ", "-")
@@ -1675,6 +1738,7 @@ def _add_single_paper(
     index: dict,
     existing_names: set[str],
     base_to_names: dict[str, list[str]],
+    reasoning_effort: Optional[str] = None,
 ) -> tuple[bool, Optional[str], str]:
     """Add a single paper to the database.
 
@@ -1726,6 +1790,7 @@ def _add_single_paper(
             extract_figures=extract_figures,
             index=index,
             base_to_names=base_to_names,
+            reasoning_effort=reasoning_effort,
         )
         return success, paper_name, "updated" if success else "failed"
 
@@ -1751,7 +1816,9 @@ def _add_single_paper(
 
     # 2. Generate name from title if not provided
     if not name:
-        name = generate_auto_name(meta, existing_names, use_llm=not no_llm, model=llm_model)
+        name = generate_auto_name(
+            meta, existing_names, use_llm=not no_llm, model=llm_model, reasoning_effort=reasoning_effort
+        )
         if not _is_safe_paper_name(name):
             echo_error(f"Invalid auto-generated paper name: {name!r}. Use --name to set one explicitly.")
             return False, None, "failed"
@@ -1815,6 +1882,7 @@ def _add_single_paper(
                 tex_content,
                 model=llm_model,
                 existing_tags=get_all_tags(index),
+                reasoning_effort=reasoning_effort,
             )
             if tldr:
                 tldr_content = llm_tldr
@@ -1887,6 +1955,7 @@ def _add_local_pdf(
     no_llm: bool,
     llm_model: Optional[str] = None,
     tldr: bool = True,
+    reasoning_effort: Optional[str] = None,
 ) -> tuple[bool, Optional[str]]:
     """Add a local PDF as a first-class paper entry.
 
@@ -1913,14 +1982,16 @@ def _add_local_pdf(
     llm_extracted_name: Optional[str] = None
     if need_title and need_name and not no_llm:
         echo_progress("Extracting title from PDF...")
-        title, llm_extracted_name = extract_title_and_name_from_pdf(pdf, model=llm_model)
+        title, llm_extracted_name = extract_title_and_name_from_pdf(
+            pdf, model=llm_model, reasoning_effort=reasoning_effort
+        )
         if not title:
             echo_error("Could not extract title from PDF. Use --title to specify manually.")
             return False, None
         echo_progress(f"  Extracted title: {title}")
     elif need_title:
         echo_progress("Extracting title from PDF...")
-        title = extract_title_from_pdf(pdf)
+        title = extract_title_from_pdf(pdf, model=llm_model, reasoning_effort=reasoning_effort)
         if not title:
             echo_error("Could not extract title from PDF. Use --title to specify manually.")
             return False, None
@@ -1949,7 +2020,9 @@ def _add_local_pdf(
         candidate = (
             llm_extracted_name
             or _extract_name_from_title(title)
-            or _generate_local_pdf_name({"title": title, "abstract": ""}, use_llm=not no_llm, model=llm_model)
+            or _generate_local_pdf_name(
+                {"title": title, "abstract": ""}, use_llm=not no_llm, model=llm_model, reasoning_effort=reasoning_effort
+            )
         )
         if not _is_safe_paper_name(candidate):
             echo_error(f"Invalid auto-generated paper name: {candidate!r}. Use --name to set one explicitly.")
@@ -2011,6 +2084,7 @@ def _add_local_pdf(
                 do_tldr=tldr,
                 model=llm_model,
                 existing_tags=get_all_tags(index),
+                reasoning_effort=reasoning_effort,
             )
             if tldr:
                 tldr_content = llm_tldr
@@ -2052,6 +2126,7 @@ def _update_existing_paper(
     extract_figures: bool = False,
     index: dict,
     base_to_names: dict[str, list[str]],
+    reasoning_effort: Optional[str] = None,
 ) -> tuple[bool, Optional[str]]:
     """Refresh an existing paper in-place (PDF/source/meta + generated content)."""
     paper_dir = config.PAPERS_DIR / name
@@ -2120,6 +2195,7 @@ def _update_existing_paper(
             tex_content,
             model=llm_model,
             existing_tags=get_all_tags(index),
+            reasoning_effort=reasoning_effort,
         )
         if tldr:
             tldr_content = llm_tldr
@@ -2176,6 +2252,7 @@ def _regenerate_one_paper(
     overwrite_all: bool,
     audit_reasons: Optional[list[str]] = None,
     llm_model: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,
 ) -> tuple[bool, Optional[str]]:
     """Regenerate fields for a paper. Returns (success, new_name or None)."""
     paper_dir = config.PAPERS_DIR / name
@@ -2248,7 +2325,9 @@ def _regenerate_one_paper(
     # Regenerate name if requested
     if do_name:
         existing_names = set(index.keys()) - {name}
-        candidate = generate_auto_name(meta, existing_names, use_llm=not no_llm, model=llm_model)
+        candidate = generate_auto_name(
+            meta, existing_names, use_llm=not no_llm, model=llm_model, reasoning_effort=reasoning_effort
+        )
         if candidate != name and not _is_safe_paper_name(candidate):
             echo_warning(f"Cannot rename to invalid name {candidate!r}")
         elif candidate != name:
@@ -2292,6 +2371,7 @@ def _regenerate_one_paper(
                 do_tldr=do_tldr,
                 model=llm_model,
                 existing_tags=get_all_tags(index),
+                reasoning_effort=reasoning_effort,
             )
             if do_summary:
                 summary = llm_summary

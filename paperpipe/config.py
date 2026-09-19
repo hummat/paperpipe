@@ -294,6 +294,18 @@ def default_ollama_think() -> bool:
     return _setting_bool(env="PAPERPIPE_OLLAMA_THINK", keys=("llm", "ollama_think"), default=DEFAULT_OLLAMA_THINK)
 
 
+def default_llm_reasoning_effort() -> Optional[str]:
+    """Default reasoning/thinking effort for the core LLM (e.g. 'none', 'low', 'medium', 'high')."""
+    configured = os.environ.get("PAPERPIPE_LLM_REASONING_EFFORT")
+    if configured and configured.strip():
+        return configured.strip().lower()
+    cfg = load_config()
+    raw = _config_get(cfg, ("llm", "reasoning_effort"))
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip().lower()
+    return None
+
+
 def default_pqa_settings_name() -> str:
     cfg = load_config()
     raw = _config_get(cfg, ("paperqa", "settings"))
@@ -467,6 +479,42 @@ def default_pqa_agent_llm(fallback: Optional[str]) -> Optional[str]:
     raw = _config_get(cfg, ("paperqa", "agent_llm"))
     if isinstance(raw, str) and raw.strip():
         return raw.strip()
+    return fallback
+
+
+def default_pqa_reasoning_effort(fallback: Optional[str] = None) -> Optional[str]:
+    """Default reasoning effort for PaperQA2's main LLM."""
+    configured = os.environ.get("PAPERPIPE_PQA_REASONING_EFFORT")
+    if configured and configured.strip():
+        return configured.strip().lower()
+    cfg = load_config()
+    raw = _config_get(cfg, ("paperqa", "reasoning_effort"))
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip().lower()
+    return fallback
+
+
+def default_pqa_summary_reasoning_effort(fallback: Optional[str] = None) -> Optional[str]:
+    """Default reasoning effort for PaperQA2's summary_llm."""
+    configured = os.environ.get("PAPERPIPE_PQA_SUMMARY_REASONING_EFFORT")
+    if configured and configured.strip():
+        return configured.strip().lower()
+    cfg = load_config()
+    raw = _config_get(cfg, ("paperqa", "summary_reasoning_effort"))
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip().lower()
+    return fallback
+
+
+def default_pqa_agent_reasoning_effort(fallback: Optional[str] = None) -> Optional[str]:
+    """Default reasoning effort for PaperQA2's agent_llm."""
+    configured = os.environ.get("PAPERPIPE_PQA_AGENT_REASONING_EFFORT")
+    if configured and configured.strip():
+        return configured.strip().lower()
+    cfg = load_config()
+    raw = _config_get(cfg, ("paperqa", "agent_reasoning_effort"))
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip().lower()
     return fallback
 
 

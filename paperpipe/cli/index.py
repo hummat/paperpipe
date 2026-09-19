@@ -17,14 +17,17 @@ from ..config import (
     _strip_ollama_prefix,
     default_leann_embedding_mode,
     default_leann_embedding_model,
+    default_llm_reasoning_effort,
     default_pqa_concurrency,
     default_pqa_embedding_model,
     default_pqa_enrichment_llm,
     default_pqa_index_dir,
     default_pqa_llm_model,
     default_pqa_ollama_timeout,
+    default_pqa_reasoning_effort,
     default_pqa_settings_name,
     default_pqa_summary_llm,
+    default_pqa_summary_reasoning_effort,
     default_pqa_temperature,
     default_pqa_verbosity,
     pqa_index_name_for_embedding,
@@ -55,6 +58,20 @@ from ..search import (
     default=None,
     show_default=False,
     help="PaperQA2 LLM model (LiteLLM id).",
+)
+@click.option(
+    "--pqa-reasoning-effort",
+    type=click.Choice(["none", "low", "medium", "high"], case_sensitive=False),
+    default=None,
+    show_default=False,
+    help="PaperQA2 reasoning effort for main LLM (e.g. 'none', 'low', 'medium', 'high').",
+)
+@click.option(
+    "--pqa-summary-reasoning-effort",
+    type=click.Choice(["none", "low", "medium", "high"], case_sensitive=False),
+    default=None,
+    show_default=False,
+    help="PaperQA2 reasoning effort for summary LLM.",
 )
 @click.option(
     "--pqa-summary-llm",
@@ -166,6 +183,8 @@ def index_cmd(
     backend: str,
     pqa_llm: Optional[str],
     pqa_summary_llm: Optional[str],
+    pqa_reasoning_effort: Optional[str],
+    pqa_summary_reasoning_effort: Optional[str],
     pqa_embedding: Optional[str],
     pqa_temperature: Optional[float],
     pqa_verbosity: Optional[int],
@@ -475,6 +494,38 @@ def index_cmd(
         for arg in ctx.args
     ):
         cmd.extend(["--agent.rebuild_index", "true"])
+    # Reasoning effort resolution and LiteLLM router configs
+    llm_reasoning_effort = (
+        pqa_reasoning_effort
+        if ctx.get_parameter_source("pqa_reasoning_effort") != click.core.ParameterSource.DEFAULT
+        else default_pqa_reasoning_effort(default_llm_reasoning_effort())
+    )
+    summary_reasoning_effort = (
+        pqa_summary_reasoning_effort
+        if ctx.get_parameter_source("pqa_summary_reasoning_effort") != click.core.ParameterSource.DEFAULT
+        else default_pqa_summary_reasoning_effort()
+    )
+
+    if not paperqa._pqa_has_flag(ctx.args, names={"--llm_config", "--llm-config"}):
+        t_out = default_pqa_ollama_timeout() if _is_ollama_model_id(llm_for_pqa) else None
+        llm_cfg = paperqa._pqa_build_llm_config(
+            llm_for_pqa,
+            reasoning_effort=llm_reasoning_effort,
+            timeout=t_out,
+        )
+        if llm_cfg:
+            cmd.extend(["--llm_config", llm_cfg])
+
+    if not paperqa._pqa_has_flag(ctx.args, names={"--summary_llm_config", "--summary-llm-config"}):
+        summary_model = pqa_summary_llm or default_pqa_summary_llm(llm_for_pqa)
+        t_out = default_pqa_ollama_timeout() if _is_ollama_model_id(summary_model) else None
+        sum_cfg = paperqa._pqa_build_llm_config(
+            summary_model,
+            reasoning_effort=summary_reasoning_effort,
+            timeout=t_out,
+        )
+        if sum_cfg:
+            cmd.extend(["--summary_llm_config", sum_cfg])
 
     # If the embedding is an Ollama model id, inject an embedding_config that forces the provider
     # while keeping the user-friendly `ollama/...` id for index naming.

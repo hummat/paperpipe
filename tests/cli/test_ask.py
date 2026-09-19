@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import pickle
 import shutil
 import subprocess
@@ -220,6 +221,54 @@ class TestAskCommand:
         assert pqa_call[pqa_call.index("--llm_config") + 1] == '{"router_kwargs":{"timeout":999}}'
         assert "--summary_llm_config" not in pqa_call
         assert "--parsing.enrichment_llm_config" not in pqa_call
+
+    def test_ask_injects_reasoning_effort_config(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: False)
+
+        mock_popen = MockPopen(returncode=0, stdout="Answer\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+
+        (temp_db / "papers" / "test-paper").mkdir(parents=True)
+        (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
+
+        runner = pytest.importorskip("click.testing").CliRunner()
+        result = runner.invoke(
+            cli_mod.cli,
+            [
+                "ask",
+                "query",
+                "--pqa-llm",
+                "gpt-4o",
+                "--pqa-summary-llm",
+                "gpt-4o-mini",
+                "--pqa-agent-llm",
+                "claude-3-5-sonnet",
+                "--pqa-embedding",
+                "voyage/voyage-3.5",
+                "--pqa-reasoning-effort",
+                "high",
+                "--pqa-summary-reasoning-effort",
+                "low",
+                "--pqa-agent-reasoning-effort",
+                "medium",
+            ],
+        )
+        assert result.exit_code == 0
+
+        pqa_call, _ = next(c for c in mock_popen.calls if c[0][0] == "pqa")
+        assert "--llm_config" in pqa_call
+        llm_cfg = json.loads(pqa_call[pqa_call.index("--llm_config") + 1])
+        assert llm_cfg["model_list"][0]["litellm_params"]["reasoning_effort"] == "high"
+        assert llm_cfg["model_list"][0]["litellm_params"]["drop_params"] is True
+
+        assert "--summary_llm_config" in pqa_call
+        sum_cfg = json.loads(pqa_call[pqa_call.index("--summary_llm_config") + 1])
+        assert sum_cfg["model_list"][0]["litellm_params"]["reasoning_effort"] == "low"
+
+        assert "--agent.agent_llm_config" in pqa_call
+        agt_cfg = json.loads(pqa_call[pqa_call.index("--agent.agent_llm_config") + 1])
+        assert agt_cfg["model_list"][0]["litellm_params"]["reasoning_effort"] == "medium"
 
     def test_paperqa_ask_evidence_blocks_parses_response(self, monkeypatch: pytest.MonkeyPatch) -> None:
         class DummySettings:

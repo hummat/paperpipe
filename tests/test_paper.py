@@ -1750,6 +1750,81 @@ class TestOllamaNumCtx:
         assert paper_mod._run_llm("prompt", purpose="tldr", model="gpt-4o") == "The Transformer."
 
 
+class TestRunLlmReasoningEffort:
+    def test_run_llm_passes_reasoning_effort_from_argument(self, monkeypatch):
+        import sys
+
+        captured: dict = {}
+
+        def completion(**kwargs):
+            captured.update(kwargs)
+            msg = types.SimpleNamespace(content="ok")
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg)])
+
+        fake = types.SimpleNamespace(
+            suppress_debug_info=False,
+            drop_params=False,
+            completion=completion,
+            token_counter=lambda model, messages: 100,
+            get_model_info=lambda model: {"max_input_tokens": 32768},
+        )
+        monkeypatch.setitem(sys.modules, "litellm", fake)
+
+        out = paper_mod._run_llm("prompt", purpose="summary", model="gpt-4o", reasoning_effort="high")
+        assert out == "ok"
+        assert captured.get("reasoning_effort") == "high"
+        assert fake.drop_params is True
+
+    def test_run_llm_passes_reasoning_effort_from_default(self, monkeypatch):
+        import sys
+
+        captured: dict = {}
+
+        def completion(**kwargs):
+            captured.update(kwargs)
+            msg = types.SimpleNamespace(content="ok")
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg)])
+
+        fake = types.SimpleNamespace(
+            suppress_debug_info=False,
+            drop_params=False,
+            completion=completion,
+            token_counter=lambda model, messages: 100,
+            get_model_info=lambda model: {"max_input_tokens": 32768},
+        )
+        monkeypatch.setitem(sys.modules, "litellm", fake)
+        monkeypatch.setattr(paper_mod, "default_llm_reasoning_effort", lambda: "low")
+
+        out = paper_mod._run_llm("prompt", purpose="summary", model="gpt-4o")
+        assert out == "ok"
+        assert captured.get("reasoning_effort") == "low"
+        assert fake.drop_params is True
+
+    def test_run_llm_omits_reasoning_effort_when_none(self, monkeypatch):
+        import sys
+
+        captured: dict = {}
+
+        def completion(**kwargs):
+            captured.update(kwargs)
+            msg = types.SimpleNamespace(content="ok")
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg)])
+
+        fake = types.SimpleNamespace(
+            suppress_debug_info=False,
+            drop_params=False,
+            completion=completion,
+            token_counter=lambda model, messages: 100,
+            get_model_info=lambda model: {"max_input_tokens": 32768},
+        )
+        monkeypatch.setitem(sys.modules, "litellm", fake)
+        monkeypatch.setattr(paper_mod, "default_llm_reasoning_effort", lambda: None)
+
+        out = paper_mod._run_llm("prompt", purpose="summary", model="gpt-4o")
+        assert out == "ok"
+        assert "reasoning_effort" not in captured
+
+
 class TestStripReasoning:
     """Tests for stripping <think> reasoning traces from model output."""
 
