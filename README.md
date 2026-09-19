@@ -378,6 +378,9 @@ The first query builds an index (cached under `.pqa_index/` or `.leann/`). Use `
 | `--pqa-llm MODEL` | LLM for answer generation (LiteLLM id) |
 | `--pqa-summary-llm MODEL` | LLM for evidence summarization (often cheaper) |
 | `--pqa-agent-llm MODEL` | LLM that drives the search agent (defaults to `--pqa-llm`) |
+| `--pqa-reasoning-effort LEVEL` | Reasoning effort for main LLM (`low`, `medium`, `high`) |
+| `--pqa-summary-reasoning-effort LEVEL` | Reasoning effort for summary LLM |
+| `--pqa-agent-reasoning-effort LEVEL` | Reasoning effort for search agent LLM |
 | `--pqa-embedding MODEL` | Embedding model for text chunks |
 | `--pqa-temperature FLOAT` | LLM temperature (0.0-1.0) |
 | `--pqa-verbosity INT` | Logging level (0-3; 3 = log all LLM calls) |
@@ -790,6 +793,7 @@ For persistent settings, create `~/.paperpipe/config.toml` (override location wi
 [llm]
 model = "gemini/gemini-2.5-flash"
 temperature = 0.3
+# reasoning_effort = "high"   # reasoning effort (low/medium/high) for supported models
 # ollama_num_ctx = 32768   # max context window for ollama/* models (default 32768)
 # ollama_think = false     # enable Ollama "thinking" for reasoning models (default false)
 # timeout = 120            # per-request seconds; raise for slow local/reasoning models (default 120)
@@ -802,6 +806,9 @@ settings = "default"
 index_dir = "~/.paperpipe/.pqa_index"
 summary_llm = "gpt-4o-mini"
 enrichment_llm = "gpt-4o-mini"
+# reasoning_effort = "high"          # reasoning effort for answer LLM
+# summary_reasoning_effort = "low"   # reasoning effort for summary LLM
+# agent_reasoning_effort = "medium"  # reasoning effort for agent LLM
 # agent_llm drives PaperQA2's search agent. PaperQA2's own default is gpt-4o; paperpipe
 # instead inherits the answer llm (above) unless you set this. Set agent_type = "fake" for
 # deterministic, low-token retrieval that skips the agent LLM's tool-calling loop.

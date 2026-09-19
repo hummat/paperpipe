@@ -16,7 +16,9 @@ from ..config import (
     _effective_leann_index_name,
     _is_ollama_model_id,
     _strip_ollama_prefix,
+    default_llm_reasoning_effort,
     default_pqa_agent_llm,
+    default_pqa_agent_reasoning_effort,
     default_pqa_agent_type,
     default_pqa_answer_length,
     default_pqa_concurrency,
@@ -27,8 +29,10 @@ from ..config import (
     default_pqa_llm_model,
     default_pqa_max_sources,
     default_pqa_ollama_timeout,
+    default_pqa_reasoning_effort,
     default_pqa_settings_name,
     default_pqa_summary_llm,
+    default_pqa_summary_reasoning_effort,
     default_pqa_temperature,
     default_pqa_timeout,
     default_pqa_verbosity,
@@ -80,6 +84,30 @@ def _leann_auto_build_args(index_name: str) -> list[str]:
     default=None,
     show_default=False,
     help="LLM that drives PaperQA2's search agent (defaults to --pqa-llm; PaperQA2's own default is gpt-4o).",
+)
+@click.option(
+    "--pqa-reasoning-effort",
+    "reasoning_effort",
+    type=click.Choice(["low", "medium", "high"], case_sensitive=False),
+    default=None,
+    show_default=False,
+    help="Reasoning effort for PaperQA2's main LLM (low, medium, high).",
+)
+@click.option(
+    "--pqa-summary-reasoning-effort",
+    "summary_reasoning_effort",
+    type=click.Choice(["low", "medium", "high"], case_sensitive=False),
+    default=None,
+    show_default=False,
+    help="Reasoning effort for PaperQA2's summary LLM.",
+)
+@click.option(
+    "--pqa-agent-reasoning-effort",
+    "agent_reasoning_effort",
+    type=click.Choice(["low", "medium", "high"], case_sensitive=False),
+    default=None,
+    show_default=False,
+    help="Reasoning effort for PaperQA2's search agent LLM.",
 )
 @click.option(
     "--pqa-embedding",
@@ -244,6 +272,9 @@ def ask(
     llm: Optional[str],
     summary_llm: Optional[str],
     agent_llm: Optional[str],
+    reasoning_effort: Optional[str],
+    summary_reasoning_effort: Optional[str],
+    agent_reasoning_effort: Optional[str],
     embedding: Optional[str],
     temperature: Optional[float],
     verbosity: Optional[int],
@@ -516,53 +547,87 @@ def ask(
         or arg.startswith(("--agent.agent_llm=", "--agent.agent-llm="))
         for arg in ctx.args
     )
+    agent_llm_for_pqa: Optional[str] = None
     if not has_agent_llm_passthrough:
         agent_llm_source = ctx.get_parameter_source("agent_llm")
         if agent_llm_source != click.core.ParameterSource.DEFAULT and agent_llm:
             cmd.extend(["--agent.agent_llm", agent_llm])
+            agent_llm_for_pqa = agent_llm
         else:
             agent_llm_default = default_pqa_agent_llm(llm_for_pqa if not has_settings_flag else None)
             if agent_llm_default:
                 cmd.extend(["--agent.agent_llm", agent_llm_default])
+                agent_llm_for_pqa = agent_llm_default
 
-    # Ollama can have long cold-start / first-token latency. If the user didn't provide explicit
-    # per-provider configs, inject a larger LiteLLM router timeout to avoid spurious 60s timeouts.
-    if (
-        _is_ollama_model_id(llm_for_pqa)
-        or _is_ollama_model_id(summary_llm_for_pqa)
-        or _is_ollama_model_id(enrichment_llm_for_pqa)
-        or _is_ollama_model_id(embedding_for_pqa)
+    # Reasoning effort resolution
+    llm_reasoning_effort = (
+        reasoning_effort
+        if ctx.get_parameter_source("reasoning_effort") != click.core.ParameterSource.DEFAULT
+        else default_pqa_reasoning_effort(default_llm_reasoning_effort())
+    )
+    sum_reasoning_effort = (
+        summary_reasoning_effort
+        if ctx.get_parameter_source("summary_reasoning_effort") != click.core.ParameterSource.DEFAULT
+        else default_pqa_summary_reasoning_effort()
+    )
+    agt_reasoning_effort = (
+        agent_reasoning_effort
+        if ctx.get_parameter_source("agent_reasoning_effort") != click.core.ParameterSource.DEFAULT
+        else default_pqa_agent_reasoning_effort(llm_reasoning_effort)
+    )
+
+    # LiteLLM router configurations for LLM models (reasoning effort and/or Ollama timeout)
+    if not paperqa._pqa_has_flag(ctx.args, names={"--llm_config", "--llm-config"}):
+        t_out = default_pqa_ollama_timeout() if _is_ollama_model_id(llm_for_pqa) else None
+        llm_cfg = paperqa._pqa_build_llm_config(
+            llm_for_pqa,
+            reasoning_effort=llm_reasoning_effort,
+            timeout=t_out,
+        )
+        if llm_cfg:
+            cmd.extend(["--llm_config", llm_cfg])
+
+    if not paperqa._pqa_has_flag(ctx.args, names={"--summary_llm_config", "--summary-llm-config"}):
+        t_out = default_pqa_ollama_timeout() if _is_ollama_model_id(summary_llm_for_pqa) else None
+        sum_cfg = paperqa._pqa_build_llm_config(
+            summary_llm_for_pqa,
+            reasoning_effort=sum_reasoning_effort,
+            timeout=t_out,
+        )
+        if sum_cfg:
+            cmd.extend(["--summary_llm_config", sum_cfg])
+
+    if not paperqa._pqa_has_flag(ctx.args, names={"--agent.agent_llm_config", "--agent.agent-llm-config"}):
+        t_out = default_pqa_ollama_timeout() if _is_ollama_model_id(agent_llm_for_pqa) else None
+        agt_cfg = paperqa._pqa_build_llm_config(
+            agent_llm_for_pqa,
+            reasoning_effort=agt_reasoning_effort,
+            timeout=t_out,
+        )
+        if agt_cfg:
+            cmd.extend(["--agent.agent_llm_config", agt_cfg])
+
+    if _is_ollama_model_id(enrichment_llm_for_pqa) and not paperqa._pqa_has_flag(
+        ctx.args, names={"--parsing.enrichment_llm_config", "--parsing.enrichment-llm-config"}
     ):
-        ollama_timeout = default_pqa_ollama_timeout()
-        timeout_config = json.dumps({"router_kwargs": {"timeout": ollama_timeout}})
+        enrich_cfg = paperqa._pqa_build_llm_config(
+            enrichment_llm_for_pqa,
+            timeout=default_pqa_ollama_timeout(),
+        )
+        if enrich_cfg:
+            cmd.extend(["--parsing.enrichment_llm_config", enrich_cfg])
 
-        if _is_ollama_model_id(llm_for_pqa) and not paperqa._pqa_has_flag(
-            ctx.args, names={"--llm_config", "--llm-config"}
-        ):
-            cmd.extend(["--llm_config", timeout_config])
-        if _is_ollama_model_id(summary_llm_for_pqa) and not paperqa._pqa_has_flag(
-            ctx.args, names={"--summary_llm_config", "--summary-llm-config"}
-        ):
-            cmd.extend(["--summary_llm_config", timeout_config])
-        if _is_ollama_model_id(enrichment_llm_for_pqa) and not paperqa._pqa_has_flag(
-            ctx.args,
-            names={
-                "--parsing.enrichment_llm_config",
-                "--parsing.enrichment-llm-config",
-            },
-        ):
-            cmd.extend(["--parsing.enrichment_llm_config", timeout_config])
-        if _is_ollama_model_id(embedding_for_pqa) and not paperqa._pqa_has_flag(
-            ctx.args, names={"--embedding_config", "--embedding-config"}
-        ):
-            # For embeddings, LMI uses PassThroughRouter (no model_list), so router_kwargs doesn't help.
-            # Also work around a LiteLLM bug where `ollama/...` isn't stripped before calling /api/embed.
-            cmd.extend(
-                [
-                    "--embedding_config",
-                    json.dumps({"kwargs": {"custom_llm_provider": "ollama", "timeout": ollama_timeout}}),
-                ]
-            )
+    if _is_ollama_model_id(embedding_for_pqa) and not paperqa._pqa_has_flag(
+        ctx.args, names={"--embedding_config", "--embedding-config"}
+    ):
+        # For embeddings, LMI uses PassThroughRouter (no model_list), so router_kwargs doesn't help.
+        # Also work around a LiteLLM bug where `ollama/...` isn't stripped before calling /api/embed.
+        cmd.extend(
+            [
+                "--embedding_config",
+                json.dumps({"kwargs": {"custom_llm_provider": "ollama", "timeout": default_pqa_ollama_timeout()}}),
+            ]
+        )
 
     # temperature
     temperature_source = ctx.get_parameter_source("temperature")

@@ -43,6 +43,9 @@ DEFAULT_LLM_TIMEOUT_FALLBACK = 120.0
 # extraction, not reasoning; thinking-by-default models (Qwen3.6, Nemotron) can spend their budget
 # on hidden reasoning and return empty content, so we disable it by default.
 DEFAULT_OLLAMA_THINK = False
+# Reasoning-effort levels paperpipe accepts, for both the core LLM and the PaperQA2 models.
+# LiteLLM normalizes these per provider; unsupported values are dropped via drop_params.
+REASONING_EFFORT_LEVELS = frozenset({"low", "medium", "high"})
 
 DEFAULT_LEANN_EMBEDDING_MODEL = "nomic-embed-text"
 DEFAULT_LEANN_EMBEDDING_MODE = "ollama"
@@ -308,20 +311,25 @@ def default_ollama_think() -> bool:
     return _setting_bool(env="PAPERPIPE_OLLAMA_THINK", keys=("llm", "ollama_think"), default=DEFAULT_OLLAMA_THINK)
 
 
+def _reasoning_effort_setting(*, env: str, keys: tuple[str, ...], fallback: Optional[str]) -> Optional[str]:
+    """Resolve a reasoning-effort setting, validating it against the supported levels."""
+    val = _setting_str(env=env, keys=keys, default="")
+    if not val:
+        return fallback
+    norm = val.strip().lower()
+    if norm in REASONING_EFFORT_LEVELS:
+        return norm
+    debug("Invalid reasoning_effort %r; expected one of %s.", val, ", ".join(sorted(REASONING_EFFORT_LEVELS)))
+    return fallback
+
+
 def default_llm_reasoning_effort() -> Optional[str]:
     """Configured reasoning effort for thinking models ('low', 'medium', 'high', or None)."""
-    val = _setting_str(
+    return _reasoning_effort_setting(
         env="PAPERPIPE_LLM_REASONING_EFFORT",
         keys=("llm", "reasoning_effort"),
-        default="",
+        fallback=None,
     )
-    if not val:
-        return None
-    norm = val.strip().lower()
-    if norm in {"low", "medium", "high"}:
-        return norm
-    debug("Invalid reasoning_effort %r; expected 'low', 'medium', or 'high'.", val)
-    return None
 
 
 def default_pqa_settings_name() -> str:
@@ -498,6 +506,37 @@ def default_pqa_agent_llm(fallback: Optional[str]) -> Optional[str]:
     if isinstance(raw, str) and raw.strip():
         return raw.strip()
     return fallback
+
+
+def default_pqa_reasoning_effort(fallback: Optional[str] = None) -> Optional[str]:
+    """Reasoning effort for PaperQA2's main LLM; falls back to the core LLM setting."""
+    return _reasoning_effort_setting(
+        env="PAPERPIPE_PQA_REASONING_EFFORT",
+        keys=("paperqa", "reasoning_effort"),
+        fallback=fallback,
+    )
+
+
+def default_pqa_summary_reasoning_effort(fallback: Optional[str] = None) -> Optional[str]:
+    """Reasoning effort for PaperQA2's summary_llm.
+
+    Deliberately does not inherit the answer LLM's effort: the summary model is usually a cheaper
+    one run once per evidence chunk, so inheriting a high effort there is the expensive default.
+    """
+    return _reasoning_effort_setting(
+        env="PAPERPIPE_PQA_SUMMARY_REASONING_EFFORT",
+        keys=("paperqa", "summary_reasoning_effort"),
+        fallback=fallback,
+    )
+
+
+def default_pqa_agent_reasoning_effort(fallback: Optional[str] = None) -> Optional[str]:
+    """Reasoning effort for PaperQA2's agent_llm; falls back to the answer LLM's effort."""
+    return _reasoning_effort_setting(
+        env="PAPERPIPE_PQA_AGENT_REASONING_EFFORT",
+        keys=("paperqa", "agent_reasoning_effort"),
+        fallback=fallback,
+    )
 
 
 def default_pqa_agent_type() -> Optional[str]:
