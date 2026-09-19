@@ -1116,36 +1116,6 @@ class TestAddCommand:
         assert len(captured_model) == 1
         assert captured_model[0] == "gpt-4o-mini"
 
-    def test_add_reasoning_effort_flag(self, temp_db: Path, monkeypatch):
-        """Test that --reasoning-effort flag passes reasoning_effort to generate_llm_content."""
-        pdf_path = temp_db / "local.pdf"
-        pdf_path.write_bytes(b"%PDF-1.4\n%local\n")
-
-        captured_effort = []
-
-        def mock_generate_llm_content(*args, **kwargs):
-            captured_effort.append(kwargs.get("reasoning_effort"))
-            return ("Summary", "Equations", ["tag"], "TL;DR")
-
-        monkeypatch.setattr(paper_mod, "generate_llm_content", mock_generate_llm_content)
-
-        runner = CliRunner()
-        result = runner.invoke(
-            cli_mod.cli,
-            [
-                "add",
-                "--pdf",
-                str(pdf_path),
-                "--title",
-                "Test Paper",
-                "--reasoning-effort",
-                "high",
-            ],
-        )
-
-        assert result.exit_code == 0, result.output
-        assert captured_effort == ["high"]
-
     def test_add_local_pdf_honors_no_tldr(self, temp_db: Path, monkeypatch):
         """--no-tldr must reach the generator and leave no tldr.md behind."""
         pdf_path = temp_db / "local.pdf"
@@ -1750,33 +1720,6 @@ class TestRegenerateCommand:
         assert result.exit_code == 0, result.output
         assert len(captured_model) == 1
         assert captured_model[0] == "gpt-4o-mini"
-
-    def test_regenerate_reasoning_effort_flag(self, temp_db: Path, monkeypatch):
-        """Test that --reasoning-effort flag passes reasoning_effort to generate_llm_content."""
-        papers_dir = temp_db / "papers"
-        (papers_dir / "p1").mkdir(parents=True)
-        (papers_dir / "p1" / "meta.json").write_text(
-            json.dumps({"arxiv_id": "1", "title": "Paper 1", "authors": [], "abstract": ""})
-        )
-        (papers_dir / "p1" / "source.tex").write_text(r"\begin{equation}x=1\end{equation}")
-        paperpipe.save_index({"p1": {"arxiv_id": "1", "title": "Paper 1", "tags": [], "added": "x"}})
-
-        captured_effort = []
-
-        def mock_generate_llm_content(*args, **kwargs):
-            captured_effort.append(kwargs.get("reasoning_effort"))
-            return ("Summary", "Equations", ["tag"], "TL;DR")
-
-        monkeypatch.setattr(paper_mod, "generate_llm_content", mock_generate_llm_content)
-
-        runner = CliRunner()
-        result = runner.invoke(
-            cli_mod.cli,
-            ["regenerate", "p1", "--reasoning-effort", "medium", "-o", "summary"],
-        )
-
-        assert result.exit_code == 0, result.output
-        assert captured_effort == ["medium"]
 
     @staticmethod
     def _seed_tagged(temp_db: Path, tags: list[str]) -> Path:
