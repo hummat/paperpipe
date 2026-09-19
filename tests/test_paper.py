@@ -500,7 +500,7 @@ class TestExtractTitleAndNameFromPdf:
         monkeypatch.setattr(
             paper_mod,
             "_run_llm",
-            lambda prompt, *, purpose, model=None: "TITLE: Attention Is All You Need\nNAME: transformer",
+            lambda prompt, **_kw: "TITLE: Attention Is All You Need\nNAME: transformer",
         )
         title, name = paper_mod.extract_title_and_name_from_pdf(pdf)
         assert title == "Attention Is All You Need"
@@ -510,7 +510,7 @@ class TestExtractTitleAndNameFromPdf:
         pdf = self._make_pdf(tmp_path)
         monkeypatch.setattr(paper_mod, "_litellm_available", lambda: True)
         self._mock_fitz(monkeypatch, "Some text")
-        monkeypatch.setattr(paper_mod, "_run_llm", lambda prompt, *, purpose, model=None: None)
+        monkeypatch.setattr(paper_mod, "_run_llm", lambda prompt, **_kw: None)
         title, name = paper_mod.extract_title_and_name_from_pdf(pdf)
         assert title is None
         assert name is None
@@ -526,7 +526,7 @@ class TestExtractTitleAndNameFromPdf:
         pdf = self._make_pdf(tmp_path)
         monkeypatch.setattr(paper_mod, "_litellm_available", lambda: True)
         self._mock_fitz(monkeypatch, "Some Title\nAbstract...")
-        monkeypatch.setattr(paper_mod, "_run_llm", lambda prompt, *, purpose, model=None: "TITLE: Some Title\nNAME: ab")
+        monkeypatch.setattr(paper_mod, "_run_llm", lambda prompt, **_kw: "TITLE: Some Title\nNAME: ab")
         title, name = paper_mod.extract_title_and_name_from_pdf(pdf)
         assert title == "Some Title"
         assert name is None  # "ab" is < 3 chars

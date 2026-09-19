@@ -862,10 +862,7 @@ Return ONLY the name, nothing else. No quotes, no explanation.
 Title: {meta["title"]}
 Abstract: {meta["abstract"][:500]}"""
 
-    if reasoning_effort is not None:
-        result = _run_llm(prompt, purpose="name", model=model, reasoning_effort=reasoning_effort)
-    else:
-        result = _run_llm(prompt, purpose="name", model=model)
+    result = _run_llm(prompt, purpose="name", model=model, reasoning_effort=reasoning_effort)
     if result:
         # Clean up the result - take first word/term only
         name = result.strip().lower().split()[0] if result.strip() else None
@@ -1483,10 +1480,7 @@ Return ONLY the title, nothing else. No quotes, no explanation.
 First page text:
 {first_page_text}"""
 
-    if reasoning_effort is not None:
-        result = _run_llm(prompt, purpose="title extraction", model=model, reasoning_effort=reasoning_effort)
-    else:
-        result = _run_llm(prompt, purpose="title extraction", model=model)
+    result = _run_llm(prompt, purpose="title extraction", model=model, reasoning_effort=reasoning_effort)
     if result:
         # Clean up: remove quotes, newlines, limit length
         result = result.strip().strip("\"'").split("\n")[0][:200]
@@ -1528,10 +1522,7 @@ NAME: <the short name>
 First page text:
 {first_page_text}"""
 
-    if reasoning_effort is not None:
-        result = _run_llm(prompt, purpose="title+name extraction", model=model, reasoning_effort=reasoning_effort)
-    else:
-        result = _run_llm(prompt, purpose="title+name extraction", model=model)
+    result = _run_llm(prompt, purpose="title+name extraction", model=model, reasoning_effort=reasoning_effort)
     if not result:
         return None, None
 
@@ -1602,11 +1593,7 @@ Context:
 TL;DR:"""
 
         try:
-            llm_tldr = (
-                _run_llm(tldr_prompt, purpose="tldr", model=model, reasoning_effort=reasoning_effort)
-                if reasoning_effort is not None
-                else _run_llm(tldr_prompt, purpose="tldr", model=model)
-            )
+            llm_tldr = _run_llm(tldr_prompt, purpose="tldr", model=model, reasoning_effort=reasoning_effort)
             tldr = llm_tldr if llm_tldr else generate_simple_tldr(meta)
         except Exception as e:
             debug("TL;DR generation failed: %s", e)
@@ -1642,11 +1629,7 @@ Context:
 Summary:"""
 
         try:
-            llm_summary = (
-                _run_llm(summary_prompt, purpose="summary", model=model, reasoning_effort=reasoning_effort)
-                if reasoning_effort is not None
-                else _run_llm(summary_prompt, purpose="summary", model=model)
-            )
+            llm_summary = _run_llm(summary_prompt, purpose="summary", model=model, reasoning_effort=reasoning_effort)
             summary = llm_summary if llm_summary else generate_simple_summary(meta, tex_content)
         except Exception as e:
             debug("Summary generation failed: %s", e)
@@ -1678,11 +1661,7 @@ LaTeX source:
 {context}"""
 
             try:
-                llm_equations = (
-                    _run_llm(eq_prompt, purpose="equations", model=model, reasoning_effort=reasoning_effort)
-                    if reasoning_effort is not None
-                    else _run_llm(eq_prompt, purpose="equations", model=model)
-                )
+                llm_equations = _run_llm(eq_prompt, purpose="equations", model=model, reasoning_effort=reasoning_effort)
                 equations = llm_equations if llm_equations else extract_equations_simple(tex_content)
             except Exception as e:
                 debug("Equations extraction failed: %s", e)
@@ -1708,11 +1687,7 @@ Title: {title}
 Abstract: {abstract[:800]}"""
 
         try:
-            llm_tags_text = (
-                _run_llm(tag_prompt, purpose="tags", model=model, reasoning_effort=reasoning_effort)
-                if reasoning_effort is not None
-                else _run_llm(tag_prompt, purpose="tags", model=model)
-            )
+            llm_tags_text = _run_llm(tag_prompt, purpose="tags", model=model, reasoning_effort=reasoning_effort)
             if llm_tags_text:
                 additional_tags = [
                     t.strip().lower().replace(" ", "-")

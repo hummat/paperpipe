@@ -293,6 +293,7 @@ def add(
                 source_url=source_url,
                 no_llm=no_llm,
                 llm_model=llm_model,
+                tldr=tldr,
                 reasoning_effort=reasoning_effort,
             )
             if not success:
@@ -354,6 +355,7 @@ def add(
                         source_url=identifier,
                         no_llm=no_llm,
                         llm_model=llm_model,
+                        tldr=tldr,
                         reasoning_effort=reasoning_effort,
                     )
                     if success:
@@ -382,6 +384,7 @@ def add(
                     url=url,
                     no_llm=no_llm,
                     llm_model=llm_model,
+                    tldr=tldr,
                     reasoning_effort=reasoning_effort,
                 )
                 if success:

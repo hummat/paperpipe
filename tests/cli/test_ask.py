@@ -269,6 +269,56 @@ class TestAskCommand:
         assert "--agent.agent_llm_config" in pqa_call
         agt_cfg = json.loads(pqa_call[pqa_call.index("--agent.agent_llm_config") + 1])
         assert agt_cfg["model_list"][0]["litellm_params"]["reasoning_effort"] == "medium"
+        # The router entry must name the model PaperQA2 was actually told to use.
+        assert llm_cfg["model_list"][0]["model_name"] == "gpt-4o"
+        assert sum_cfg["model_list"][0]["model_name"] == "gpt-4o-mini"
+        assert agt_cfg["model_list"][0]["model_name"] == "claude-3-5-sonnet"
+
+    def test_ask_skips_reasoning_config_when_model_unknown(
+        self, temp_db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With --settings, paperpipe does not resolve the model, so it must not emit a router entry.
+
+        LiteLLM matches deployments by `model_name`; an entry keyed on an empty id never matches.
+        """
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: False)
+        (temp_db / "config.toml").write_text('[paperqa]\nreasoning_effort = "high"\n')
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
+
+        mock_popen = MockPopen(returncode=0, stdout="Answer\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+        (temp_db / "papers" / "test-paper").mkdir(parents=True)
+        (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
+
+        runner = pytest.importorskip("click.testing").CliRunner()
+        result = runner.invoke(cli_mod.cli, ["ask", "query", "--settings", "my_settings"])
+        assert result.exit_code == 0, result.output
+
+        pqa_call, _ = next(c for c in mock_popen.calls if c[0][0] == "pqa")
+        assert "--llm_config" not in pqa_call
+
+    def test_ask_skips_agent_reasoning_config_for_passthrough_agent_llm(
+        self, temp_db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A passthrough --agent.agent_llm must not get a router config naming a different model."""
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: False)
+        (temp_db / "config.toml").write_text('[paperqa]\nllm = "gpt-4o"\nagent_reasoning_effort = "high"\n')
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
+
+        mock_popen = MockPopen(returncode=0, stdout="Answer\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+        (temp_db / "papers" / "test-paper").mkdir(parents=True)
+        (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
+
+        runner = pytest.importorskip("click.testing").CliRunner()
+        result = runner.invoke(cli_mod.cli, ["ask", "query", "--agent.agent_llm=o3-mini"])
+        assert result.exit_code == 0, result.output
+
+        pqa_call, _ = next(c for c in mock_popen.calls if c[0][0] == "pqa")
+        agent_cfgs = [json.loads(pqa_call[i + 1]) for i, a in enumerate(pqa_call) if a == "--agent.agent_llm_config"]
+        assert all(c["model_list"][0]["model_name"] == "o3-mini" for c in agent_cfgs if "model_list" in c)
 
     def test_paperqa_ask_evidence_blocks_parses_response(self, monkeypatch: pytest.MonkeyPatch) -> None:
         class DummySettings:

@@ -44,29 +44,24 @@ def _pqa_build_llm_config(
     """Build a JSON LiteLLM Router configuration for PaperQA2 CLI.
 
     PaperQA2 expects `--llm_config` to be a JSON string with `model_list` and optional `router_kwargs`.
+    A router entry is only emitted when the model id is known: LiteLLM matches deployments by
+    `model_name`, so an entry built from an unknown (empty) id never matches and breaks routing.
+    Returns None when there is nothing to configure.
     """
-    if not reasoning_effort and timeout is None:
+    # reasoning_effort needs a concrete model id to key the router entry on.
+    effort = reasoning_effort if (reasoning_effort and model) else None
+    if not effort and timeout is None:
         return None
 
     cfg: dict[str, Any] = {}
     if timeout is not None:
         cfg["router_kwargs"] = {"timeout": timeout}
 
-    if reasoning_effort:
-        target_model = model or ""
-        litellm_params: dict[str, Any] = {
-            "model": target_model,
-            "reasoning_effort": reasoning_effort,
-        }
+    if effort:
+        litellm_params: dict[str, Any] = {"model": model, "reasoning_effort": effort}
         if drop_params:
             litellm_params["drop_params"] = True
-
-        cfg["model_list"] = [
-            {
-                "model_name": target_model,
-                "litellm_params": litellm_params,
-            }
-        ]
+        cfg["model_list"] = [{"model_name": model, "litellm_params": litellm_params}]
 
     return json.dumps(cfg)
 

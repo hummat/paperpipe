@@ -547,14 +547,17 @@ def ask(
         or arg.startswith(("--agent.agent_llm=", "--agent.agent-llm="))
         for arg in ctx.args
     )
+    agent_llm_for_pqa: Optional[str] = None
     if not has_agent_llm_passthrough:
         agent_llm_source = ctx.get_parameter_source("agent_llm")
         if agent_llm_source != click.core.ParameterSource.DEFAULT and agent_llm:
             cmd.extend(["--agent.agent_llm", agent_llm])
+            agent_llm_for_pqa = agent_llm
         else:
             agent_llm_default = default_pqa_agent_llm(llm_for_pqa if not has_settings_flag else None)
             if agent_llm_default:
                 cmd.extend(["--agent.agent_llm", agent_llm_default])
+                agent_llm_for_pqa = agent_llm_default
 
     # Reasoning effort resolution
     llm_reasoning_effort = (
@@ -595,10 +598,9 @@ def ask(
             cmd.extend(["--summary_llm_config", sum_cfg])
 
     if not paperqa._pqa_has_flag(ctx.args, names={"--agent.agent_llm_config", "--agent.agent-llm-config"}):
-        agent_model = agent_llm if agent_llm else default_pqa_agent_llm(llm_for_pqa)
-        t_out = default_pqa_ollama_timeout() if _is_ollama_model_id(agent_model) else None
+        t_out = default_pqa_ollama_timeout() if _is_ollama_model_id(agent_llm_for_pqa) else None
         agt_cfg = paperqa._pqa_build_llm_config(
-            agent_model,
+            agent_llm_for_pqa,
             reasoning_effort=agt_reasoning_effort,
             timeout=t_out,
         )

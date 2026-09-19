@@ -1142,6 +1142,29 @@ class TestAddCommand:
         assert result.exit_code == 0, result.output
         assert captured_effort == ["high"]
 
+    def test_add_local_pdf_honors_no_tldr(self, temp_db: Path, monkeypatch):
+        """--no-tldr must reach the generator and leave no tldr.md behind."""
+        pdf_path = temp_db / "local.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n%local\n")
+
+        captured: dict = {}
+
+        def mock_generate_llm_content(*args, **kwargs):
+            captured.update(kwargs)
+            return ("Summary", "Equations", ["tag"], "TL;DR")
+
+        monkeypatch.setattr(paper_mod, "generate_llm_content", mock_generate_llm_content)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli_mod.cli,
+            ["add", "--pdf", str(pdf_path), "--title", "Test Paper", "--no-tldr"],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert captured["do_tldr"] is False
+        assert not list((temp_db / "papers").glob("*/tldr.md"))
+
     def test_add_arxiv_llm_flag_overrides_model(self, temp_db: Path, monkeypatch):
         """Test that --llm flag passes model to generate_llm_content for arXiv papers."""
 
