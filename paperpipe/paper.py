@@ -1487,6 +1487,11 @@ def _run_llm(
     effort = reasoning_effort or default_llm_reasoning_effort()
     if effort:
         extra_params["reasoning_effort"] = effort
+        # Providers that do not accept reasoning_effort raise UnsupportedParamsError, which would
+        # fail every extraction whenever a global effort is configured. Scope the drop to this
+        # param rather than setting litellm.drop_params globally, which would also swallow
+        # genuine errors for params the caller set deliberately.
+        extra_params["drop_params"] = True
 
     if is_ollama:
         extra_params["num_ctx"] = _ollama_num_ctx(_count_message_tokens(messages, model, litellm))

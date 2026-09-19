@@ -1787,6 +1787,35 @@ class TestOllamaNumCtx:
         assert out == "ok"
         assert "num_ctx" not in captured
 
+    def test_run_llm_drops_reasoning_effort_for_unsupported_providers(self, monkeypatch):
+        """A configured effort must not break models whose provider rejects reasoning_effort.
+
+        LiteLLM raises UnsupportedParamsError unless drop_params is set, which _run_llm swallows,
+        so every extraction against e.g. gpt-4o would silently degrade to the non-LLM fallback.
+        """
+        import sys
+
+        captured: dict = {}
+        monkeypatch.setitem(sys.modules, "litellm", self._fake_litellm(captured, token_count=5000))
+        monkeypatch.setattr(paper_mod, "default_llm_reasoning_effort", lambda: "high")
+
+        out = paper_mod._run_llm("prompt", purpose="summary", model="gpt-4o")
+
+        assert out == "ok"
+        assert captured["reasoning_effort"] == "high"
+        assert captured["drop_params"] is True
+
+    def test_run_llm_omits_drop_params_without_effort(self, monkeypatch):
+        """Without an effort there is nothing to drop; keep real param errors visible."""
+        import sys
+
+        captured: dict = {}
+        monkeypatch.setitem(sys.modules, "litellm", self._fake_litellm(captured, token_count=5000))
+        monkeypatch.setattr(paper_mod, "default_llm_reasoning_effort", lambda: None)
+
+        assert paper_mod._run_llm("prompt", purpose="summary", model="gpt-4o") == "ok"
+        assert "drop_params" not in captured
+
     def test_run_llm_disables_think_for_ollama_by_default(self, monkeypatch):
         import sys
 
