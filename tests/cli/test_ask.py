@@ -274,6 +274,33 @@ class TestAskCommand:
         assert sum_cfg["model_list"][0]["model_name"] == "gpt-4o-mini"
         assert agt_cfg["model_list"][0]["model_name"] == "claude-3-5-sonnet"
 
+    def test_ask_router_config_preserves_paperqa_defaults(self, temp_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A router entry replaces PaperQA2's own, so it must restate temperature and prompt caching.
+
+        PaperQA2 builds its entry as `llm_config or make_default_litellm_model_list_settings(llm,
+        temperature)`. Emitting a config without these drops the requested temperature and the
+        Anthropic cache-control injection point for that role.
+        """
+        monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/pqa" if cmd == "pqa" else None)
+        monkeypatch.setattr(paperqa, "_pillow_available", lambda: False)
+        (temp_db / "config.toml").write_text('[paperqa]\nllm = "gpt-4o"\nreasoning_effort = "high"\n')
+        monkeypatch.setattr(config, "_CONFIG_CACHE", None)
+
+        mock_popen = MockPopen(returncode=0, stdout="Answer\n")
+        monkeypatch.setattr(subprocess, "Popen", mock_popen)
+        (temp_db / "papers" / "test-paper").mkdir(parents=True)
+        (temp_db / "papers" / "test-paper" / "paper.pdf").touch()
+
+        runner = pytest.importorskip("click.testing").CliRunner()
+        result = runner.invoke(cli_mod.cli, ["ask", "query", "--pqa-temperature", "0.3"])
+        assert result.exit_code == 0, result.output
+
+        pqa_call, _ = next(c for c in mock_popen.calls if c[0][0] == "pqa")
+        assert pqa_call[pqa_call.index("--temperature") + 1] == "0.3"
+        params = json.loads(pqa_call[pqa_call.index("--llm_config") + 1])["model_list"][0]["litellm_params"]
+        assert params["temperature"] == 0.3
+        assert params["cache_control_injection_points"] == [{"location": "message", "role": "system"}]
+
     def test_ask_skips_reasoning_config_when_model_unknown(
         self, temp_db: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -317,8 +344,8 @@ class TestAskCommand:
         assert result.exit_code == 0, result.output
 
         pqa_call, _ = next(c for c in mock_popen.calls if c[0][0] == "pqa")
-        agent_cfgs = [json.loads(pqa_call[i + 1]) for i, a in enumerate(pqa_call) if a == "--agent.agent_llm_config"]
-        assert all(c["model_list"][0]["model_name"] == "o3-mini" for c in agent_cfgs if "model_list" in c)
+        # The passthrough model is unknown to paperpipe, so no router entry can be keyed on it.
+        assert "--agent.agent_llm_config" not in pqa_call
 
     def test_paperqa_ask_evidence_blocks_parses_response(self, monkeypatch: pytest.MonkeyPatch) -> None:
         class DummySettings:

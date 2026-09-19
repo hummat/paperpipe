@@ -29,6 +29,12 @@ def _pillow_available() -> bool:
 
 _PQA_DEFAULT_READER_CONFIG: dict[str, Any] = {"chunk_chars": 5000, "overlap": 250, "use_block_parsing": True}
 
+# PaperQA2's Settings.temperature default, used when paperpipe does not pass --temperature.
+_PQA_DEFAULT_TEMPERATURE = 0.0
+# PaperQA2 puts this on every default router entry to enable Anthropic prompt caching.
+# SEE: paperqa.settings.make_default_litellm_model_list_settings
+_PQA_CACHE_CONTROL_INJECTION_POINTS = [{"location": "message", "role": "system"}]
+
 
 def _pqa_default_reader_config_json() -> str:
     return json.dumps(_PQA_DEFAULT_READER_CONFIG, separators=(",", ":"))
@@ -39,17 +45,23 @@ def _pqa_build_llm_config(
     *,
     reasoning_effort: Optional[str] = None,
     timeout: Optional[float] = None,
+    temperature: Optional[float] = None,
     drop_params: bool = True,
 ) -> Optional[str]:
-    """Build a JSON LiteLLM Router configuration for PaperQA2 CLI.
+    """Build a JSON LiteLLM Router configuration for PaperQA2's `--*_llm_config` flags.
 
-    PaperQA2 expects `--llm_config` to be a JSON string with `model_list` and optional `router_kwargs`.
-    A router entry is only emitted when the model id is known: LiteLLM matches deployments by
-    `model_name`, so an entry built from an unknown (empty) id never matches and breaks routing.
     Returns None when there is nothing to configure.
+
+    Supplying a config REPLACES PaperQA2's own router entry rather than extending it
+    (`llm_config or make_default_litellm_model_list_settings(...)`), so any entry emitted here must
+    restate PaperQA2's defaults — the temperature and the Anthropic prompt-cache injection point —
+    or they are silently lost for that role. A config without a `model_list` is worse still: lmi
+    then synthesizes one and forces `temperature` to 1.0.
+
+    A `model_list` needs a concrete model id, since LiteLLM matches deployments by `model_name`.
+    With no id, only `router_kwargs` can be set and PaperQA2 keeps its own entry.
     """
-    # reasoning_effort needs a concrete model id to key the router entry on.
-    effort = reasoning_effort if (reasoning_effort and model) else None
+    effort = reasoning_effort or None
     if not effort and timeout is None:
         return None
 
@@ -57,11 +69,20 @@ def _pqa_build_llm_config(
     if timeout is not None:
         cfg["router_kwargs"] = {"timeout": timeout}
 
-    if effort:
-        litellm_params: dict[str, Any] = {"model": model, "reasoning_effort": effort}
-        if drop_params:
-            litellm_params["drop_params"] = True
+    if model:
+        litellm_params: dict[str, Any] = {
+            "model": model,
+            "temperature": temperature if temperature is not None else _PQA_DEFAULT_TEMPERATURE,
+            "cache_control_injection_points": _PQA_CACHE_CONTROL_INJECTION_POINTS,
+        }
+        if effort:
+            litellm_params["reasoning_effort"] = effort
+            if drop_params:
+                litellm_params["drop_params"] = True
         cfg["model_list"] = [{"model_name": model, "litellm_params": litellm_params}]
+    elif not cfg:
+        # Effort requested but no model id to key the entry on, and no timeout to fall back to.
+        return None
 
     return json.dumps(cfg)
 

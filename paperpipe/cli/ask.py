@@ -559,6 +559,15 @@ def ask(
                 cmd.extend(["--agent.agent_llm", agent_llm_default])
                 agent_llm_for_pqa = agent_llm_default
 
+    # Effective temperature, resolved before the router configs: any config emitted below replaces
+    # PaperQA2's default router entry, so it has to carry the temperature itself.
+    if ctx.get_parameter_source("temperature") != click.core.ParameterSource.DEFAULT:
+        effective_temperature = temperature
+    else:
+        effective_temperature = default_pqa_temperature()
+    if effective_temperature is not None:
+        cmd.extend(["--temperature", str(effective_temperature)])
+
     # Reasoning effort resolution
     llm_reasoning_effort = (
         reasoning_effort
@@ -583,6 +592,7 @@ def ask(
             llm_for_pqa,
             reasoning_effort=llm_reasoning_effort,
             timeout=t_out,
+            temperature=effective_temperature,
         )
         if llm_cfg:
             cmd.extend(["--llm_config", llm_cfg])
@@ -593,6 +603,7 @@ def ask(
             summary_llm_for_pqa,
             reasoning_effort=sum_reasoning_effort,
             timeout=t_out,
+            temperature=effective_temperature,
         )
         if sum_cfg:
             cmd.extend(["--summary_llm_config", sum_cfg])
@@ -603,6 +614,7 @@ def ask(
             agent_llm_for_pqa,
             reasoning_effort=agt_reasoning_effort,
             timeout=t_out,
+            temperature=effective_temperature,
         )
         if agt_cfg:
             cmd.extend(["--agent.agent_llm_config", agt_cfg])
@@ -613,6 +625,7 @@ def ask(
         enrich_cfg = paperqa._pqa_build_llm_config(
             enrichment_llm_for_pqa,
             timeout=default_pqa_ollama_timeout(),
+            temperature=effective_temperature,
         )
         if enrich_cfg:
             cmd.extend(["--parsing.enrichment_llm_config", enrich_cfg])
@@ -628,16 +641,6 @@ def ask(
                 json.dumps({"kwargs": {"custom_llm_provider": "ollama", "timeout": default_pqa_ollama_timeout()}}),
             ]
         )
-
-    # temperature
-    temperature_source = ctx.get_parameter_source("temperature")
-    if temperature_source != click.core.ParameterSource.DEFAULT:
-        if temperature is not None:
-            cmd.extend(["--temperature", str(temperature)])
-    else:
-        temperature_default = default_pqa_temperature()
-        if temperature_default is not None:
-            cmd.extend(["--temperature", str(temperature_default)])
 
     # verbosity
     verbosity_source = ctx.get_parameter_source("verbosity")

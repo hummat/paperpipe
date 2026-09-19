@@ -809,6 +809,8 @@ enrichment_llm = "gpt-4o-mini"
 # reasoning_effort = "high"          # reasoning effort for answer LLM
 # summary_reasoning_effort = "low"   # reasoning effort for summary LLM
 # agent_reasoning_effort = "medium"  # reasoning effort for agent LLM
+# Unset, reasoning_effort inherits [llm] reasoning_effort, and agent_reasoning_effort follows
+# whichever answer-LLM effort applies. summary_reasoning_effort does not inherit.
 # agent_llm drives PaperQA2's search agent. PaperQA2's own default is gpt-4o; paperpipe
 # instead inherits the answer llm (above) unless you set this. Set agent_type = "fake" for
 # deterministic, low-token retrieval that skips the agent LLM's tool-calling loop.

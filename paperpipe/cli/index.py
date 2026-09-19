@@ -461,14 +461,14 @@ def index_cmd(
     if enrichment_llm_default and not has_enrichment_llm_override:
         cmd.extend(["--parsing.enrichment_llm", enrichment_llm_default])
 
-    # temperature
+    # Effective temperature, also fed to the router configs below: a config emitted there replaces
+    # PaperQA2's default router entry, so it has to carry the temperature itself.
     if pqa_temperature_source != click.core.ParameterSource.DEFAULT:
-        if pqa_temperature is not None:
-            cmd.extend(["--temperature", str(pqa_temperature)])
+        effective_temperature = pqa_temperature
     else:
-        temperature_default = default_pqa_temperature()
-        if temperature_default is not None:
-            cmd.extend(["--temperature", str(temperature_default)])
+        effective_temperature = default_pqa_temperature()
+    if effective_temperature is not None:
+        cmd.extend(["--temperature", str(effective_temperature)])
 
     # verbosity
     if pqa_verbosity_source != click.core.ParameterSource.DEFAULT:
@@ -494,6 +494,7 @@ def index_cmd(
         for arg in ctx.args
     ):
         cmd.extend(["--agent.rebuild_index", "true"])
+
     # Reasoning effort resolution and LiteLLM router configs
     llm_reasoning_effort = (
         pqa_reasoning_effort
@@ -512,6 +513,7 @@ def index_cmd(
             llm_for_pqa,
             reasoning_effort=llm_reasoning_effort,
             timeout=t_out,
+            temperature=effective_temperature,
         )
         if llm_cfg:
             cmd.extend(["--llm_config", llm_cfg])
@@ -523,6 +525,7 @@ def index_cmd(
             summary_model,
             reasoning_effort=summary_reasoning_effort,
             timeout=t_out,
+            temperature=effective_temperature,
         )
         if sum_cfg:
             cmd.extend(["--summary_llm_config", sum_cfg])
