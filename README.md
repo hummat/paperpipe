@@ -190,6 +190,12 @@ papi search --no-fts "surface reconstruction"    # force in-memory scan (disable
 papi search --no-fts --exact "exact phrase"      # force scan with exact matching only
 ```
 
+A query equal to a paper's key or to one of its `aka-` tags puts that paper first; case and punctuation don't matter.
+Give a paper the name the field uses for it (`aka-trellis-2` on "Native and Compact Structured Latents for 3D
+Generation") and `papi search TRELLIS.2` returns it above the papers that cite TRELLIS.2 as a baseline.
+Topic tags never reorder results. Set alias tags with `papi add -t aka-<name>`, or add them to an existing paper's
+`meta.json` and run `papi rebuild-index` followed by `papi index --backend search --search-rebuild`.
+
 Hybrid ranked+exact search:
 
 ```bash

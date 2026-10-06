@@ -332,6 +332,40 @@ class TestSearchCommand:
         assert "ovox " in result.output
         assert "dense " in result.output
 
+    def test_search_fts_ranks_paper_named_by_alias_tag_or_key_first(self, temp_db: Path) -> None:
+        """A query equal to a paper's key or `aka-` alias tag (ignoring case/punctuation) ranks it
+        above papers that only cite that name, however often. Topic tags do not pin."""
+        if not fts5_available():
+            pytest.skip("SQLite FTS5 not available")
+
+        papers = {
+            "o-voxel": ("Native and Compact Structured Latents", "A sparse voxel VAE.", ["aka-trellis-2"]),
+            "citer": ("TRELLIS.2 Baselines", "We compare to TRELLIS.2 and beat TRELLIS.2 everywhere.", []),
+            "splat-survey": ("Splatting Splatting Splatting", "Splatting, splatting, splatting.", []),
+            "topic": ("Topic Paper", "One mention of splatting.", ["splatting"]),
+        }
+        for name, (title, summary, tags) in papers.items():
+            paper_dir = temp_db / "papers" / name
+            paper_dir.mkdir(parents=True)
+            (paper_dir / "meta.json").write_text(json.dumps({"title": title, "authors": [], "tags": tags}))
+            (paper_dir / "summary.md").write_text(summary + "\n")
+        paperpipe.save_index({n: {"arxiv_id": None, "title": t, "tags": g} for n, (t, _, g) in papers.items()})
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["index", "--backend", "search", "--search-rebuild"])
+        assert result.exit_code == 0, result.output
+
+        for query in ("TRELLIS.2", "trellis 2", "O-Voxel"):
+            result = runner.invoke(cli_mod.cli, ["search", "--fts", query])
+            assert result.exit_code == 0, result.output
+            assert result.output.lstrip().startswith("o-voxel "), (query, result.output)
+        # Partial names do not pin.
+        result = runner.invoke(cli_mod.cli, ["search", "--fts", "TRELLIS"])
+        assert result.output.lstrip().startswith("citer "), result.output
+        # A topic tag, even one only this paper carries, leaves BM25 order alone.
+        result = runner.invoke(cli_mod.cli, ["search", "--fts", "splatting"])
+        assert result.output.lstrip().startswith("splat-survey "), result.output
+
     def test_index_search_include_tex_requires_rebuild(self, temp_db: Path) -> None:
         runner = CliRunner()
         result = runner.invoke(cli_mod.cli, ["index", "--backend", "search", "--search-include-tex"])

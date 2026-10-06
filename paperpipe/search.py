@@ -419,6 +419,10 @@ def _search_index_rebuild(*, include_tex: bool) -> int:
         return count
 
 
+# Tags with this prefix name a paper ("aka-trellis-2"); topic tags never do (see _search_fts).
+ALIAS_TAG_PREFIX = "aka-"
+
+
 def _search_fts(*, query: str, limit: int, papers: tuple[str, ...] = ()) -> list[dict[str, object]]:
     db_path = _search_db_path()
     if not db_path.exists():
@@ -427,38 +431,25 @@ def _search_fts(*, query: str, limit: int, papers: tuple[str, ...] = ()) -> list
     with _sqlite_connect(db_path) as conn:
         _ensure_search_index_schema(conn)
 
-        def run(match_query: str) -> list[sqlite3.Row]:
-            if papers:
-                placeholders = ",".join("?" for _ in papers)
-                return conn.execute(
-                    f"""
-                    SELECT
-                      name,
-                      title,
-                      bm25(papers_fts, 0.0, 10.0, 3.0, 5.0, 2.0, 1.0, 1.0, 0.5, 0.2) AS bm25
-                    FROM papers_fts
-                    WHERE papers_fts MATCH ? AND name IN ({placeholders})
-                    ORDER BY bm25
-                    LIMIT ?
-                    """,
-                    (match_query, *papers, limit),
-                ).fetchall()
+        def run(match_query: str, names: tuple[str, ...], n: int) -> list[sqlite3.Row]:
+            name_filter = f"AND name IN ({','.join('?' for _ in names)})" if names else ""
             return conn.execute(
-                """
+                f"""
                 SELECT
                   name,
                   title,
                   bm25(papers_fts, 0.0, 10.0, 3.0, 5.0, 2.0, 1.0, 1.0, 0.5, 0.2) AS bm25
                 FROM papers_fts
-                WHERE papers_fts MATCH ?
+                WHERE papers_fts MATCH ? {name_filter}
                 ORDER BY bm25
                 LIMIT ?
                 """,
-                (match_query, limit),
+                (match_query, *names, n),
             ).fetchall()
 
+        match_query = query
         try:
-            rows = run(query)
+            rows = run(match_query, papers, limit)
         except sqlite3.OperationalError:
             # The raw query tripped FTS5 operator parsing — e.g. the hyphen in "o-voxel" is read
             # as a column operator, the dot in "TRELLIS.2" is a syntax error. Quote each
@@ -467,15 +458,27 @@ def _search_fts(*, query: str, limit: int, papers: tuple[str, ...] = ()) -> list
             # semantics of a well-formed query, then fill up to `limit` with OR matches so a
             # long natural-language query still returns ranked partial matches.
             words = _fts5_quoted_words(query) or [_fts5_quote_literal(query)]
+            match_query = " ".join(words)
             try:
-                rows = run(" ".join(words))
+                rows = run(match_query, papers, limit)
                 if len(rows) < limit and len(words) > 1:
                     seen = {r["name"] for r in rows}
-                    rows += [r for r in run(" OR ".join(words)) if r["name"] not in seen][: limit - len(rows)]
+                    rows += [r for r in run(" OR ".join(words), papers, limit) if r["name"] not in seen][
+                        : limit - len(rows)
+                    ]
             except sqlite3.OperationalError as exc:
                 raise click.ClickException(
                     f"FTS query failed. Try a simpler query or use `papi search --grep --fixed-strings ...`. ({exc})"
                 ) from exc
+
+        # A query that names a paper — its key or an alias tag, ignoring case and punctuation
+        # ("TRELLIS.2" == "aka-trellis-2") — ranks that paper first. BM25 alone buries a
+        # famous paper under the many papers that cite it by name.
+        named = _fts_papers_named(conn, query, papers)
+        if named:
+            pinned = run(match_query, named, len(named))
+            pinned_names = {r["name"] for r in pinned}
+            rows = (list(pinned) + [r for r in rows if r["name"] not in pinned_names])[:limit]
 
         results: list[dict[str, object]] = []
         for r in rows:
@@ -483,6 +486,27 @@ def _search_fts(*, query: str, limit: int, papers: tuple[str, ...] = ()) -> list
             # SQLite FTS5 bm25() returns "more negative = better". Display a positive score for UX.
             results.append({"name": r["name"], "title": r["title"], "score": -raw})
         return results
+
+
+def _fts_papers_named(conn: sqlite3.Connection, query: str, papers: tuple[str, ...]) -> tuple[str, ...]:
+    """Return indexed papers whose key or an alias tag equals *query* after normalization."""
+    key = _normalize_paper_key(query)
+    if not key:
+        return ()
+    allowed = set(papers)
+    return tuple(
+        r["name"]
+        for r in conn.execute("SELECT name, tags FROM papers_fts")
+        if (not allowed or r["name"] in allowed)
+        and (
+            _normalize_paper_key(r["name"]) == key
+            or any(
+                _normalize_paper_key(t.removeprefix(ALIAS_TAG_PREFIX)) == key
+                for t in (r["tags"] or "").split()
+                if t.startswith(ALIAS_TAG_PREFIX)
+            )
+        )
+    )
 
 
 def _fts5_quote_literal(query: str) -> str:
