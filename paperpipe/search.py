@@ -460,15 +460,18 @@ def _search_fts(*, query: str, limit: int, papers: tuple[str, ...] = ()) -> list
         try:
             rows = run(query)
         except sqlite3.OperationalError:
-            # The raw query tripped FTS5 operator parsing — e.g. the hyphen in "multi-view"
-            # is read as a column operator ("no such column: view"). Retry with each word
-            # quoted as a literal term and OR-joined, so a natural-language query yields
-            # ranked relevance results instead of erroring (and then collapsing to a
-            # whole-phrase match that almost never hits). Fall back to the whole-phrase
-            # literal only if the OR form is empty or also fails.
-            safe = _fts5_or_terms(query) or _fts5_quote_literal(query)
+            # The raw query tripped FTS5 operator parsing — e.g. the hyphen in "o-voxel" is read
+            # as a column operator, the dot in "TRELLIS.2" is a syntax error. Quote each
+            # whitespace-separated word so the tokenizer turns "o-voxel" into the phrase
+            # "o voxel" instead of the unrelated terms "o" and "voxel". Keep the implicit-AND
+            # semantics of a well-formed query, then fill up to `limit` with OR matches so a
+            # long natural-language query still returns ranked partial matches.
+            words = _fts5_quoted_words(query) or [_fts5_quote_literal(query)]
             try:
-                rows = run(safe)
+                rows = run(" ".join(words))
+                if len(rows) < limit and len(words) > 1:
+                    seen = {r["name"] for r in rows}
+                    rows += [r for r in run(" OR ".join(words)) if r["name"] not in seen][: limit - len(rows)]
             except sqlite3.OperationalError as exc:
                 raise click.ClickException(
                     f"FTS query failed. Try a simpler query or use `papi search --grep --fixed-strings ...`. ({exc})"
@@ -486,17 +489,14 @@ def _fts5_quote_literal(query: str) -> str:
     return '"' + (query or "").replace('"', '""') + '"'
 
 
-def _fts5_or_terms(query: str) -> str:
-    """Tokenize *query* into bare words, quote each as an FTS5 literal term, and OR-join.
+def _fts5_quoted_words(query: str) -> list[str]:
+    """Split *query* on whitespace and quote each word as an FTS5 string.
 
-    Fallback for queries that trip FTS5 operator parsing (hyphens, colons, etc.). Quoting
-    each token neutralizes the special characters; OR + bm25 ranking turns a
-    natural-language query into a relevance search rather than the strict implicit-AND of
-    the raw form. Returns "" when the query has no word characters (caller then falls back
-    to the whole-phrase literal).
+    Quoting neutralizes operator characters; inside quotes the FTS5 tokenizer splits on
+    punctuation, so a word like "multi-view" becomes the phrase "multi view". Words without
+    any word character are dropped. Returns [] when nothing is left.
     """
-    tokens = re.findall(r"\w+", query or "", flags=re.UNICODE)
-    return " OR ".join(_fts5_quote_literal(t) for t in tokens)
+    return [_fts5_quote_literal(w) for w in (query or "").split() if re.search(r"\w", w, flags=re.UNICODE)]
 
 
 def _normalize_paper_key(key: str) -> str:

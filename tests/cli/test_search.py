@@ -301,6 +301,37 @@ class TestSearchCommand:
         assert result.exit_code == 0, result.output
         assert "geom-paper" in result.output
 
+    def test_search_fts_punctuated_query_matches_as_phrase(self, temp_db: Path) -> None:
+        """`o-voxel` must rank the paper naming O-Voxel above papers that merely say `voxel` a lot,
+        and terms the AND form cannot satisfy must still return partial matches."""
+        if not fts5_available():
+            pytest.skip("SQLite FTS5 not available")
+
+        papers = {
+            "ovox": ("Compact Latents", "At its core is O-Voxel, a sparse structure."),
+            "dense": ("Voxel Voxel Networks", "Voxel features on a dense voxel grid of voxel cells."),
+        }
+        for name, (title, summary) in papers.items():
+            paper_dir = temp_db / "papers" / name
+            paper_dir.mkdir(parents=True)
+            (paper_dir / "meta.json").write_text(json.dumps({"title": title, "authors": [], "tags": []}))
+            (paper_dir / "summary.md").write_text(summary + "\n")
+        paperpipe.save_index({n: {"arxiv_id": None, "title": t, "tags": []} for n, (t, _) in papers.items()})
+
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.cli, ["index", "--backend", "search", "--search-rebuild"])
+        assert result.exit_code == 0, result.output
+
+        result = runner.invoke(cli_mod.cli, ["search", "--fts", "o-voxel"])
+        assert result.exit_code == 0, result.output
+        assert result.output.lstrip().startswith("ovox ")
+
+        # No paper contains both "o voxel" and "grid"; each matches one term.
+        result = runner.invoke(cli_mod.cli, ["search", "--fts", "o-voxel grid"])
+        assert result.exit_code == 0, result.output
+        assert "ovox " in result.output
+        assert "dense " in result.output
+
     def test_index_search_include_tex_requires_rebuild(self, temp_db: Path) -> None:
         runner = CliRunner()
         result = runner.invoke(cli_mod.cli, ["index", "--backend", "search", "--search-include-tex"])
