@@ -1,6 +1,6 @@
 ---
 name: papi
-description: Use for direct paper-database operations: list, search, show details or equations, add arXiv papers, export context. Prefer the CLI over MCP RAG tools for lookups.
+description: Use for direct paper-database operations: checking whether a paper is already in the database, list, search, show details or equations, add arXiv papers, export context. Prefer the CLI over MCP RAG tools for lookups.
 ---
 
 # Paper Reference Assistant (CLI)
@@ -18,9 +18,13 @@ For specialized workflows, invoke dedicated skills:
 
 ```bash
 papi path   # DB location (default ~/.paperpipe/; override via PAPER_DB_PATH)
-papi list   # available papers
-papi list | grep -i "keyword"  # check if paper exists before searching
+papi list   # available papers; titles are truncated, never cut the output with head
+papi search "2411.16820"   # is a paper already in the DB? by arXiv ID or name
 ```
+
+A paper is in the database when the top `papi search` hit for its arXiv ID or name is that paper (an ID hit
+shows `Matches: arxiv_id`). Check this way before saying a paper is missing; a topic grep of `papi list`
+misses papers whose titles don't contain your words.
 
 ## When NOT to Use MCP RAG
 

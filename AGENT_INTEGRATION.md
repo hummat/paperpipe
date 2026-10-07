@@ -14,7 +14,7 @@ This repo implements methods from scientific papers. Papers are managed via `pap
 ### Commands
 
 - `papi path` — DB location (default `~/.paperpipe/`; override via `PAPER_DB_PATH`)
-- `papi list` — available papers; `papi list | grep -i "keyword"` to check if paper exists
+- `papi list` — available papers; `papi search "<arxiv_id or name>"` to check if a paper exists (top hit is the paper)
 - `papi add <id_or_url_or_title>...` — add one or more papers (arXiv IDs, URLs, S2 IDs, or titles; mixed sources OK)
 - `papi show <paper> -l eq|tex|summary|tldr` — inspect paper content
 - `papi search --rg "X"` for literal text; `papi search --rg --regex "X|Y"` for regex or OR
