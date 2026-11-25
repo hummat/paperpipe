@@ -5,6 +5,7 @@ import click
 from ..core import ensure_db
 from ..output import _setup_debug_logging, set_quiet
 from .ask import ask
+from .backup import backup
 from .export import audit, export
 from .helpers import _cli_version
 from .index import index_cmd
@@ -90,3 +91,4 @@ cli.add_command(install)
 cli.add_command(uninstall)
 cli.add_command(docs)
 cli.add_command(rebuild_index)
+cli.add_command(backup)

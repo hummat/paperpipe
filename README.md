@@ -123,8 +123,42 @@ pip install -e ".[all]"
 | `papi path` | Print database location |
 | `papi docs` | Print agent integration snippet (for CLAUDE.md/AGENTS.md) |
 | `papi rebuild-index` | Rebuild index.json from on-disk paper directories (recovery) |
+| `papi backup <file.tar>` | Archive the database for backup or migration (`--level high\|medium\|text` shrinks PDF images) |
 
 Run `papi --help` or `papi <command> --help` for full options.
+
+## Backup and migration
+
+`papi backup` writes the database to one tar file, including the PaperQA2 and LEANN indexes, so a restored copy needs no re-embedding. It leaves out `search.db` (`papi index --backend search` rebuilds it locally, without API calls) and the `index.json.backup.*` snapshots.
+
+```bash
+papi backup ~/paperpipe-backup.tar                  # PDFs as they are
+papi backup ~/paperpipe-backup.tar --level medium   # smaller PDFs
+```
+
+`--level` re-encodes the raster images inside each PDF; text and vector graphics stay as they are. It needs PyMuPDF (`pip install 'paperpipe[figures]'`) and uses every CPU core. Sizes below come from 16 PDFs sampled across a 1,336-paper database:
+
+| Level | Images | PDF size |
+|-------|--------|----------|
+| `high` | JPEG q95, full resolution | ~58% |
+| `medium` | at most 300 dpi, JPEG q85 | ~38% |
+| `text` | removed | ~13% |
+
+To move the database to another machine, unpack the archive into a fresh directory there. If that machine has papers of its own, copy them into the restored database before you switch over:
+
+```bash
+mkdir ~/.paperpipe.new
+tar -xf paperpipe-backup.tar -C ~/.paperpipe.new
+# add papers (and files) that exist only on this machine; files already in the backup are kept
+rsync -a --ignore-existing ~/.paperpipe/papers/ ~/.paperpipe.new/papers/
+mv ~/.paperpipe ~/.paperpipe.old && mv ~/.paperpipe.new ~/.paperpipe
+papi rebuild-index
+papi index --backend search
+papi index                    # PaperQA2: embeds only the papers the backup lacked
+papi index --backend leann    # same for LEANN
+```
+
+When both machines have a paper under the same name, the backup's files win, so look in `~/.paperpipe.old` for tag or note edits you want to keep. Papers you deleted on one machine come back from the other; `papi remove` them again. The backup's `config.toml` replaces the local one, and the copied indexes are only reused if both machines embed with the same model.
 
 ## Import/Export
 

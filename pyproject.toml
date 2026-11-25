@@ -41,7 +41,7 @@ mcp = [
     "fhlmi>=0.45,<0.47; python_version >= '3.11'",
 ]
 bibtex = ["bibtexparser>=1.4.0"]
-figures = ["pymupdf>=1.24.0"]
+figures = ["pymupdf>=1.26.1"]
 all = ["paperpipe[llm,leann,paperqa,mcp,bibtex,figures]"]
 dev = [
     "build>=1.0.0",
@@ -51,7 +51,7 @@ dev = [
     "twine>=5.0.0",
     # Optional deps for test coverage (mirrors [dependency-groups].dev)
     "bibtexparser>=1.4.0",
-    "pymupdf>=1.24.0",
+    "pymupdf>=1.26.1",
 ]
 
 [dependency-groups]
@@ -64,7 +64,7 @@ dev = [
     "twine>=5.0.0",
     # Optional deps needed for unit test coverage (not integration tests)
     "bibtexparser>=1.4.0",
-    "pymupdf>=1.24.0",
+    "pymupdf>=1.26.1",
 ]
 
 [project.scripts]

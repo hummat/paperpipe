@@ -31,6 +31,7 @@
 | `papi remove <name>` | Remove a paper |
 | `papi audit [--regenerate]` | Flag/fix issues in generated content |
 | `papi rebuild-index [--dry-run] [--validate]` | Rebuild index from paper directories |
+| `papi backup <file.tar> [--level high\|medium\|text]` | Archive the database; levels shrink PDF images |
 
 ## Export
 
