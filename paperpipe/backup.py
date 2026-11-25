@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import io
 import json
+import multiprocessing
 import os
 import tarfile
+import time
 from collections.abc import Iterator
-from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from dataclasses import dataclass, field
-from itertools import islice
+from multiprocessing.connection import Connection, wait
+from multiprocessing.process import BaseProcess
 from pathlib import Path
 from typing import Optional
 
@@ -25,6 +27,10 @@ LEVELS = ("off", "high", "medium", "text")
 # Root-level files left out of the archive: search.db (plus SQLite WAL sidecars) is rebuilt for free by
 # `papi index --backend search`; index.json.backup.* are snapshots left behind by rebuild-index and tag edits.
 _EXCLUDED_ROOT_PREFIXES = ("search.db", "index.json.backup.")
+
+# Per-PDF wall-clock limit. The slowest healthy PDFs seen took ~10 s, while some malformed ones send MuPDF's
+# image rewrite into an endless loop; those are archived unchanged.
+PDF_TIMEOUT_SEC = 60
 
 
 @dataclass
@@ -67,18 +73,71 @@ def _compress_job(pdf: Path, level: str) -> tuple[Path, Optional[bytes], Optiona
         return pdf, None, f"{type(e).__name__}: {e}"
 
 
-def _compressed(pdfs: list[Path], level: str, workers: int) -> Iterator[tuple[Path, Optional[bytes], Optional[str]]]:
-    """Yield compression results as they finish, keeping at most 2 * workers PDFs in flight to bound memory."""
+def _worker(conn: Connection) -> None:
+    import pymupdf
+
+    # Malformed PDFs print thousands of MuPDF error lines; failed PDFs are reported in BackupStats instead.
+    pymupdf.TOOLS.mupdf_display_errors(False)
+    while True:
+        try:
+            job = conn.recv()
+        except EOFError:
+            return
+        conn.send(_compress_job(*job))
+
+
+def _compressed(
+    pdfs: list[Path], level: str, workers: int, timeout: float = PDF_TIMEOUT_SEC
+) -> Iterator[tuple[Path, Optional[bytes], Optional[str]]]:
+    """Yield compression results as they finish, one PDF per worker process at a time.
+
+    A worker that crashes or runs past ``timeout`` is killed (MuPDF cannot be interrupted from Python) and
+    its PDF comes back as failed. Workers start on demand, so a killed one is replaced by the next job.
+    """
+    ctx = multiprocessing.get_context("spawn")
+    idle: list[tuple[Connection, BaseProcess]] = []
+    busy: dict[Connection, tuple[BaseProcess, Path, float]] = {}
     jobs = iter(pdfs)
-    with ProcessPoolExecutor(max_workers=workers) as pool:
-        pending: set[Future] = {pool.submit(_compress_job, pdf, level) for pdf in islice(jobs, 2 * workers)}
-        while pending:
-            done, pending = wait(pending, return_when=FIRST_COMPLETED)
-            for future in done:
-                yield future.result()
-                next_pdf = next(jobs, None)
-                if next_pdf is not None:
-                    pending.add(pool.submit(_compress_job, next_pdf, level))
+    try:
+        while True:
+            while len(busy) < workers and (pdf := next(jobs, None)) is not None:
+                if idle:
+                    conn, proc = idle.pop()
+                else:
+                    conn, child = ctx.Pipe()
+                    proc = ctx.Process(target=_worker, args=(child,), daemon=True)
+                    proc.start()
+                    child.close()
+                conn.send((pdf, level))
+                busy[conn] = (proc, pdf, time.monotonic() + timeout)
+            if not busy:
+                return
+            next_deadline = min(deadline for _, _, deadline in busy.values())
+            ready = wait(list(busy), timeout=max(0.0, next_deadline - time.monotonic()))
+            for conn in [c for c in busy if c in ready]:
+                proc, pdf, _ = busy.pop(conn)
+                try:
+                    result = conn.recv()
+                except EOFError:
+                    proc.join()
+                    conn.close()
+                    yield pdf, None, f"worker died (exit code {proc.exitcode})"
+                    continue
+                idle.append((conn, proc))
+                yield result
+            now = time.monotonic()
+            for conn, (proc, pdf, deadline) in list(busy.items()):
+                if now >= deadline and not conn.poll():  # poll: a finished result may have landed meanwhile
+                    del busy[conn]
+                    proc.kill()
+                    proc.join()
+                    conn.close()
+                    yield pdf, None, f"timed out after {timeout:g} s"
+    finally:
+        for conn, proc in [*idle, *((c, p) for c, (p, _, _) in busy.items())]:
+            proc.kill()
+            proc.join()
+            conn.close()
 
 
 def _backup_files(root: Path) -> list[Path]:
