@@ -40,7 +40,7 @@ mcp = [
     "paper-qa>=5.0.0; python_version >= '3.11'",
     "fhlmi>=0.45,<0.47; python_version >= '3.11'",
 ]
-bibtex = ["bibtexparser>=1.4.0"]
+bibtex = ["bibtexparser>=1.4.0,<2"]  # 2.x drops the bparser/loads API used in cli/helpers.py
 figures = ["pymupdf>=1.26.1"]
 all = ["paperpipe[llm,leann,paperqa,mcp,bibtex,figures]"]
 dev = [
@@ -50,7 +50,7 @@ dev = [
     "ruff>=0.1.0",
     "twine>=5.0.0",
     # Optional deps for test coverage (mirrors [dependency-groups].dev)
-    "bibtexparser>=1.4.0",
+    "bibtexparser>=1.4.0,<2",
     "pymupdf>=1.26.1",
 ]
 
@@ -63,7 +63,7 @@ dev = [
     "ruff>=0.1.0",
     "twine>=5.0.0",
     # Optional deps needed for unit test coverage (not integration tests)
-    "bibtexparser>=1.4.0",
+    "bibtexparser>=1.4.0,<2",
     "pymupdf>=1.26.1",
 ]
 
