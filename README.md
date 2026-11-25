@@ -141,8 +141,10 @@ papi backup ~/paperpipe-backup.tar --level medium   # smaller PDFs
 | Level | Images | PDF size |
 |-------|--------|----------|
 | `high` | JPEG q95, full resolution | ~58% |
-| `medium` | at most 300 dpi, JPEG q85 | ~38% |
+| `medium` | above 330 dpi halved toward 300 dpi, JPEG q85 | ~38% |
 | `text` | removed | ~13% |
+
+A full `medium` backup of that database took under 4 minutes on 18 cores and shrank its PDFs from 21.9 GB to 10.5 GB (48%). A PDF that takes MuPDF more than a minute is archived uncompressed.
 
 To move the database to another machine, unpack the archive into a fresh directory there. If that machine has papers of its own, copy them into the restored database before you switch over:
 
